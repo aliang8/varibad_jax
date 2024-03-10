@@ -1,0 +1,29 @@
+# math
+numpy
+scipy
+scikit-learn
+einops
+
+jupyterlab 
+jupyterlab_widgets
+ipywidgets
+
+gymnasium
+matplotlib 
+tqdm 
+brax
+dm-acme[jax]
+dm-haiku
+orbax
+ray[tune]
+flax
+
+opencv-python
+moviepy
+
+# Logging
+wandb
+
+absl-py
+dataclasses
+ml_collections
