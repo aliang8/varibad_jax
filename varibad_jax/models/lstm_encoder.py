@@ -126,6 +126,8 @@ class LSTMTrajectoryEncoder(hk.Module):
         # if just a single timestep, remove the time dimension
         if latent.shape[0] == 1:
             latent, hidden_state = latent[0], hidden_state[0]
+            latent_mean = latent_mean[0]
+            latent_logvar = latent_logvar[0]
 
         return EncodeOutputs(
             latent_mean=latent_mean,

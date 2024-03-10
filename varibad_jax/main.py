@@ -1,4 +1,4 @@
-from absl import app
+from absl import app, logging
 import jax
 import optax
 import jax.numpy as jnp
@@ -78,7 +78,7 @@ def main(_):
     num_devices = jax.device_count()
     num_local_devices = jax.local_device_count()
 
-    print("num_devices: ", num_devices, " num_local_devices: ", num_local_devices)
+    logging.info(f"num_devices: {num_devices}, num_local_devices: {num_local_devices}")
 
     config = _CONFIG.value.to_dict()
     if config["smoke_test"] is False:
@@ -87,8 +87,8 @@ def main(_):
 
         run_config = RunConfig(
             name=config["exp_name"],
-            local_dir="/scr/aliang80/changepoint_aug/changepoint_aug/ray_results",
-            storage_path="/scr/aliang80/changepoint_aug/changepoint_aug/ray_results",
+            local_dir="/data/anthony/varibad_jax/ray_results",
+            storage_path="/data/anthony/varibad_jax/ray_results",
             log_to_file=True,
         )
         tuner = tune.Tuner(

@@ -1,0 +1,11 @@
+varibad_jax.egg-info/*
+env/*
+varibad_jax/xm*
+varibad_jax/BUILD
+varibad_jax/utils/viz_utils.py
+*.ipynb
+*.pyc
+varibad_jax/hyperparams/*
+commands.txt
+varibad_jax/results
+varibad_jax/wandb

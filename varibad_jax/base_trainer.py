@@ -1,4 +1,4 @@
-from absl import app
+from absl import app, logging
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -12,6 +12,7 @@ from ml_collections import FrozenConfigDict
 from pathlib import Path
 from varibad_jax.envs.utils import make_envs
 import gymnasium as gym
+from jax import config
 
 
 class BaseTrainer:
@@ -24,7 +25,7 @@ class BaseTrainer:
             self.wandb_run = wandb.init(
                 # set the wandb project where this run will be logged
                 entity="glamor",
-                project="data_augmentation",
+                project="varibad_jax",
                 name=self.config.exp_name,
                 notes=self.config.notes,
                 tags=self.config.tags,
@@ -55,6 +56,14 @@ class BaseTrainer:
             self.action_dim = self.envs.action_space.n
         else:
             self.action_dim = self.envs.action_space.shape[0]
+
+        if self.config.log_level == "info":
+            logging.set_verbosity(logging.INFO)
+        elif self.config.log_level == "debug":
+            logging.set_verbosity(logging.DEBUG)
+
+        if not self.config.enable_jit:
+            config.update("jax_disable_jit", True)
 
     def create_ts(self):
         raise NotImplementedError

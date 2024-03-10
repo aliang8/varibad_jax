@@ -93,11 +93,15 @@ def get_config(config_string: str = None):
     config.use_wb = False
 
     # number of updates
-    config.log_interval = 100
+    config.log_level = "info"
+    config.enable_jit = True
+    config.log_interval = 10
     config.save_interval = 100
     config.eval_interval = 100
     config.disable_tqdm = True
     config.smoke_test = True
+    config.notes = "VariBAD JAX"
+    config.tags = ["varibad", "jax", "gridworld"]
 
     # number of warmup steps before training
     config.warmup_steps = 10000

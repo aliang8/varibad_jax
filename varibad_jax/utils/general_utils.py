@@ -31,8 +31,8 @@ def compute_all_grad_norm(grad_norm_type, grads):
 
     for mod, name, v in hk.data_structures.traverse(grads):
         grad_norms[mod + "/" + name] = compute_grad_norm(grad_norm_type, v)
-        if jnp.isnan(v):
-            jax.debug.breakpoint()
+        # if jnp.isnan(v):
+        #     jax.debug.breakpoint()
 
     stats = {}
     max_grad_norm = jnp.max(jnp.array(list(grad_norms.values())))

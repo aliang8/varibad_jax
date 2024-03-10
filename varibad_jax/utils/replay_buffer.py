@@ -303,3 +303,19 @@ class OnlineStorage:
             (int) The total number of transitions in the buffer.
         """
         return len(self.prev_state) * self.num_processes
+
+    def before_update(self, ts, rng_key):
+        latent = np.concatenate(
+            [self.latent_mean[:-1], self.latent_logvar[:-1]], axis=-1
+        )
+        policy_output = ts.apply_fn(
+            ts.params,
+            rng_key,
+            env_state=self.prev_state[:-1],
+            latent=latent,
+        )
+        self.action_log_probs = policy_output.log_prob
+        # [T, B]
+
+        if len(self.action_log_probs.shape) == 2:
+            self.action_log_probs = np.expand_dims(self.action_log_probs, axis=-1)

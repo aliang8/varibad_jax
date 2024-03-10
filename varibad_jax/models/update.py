@@ -1,6 +1,6 @@
 from functools import partial
 import time
-from typing import Optional
+from typing import Optional, Callable
 
 from absl import logging
 import einops
@@ -24,16 +24,22 @@ tfb = tfp.bijectors
 
 def loss_vae(
     params,
+    ts: TrainState,
     rng_key: PRNGKey,
     batch: Batch,
     config: FrozenConfigDict,
+    decode_fn: Callable,
 ):
+    logging.debug("inside loss_vae")
     T, B, state_dim = batch.prev_obs.shape
+    logging.debug(f"T: {T}, B: {B}, state_dim: {state_dim}")
+
+    encode_key, sample_key, decode_key = jax.random.split(rng_key, 3)
 
     # encode the full trajectory and get latent posteriors
-    encode_outputs = encode_trajectory.apply(
+    encode_outputs = ts.apply_fn(
         params,
-        hk.next_rng_key(),
+        encode_key,
         states=batch.prev_obs,
         actions=batch.actions,
         rewards=batch.rewards,
@@ -42,8 +48,8 @@ def loss_vae(
     latents = encode_outputs.latent
     latent_mean = encode_outputs.latent_mean
     latent_logvar = encode_outputs.latent_logvar
-    latent_dist = tfd.Normal(loc=latent_mean, scale=jnp.exp(latent_logvar / 2.0))
-    latent_samples = latent_dist.rsample()
+    latent_dist = tfd.Normal(loc=latent_mean, scale=jnp.exp(0.5 * latent_logvar))
+    latent_samples = latent_dist.sample(seed=sample_key)
 
     num_elbos = latents.shape[0]
     num_decodes = T
@@ -54,21 +60,24 @@ def loss_vae(
     actions = batch.actions
     rewards = batch.rewards
 
-    dec_prev_obs = prev_obs.unsqueeze(axis=0).reshape((num_elbos, *prev_obs.shape))
-    dec_next_obs = next_obs.unsqueeze(axis=0).reshape((num_elbos, *next_obs.shape))
+    def repeat_elbos(x):
+        return einops.repeat(x, "t b d -> elbo t b d", elbo=num_elbos)
 
-    dec_actions = actions.unsqueeze(axis=0).reshape((num_elbos, *actions.shape))
-    dec_rewards = rewards.unsqueeze(axis=0).reshape((num_elbos, *rewards.shape))
-    dec_embedding = (
-        latent_samples.unsqueeze(axis=0)
-        .reshape((num_decodes, *latent_samples.shape))
-        .transpose(1, 0)
+    dec_prev_obs = repeat_elbos(prev_obs)
+    dec_next_obs = repeat_elbos(next_obs)
+    dec_actions = repeat_elbos(actions)
+    dec_rewards = repeat_elbos(rewards)
+
+    dec_embedding = einops.repeat(
+        latent_samples, "elbo b d -> elbo t b d", t=num_decodes
     )
 
+    logging.info(f"next_obs: {dec_next_obs.shape}, embedding: {dec_embedding.shape}")
+
     # decode trajectory
-    decode_outputs = decode.apply(
+    decode_outputs = decode_fn(
         params,
-        hk.next_rng_key(),
+        decode_key,
         latent_samples=dec_embedding,
         next_states=dec_next_obs,
     )
@@ -77,7 +86,7 @@ def loss_vae(
     # should be [num_elbos, num_decodes, B, 1]
     rew_pred = decode_outputs.rew_pred
     rew_recon_loss = optax.squared_error(rew_pred, dec_rewards)
-    rew_recon_loss = rew_recon_loss.sum(dim=0).sum(dim=0).mean()
+    rew_recon_loss = rew_recon_loss.sum(axis=0).sum(axis=0).mean()
 
     # kl loss
     all_means = jnp.concatenate(
@@ -98,8 +107,8 @@ def loss_vae(
     logS = all_logvars[:-1]
     posterior = tfd.Normal(loc=mu, scale=jnp.exp(logS))
     prior = tfd.Normal(loc=m, scale=jnp.exp(logE))
-    kld = tfd.kl_divergence(posterior, prior).sum(dim=-1)
-    kld = kld.sum(dim=0).sum(dim=0).mean()
+    kld = tfd.kl_divergence(posterior, prior).sum(axis=-1)
+    kld = kld.sum(axis=0).sum(axis=0).mean()
 
     total_loss = (
         config.vae.kl_weight * kld + config.vae.rew_recon_weight * rew_recon_loss
@@ -118,35 +127,47 @@ def update_vae(
     config: FrozenConfigDict,
     batch,
     rng_key: PRNGKey,
+    decode_fn: Callable,
 ):
+    prev_obs, next_obs, actions, rewards, tasks, trajectory_lens = batch
+    batch = Batch(
+        prev_obs=prev_obs,
+        next_obs=next_obs,
+        actions=actions,
+        rewards=rewards,
+    )
     ts, (total_loss, loss_dict) = update_jit(
         ts=ts,
         batch=batch,
         config=config,
         rng_key=rng_key,
+        decode_fn=decode_fn,
     )
     return ts, (total_loss, loss_dict)
 
 
-@partial(jax.jit, static_argnames="config")
+@partial(jax.jit, static_argnames=("config", "decode_fn"))
 def update_jit(
     ts: TrainState,
+    config: FrozenConfigDict,
     rng_key: PRNGKey,
     batch: Batch,
-    config: FrozenConfigDict,
+    decode_fn: Callable,
 ):
     logging.info("update jit vae!!!!! VAEE")
     loss_and_grad_fn = jax.value_and_grad(loss_vae, has_aux=True)
 
     (vae_loss, metrics), grads = loss_and_grad_fn(
         ts.params,
-        rng_key,
+        ts=ts,
         config=config,
+        rng_key=rng_key,
         batch=batch,
+        decode_fn=decode_fn,
     )
 
     # compute norm of grads for each set of parameters
     _, stats = gutl.compute_all_grad_norm(grad_norm_type="2", grads=grads)
     metrics.update(stats)
-    ts = train_state.apply_gradients(grads=grads)
+    ts = ts.apply_gradients(grads=grads)
     return ts, (vae_loss, metrics)

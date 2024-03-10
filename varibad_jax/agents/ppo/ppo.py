@@ -34,11 +34,16 @@ def loss_policy(
     action: jnp.ndarray,
     latent: jnp.ndarray,
 ):
+    # import ipdb
+
+    # ipdb.set_trace()
     policy_output = ts.apply_fn(params, rng_key, env_state=state, latent=latent)
     policy_dist = policy_output.dist
     value_pred = policy_output.value
 
     log_prob = policy_dist.log_prob(action.squeeze())
+    if len(log_prob.shape) == 1:
+        log_prob = jnp.expand_dims(log_prob, axis=-1)
 
     value_pred_clipped = value_old + (value_pred - value_old).clip(
         -config.clip_eps, config.clip_eps
@@ -46,9 +51,6 @@ def loss_policy(
     value_losses = jnp.square(value_pred - target)
     value_losses_clipped = jnp.square(value_pred_clipped - target)
     value_loss = 0.5 * jnp.maximum(value_losses, value_losses_clipped).mean()
-
-    if len(log_prob.shape) == 1:
-        log_prob = jnp.expand_dims(log_prob, axis=-1)
 
     ratio = jnp.exp(log_prob - log_pi_old)
     gae_norm = (gae - gae.mean()) / (gae.std() + 1e-8)
@@ -99,14 +101,13 @@ def update_jit(
             rng_key,
             ts=ts,
             config=config,
-            state_=state[idx],
+            state=state[idx],
             target=target[idx],
             value_old=value[idx],
             log_pi_old=log_pi_old[idx],
             gae=gae[idx],
             action=action[idx],
             latent=latent[idx],
-            random_key=rng_key,
         )
         grad_norms, stats = gutl.compute_all_grad_norm(grad_norm_type="2", grads=grads)
         loss_dict.update(stats)
@@ -121,9 +122,8 @@ def update_policy(
     config: ConfigDict,
     rng_key: PRNGKey,
 ):
-    import ipdb
-
-    ipdb.set_trace()
+    _, key1, key2 = jax.random.split(rng_key, 3)
+    replay_buffer.before_update(ts, key1)
     num_steps, num_processes = replay_buffer.rewards_raw.shape[:2]
     size_batch = num_processes * num_steps
     size_minibatch = size_batch // config.num_minibatch
@@ -136,16 +136,16 @@ def update_policy(
     state = flatten(replay_buffer.prev_state[:-1])
     action = flatten(replay_buffer.actions)
     value = flatten(replay_buffer.value_preds[:-1])
-
-    if len(replay_buffer.action_log_probs.shape) == 2:
-        replay_buffer.action_log_probs = jnp.expand_dims(
-            replay_buffer.action_log_probs, axis=-1
-        )
     log_pi_old = flatten(replay_buffer.action_log_probs)
     target = flatten(replay_buffer.returns[:-1])
     advantages = target - value
     gae = advantages
-    latent = flatten(np.array(replay_buffer.latent[:-1]))
+
+    # latent = flatten(np.array(replay_buffer.latent[:-1]))
+    latent_mean = np.array(replay_buffer.latent_mean[:-1])
+    latent_logvar = np.array(replay_buffer.latent_logvar[:-1])
+    latent = np.concatenate([latent_mean, latent_logvar], axis=-1)
+    latent = flatten(latent)
 
     for _ in range(config.num_epochs):
         idxes = np.random.permutation(idxes)
@@ -156,7 +156,7 @@ def update_policy(
         ts, (_, epoch_metrics) = update_jit(
             ts=ts,
             config=config,
-            rng_key=rng_key,
+            rng_key=key2,
             idxes=idxes_list,
             state=state,
             action=action,

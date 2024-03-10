@@ -23,7 +23,7 @@ from pathlib import Path
 import gymnasium as gym
 from varibad_jax.base_trainer import BaseTrainer
 from varibad_jax.models.helpers import init_params as init_params_vae
-from varibad_jax.models.helpers import encode_trajectory
+from varibad_jax.models.helpers import encode_trajectory, decode
 from varibad_jax.models.update import update_vae
 from varibad_jax.agents.ppo.ppo import update_policy
 from varibad_jax.agents.ppo.helpers import init_params as init_params_policy
@@ -40,6 +40,13 @@ class VAETrainer(BaseTrainer):
         self.total_steps = 0
         self.num_processes = self.config.env.num_processes
 
+        continuous_actions = not isinstance(self.envs.action_space, gym.spaces.Discrete)
+        if continuous_actions:
+            self.vae_action_dim = self.action_dim
+        else:
+            self.vae_action_dim = 1
+        self.continuous_actions = continuous_actions
+
         # this is for the case with fixed length sessions
         steps_per_rollout = (
             config.env.num_episodes_per_rollout * self.envs.max_episode_steps
@@ -49,23 +56,26 @@ class VAETrainer(BaseTrainer):
         self.num_updates = (
             int(config.env.num_frames) // steps_per_rollout // config.env.num_processes
         )
-        print(f"num rl updates = {self.num_updates}")
+        logging.info(f"num rl updates = {self.num_updates}")
+        logging.info(f"steps per rollout = {steps_per_rollout}")
+        logging.info(
+            f"vae action dim = {self.vae_action_dim}, action_dim = {self.action_dim}"
+        )
 
         self.ts_vae, self.ts_policy = self.create_ts()
         self.policy_storage, self.vae_storage = self.setup_replay_buffers()
 
     def create_ts(self):
-        continuous_actions = not isinstance(self.envs.action_space, gym.spaces.Discrete)
-        if continuous_actions:
-            action_dim = self.action_dim
-        else:
-            action_dim = 1
         vae_params = init_params_vae(
             config=self.config.vae,
             rng_key=next(self.rng_seq),
             state_dim=self.state_dim,
-            action_dim=action_dim,
+            action_dim=self.vae_action_dim,
         )
+
+        # count number of vae params
+        num_vae_params = sum(p.size for p in jax.tree_util.tree_leaves(vae_params))
+        logging.info(f"num vae params = {num_vae_params}")
 
         tx_vae = optax.chain(
             optax.clip(self.config.vae.max_grad_norm),
@@ -80,6 +90,11 @@ class VAETrainer(BaseTrainer):
             action_space=self.envs.action_space,
         )
 
+        num_policy_params = sum(
+            p.size for p in jax.tree_util.tree_leaves(policy_params)
+        )
+        logging.info(f"num policy params = {num_policy_params}")
+
         tx_policy = optax.chain(
             optax.clip(self.config.policy.max_grad_norm),
             optax.adam(self.config.policy.lr, eps=self.config.policy.eps),
@@ -93,6 +108,14 @@ class VAETrainer(BaseTrainer):
             config=FrozenConfigDict(self.config.vae),
         )
 
+        self.decode_apply = partial(
+            jax.jit(
+                decode.apply,
+                static_argnames=("config"),
+            ),
+            config=FrozenConfigDict(self.config.vae),
+        )
+
         ts_vae = TrainState.create(apply_fn=encode_apply, params=vae_params, tx=tx_vae)
 
         policy_apply = partial(
@@ -101,7 +124,7 @@ class VAETrainer(BaseTrainer):
                 static_argnames=("config", "is_continuous", "action_dim"),
             ),
             config=FrozenConfigDict(self.config.policy),
-            is_continuous=continuous_actions,
+            is_continuous=self.continuous_actions,
             action_dim=self.action_dim,
         )
         ts_policy = TrainState.create(
@@ -131,15 +154,20 @@ class VAETrainer(BaseTrainer):
             zero_pad=True,
             max_num_rollouts=self.config.vae.buffer_size,
             state_dim=self.state_dim,
-            action_dim=self.action_dim,
+            action_dim=self.vae_action_dim,
             task_dim=0,
             vae_buffer_add_thresh=1.0,
         )
         return policy_storage, vae_storage
 
     def collect_rollouts(self):
+        logging.debug("inside rollout")
+
         # use all zeros as priors
         latent = np.zeros((self.num_processes, self.config.vae.latent_dim * 2))
+        latent_sample = np.zeros((self.num_processes, self.config.vae.latent_dim))
+        latent_mean = np.zeros((self.num_processes, self.config.vae.latent_dim))
+        latent_logvar = np.zeros((self.num_processes, self.config.vae.latent_dim))
         hidden_state = np.zeros((self.num_processes, self.config.vae.lstm_hidden_size))
 
         state = self.envs.reset()
@@ -148,6 +176,9 @@ class VAETrainer(BaseTrainer):
 
         self.policy_storage.prev_state[0] = state
         self.policy_storage.hidden_states[0] = hidden_state.copy()
+        self.policy_storage.latent_samples.append(latent_sample.copy())
+        self.policy_storage.latent_mean.append(latent_mean.copy())
+        self.policy_storage.latent_logvar.append(latent_logvar.copy())
 
         for step in range(self.steps_per_rollout):
             # sample random action from policy
@@ -174,7 +205,6 @@ class VAETrainer(BaseTrainer):
             reward = rew_raw[:, np.newaxis]
             reward_norm = rew_norm[:, np.newaxis]
             value = policy_output.value
-            log_prob = policy_output.log_prob[:, np.newaxis]
 
             # after seeing the next observation and getting more
             # information, we can update the belief over the task variable
@@ -243,7 +273,10 @@ class VAETrainer(BaseTrainer):
             use_proper_time_limits=False,
         )
 
+        logging.debug("done collecting rollouts")
+
     def perform_update(self):
+        logging.debug("inside perform update")
         metrics = {}
 
         # compute ppo update
@@ -251,13 +284,13 @@ class VAETrainer(BaseTrainer):
         policy_metrics, self.ts_policy = update_policy(
             ts=self.ts_policy,
             replay_buffer=self.policy_storage,
-            config=self.config.policy,
+            config=FrozenConfigDict(self.config.policy),
             rng_key=next(self.rng_seq),
         )
-        update_time = time.time() - update_start
-        policy_metrics["update_time"] = update_time
+        policy_update_time = time.time() - update_start
         policy_metrics = gutl.prefix_dict_keys(policy_metrics, prefix="policy/")
         metrics.update(policy_metrics)
+        logging.debug("done updating policy")
 
         # update vae
         update_start = time.time()
@@ -265,34 +298,54 @@ class VAETrainer(BaseTrainer):
             self.ts_vae, (_, vae_metrics) = update_vae(
                 ts=self.ts_vae,
                 rng_key=next(self.rng_seq),
-                config=self.config,
+                config=FrozenConfigDict(self.config),
                 batch=self.vae_storage.get_batch(self.config.vae.trajs_per_batch),
+                decode_fn=self.decode_apply,
             )
-        update_time = time.time() - update_start
-        vae_metrics["update_time"] = update_time
+        vae_update_time = time.time() - update_start
         vae_metrics = gutl.prefix_dict_keys(vae_metrics, prefix="vae/")
         metrics.update(vae_metrics)
+        metrics["time/vae_update_time"] = vae_update_time
+        metrics["time/policy_update_time"] = policy_update_time
+
+        logging.debug("done updating vae")
         return metrics
 
     def train(self):
-        print("Training starts")
+        logging.info("Training starts")
 
-        for iter_idx in tqdm.tqdm(
+        for self.iter_idx in tqdm.tqdm(
             range(0, self.num_updates), smoothing=0.1, disable=self.config.disable_tqdm
         ):
             print(
                 "------------------ Iteration {}; Frames {} ------------------".format(
-                    iter_idx, self.total_steps
+                    self.iter_idx, self.total_steps
                 )
             )
             # collect rollout
+            rollout_start = time.time()
             self.collect_rollouts()
+            rollout_time = time.time() - rollout_start
+
+            # Log episodic rewards for completed environments
+            # sum over timesteps and average over environments
+            episodic_rewards_raw = self.policy_storage.rewards_raw.sum(axis=0).mean()
+            episodic_rewards_normalised = self.policy_storage.rewards_normalised.sum(
+                axis=0
+            ).mean()
+            if self.wandb_run is not None:
+                self.wandb_run.log(
+                    {
+                        "train/episodic_rewards_raw": episodic_rewards_raw,
+                        "train/episodic_rewards_normalised": episodic_rewards_normalised,
+                    },
+                    step=self.iter_idx,
+                )
 
             if (
-                len(self.vae_storage) == 0
-                and not self.config.vae.buffer_size == 0
+                len(self.vae_storage) == 0 and not self.config.vae.buffer_size == 0
             ) or (self.config.warmup_steps > self.total_steps):
-                print("Not updating yet because; filling up the VAE buffer.")
+                logging.info("Not updating yet because; filling up the VAE buffer.")
                 self.policy_storage.after_update()
                 continue
 
@@ -301,7 +354,7 @@ class VAETrainer(BaseTrainer):
             if self.total_steps >= self.config.warmup_steps:
                 train_metrics = self.perform_update()
 
-                if ((iter_idx + 1) % self.config.log_interval) == 0:
+                if ((self.iter_idx + 1) % self.config.log_interval) == 0:
                     # Environment stats
                     env_stats = {
                         "state_max": self.policy_storage.prev_state.max(),
@@ -309,10 +362,16 @@ class VAETrainer(BaseTrainer):
                         "rew_max": self.policy_storage.rewards_raw.max(),
                         "rew_min": self.policy_storage.rewards_raw.min(),
                     }
-                    train_metrics.update(env_stats)
-                    self.log(train_metrics, iter_idx=iter_idx)
+                    env_stats = gutl.prefix_dict_keys(env_stats, prefix="env/")
+                    metrics = {
+                        **train_metrics,
+                        **env_stats,
+                        "time/rollout_time": rollout_time,
+                    }
+                    if self.wandb_run is not None:
+                        self.wandb_run.log(metrics, step=self.iter_idx)
 
-                # if (iter_idx + 1) % self.config.eval_interval == 0:
+                # if (self.iter_idx + 1) % self.config.eval_interval == 0:
                 #   print('Evaluating...')
                 #   returns_per_episode = evaluate(
                 #       config=self.config,
@@ -321,7 +380,7 @@ class VAETrainer(BaseTrainer):
                 #       rng_seq=self.rng_seq,
                 #       transition_matrix=self.goal_transition_matrix,
                 #       video_dir=self.eval_video_dir,
-                #       iter_idx=iter_idx + 1,
+                #       iter_idx=self.iter_idx + 1,
                 #   )
                 #   avg_returns_per_episode = returns_per_episode.mean(axis=0)
 
@@ -333,23 +392,35 @@ class VAETrainer(BaseTrainer):
                 #   self.log(
                 #       eval_metrics,
                 #       phase='eval',
-                #       iter_idx=iter_idx,
+                #       self.iter_idx=self.iter_idx,
                 #   )
 
-                if ((iter_idx + 1) % self.config.save_interval) == 0:
-                    # Bundle everything together.
-                    self.saver.save(
-                        iter_idx=iter_idx + 1,
-                        ckpt={
-                            "config": self.config.to_dict(),
-                            "ts_policy": self.ts_policy,
-                            "ts_vae": self.ts_vae,
-                        },
-                    )
+                if ((self.iter_idx + 1) % self.config.save_interval) == 0:
+                    # # Bundle everything together.
+                    # self.saver.save(
+                    #     iter_idx=self.iter_idx + 1,
+                    #     ckpt={
+                    #         "config": self.config.to_dict(),
+                    #         "ts_policy": self.ts_policy,
+                    #         "ts_vae": self.ts_vae,
+                    #     },
+                    # )
+                    # save to pickle
+                    ckpt_file = Path(self.ckpt_dir) / f"ckpt_{self.iter_idx}.pkl"
+                    logging.debug(f"saving checkpoint to {ckpt_file}")
+                    with open(ckpt_file, "wb") as f:
+                        pickle.dump(
+                            {
+                                "config": self.config.to_dict(),
+                                "ts_policy": self.ts_policy.params,
+                                "ts_vae": self.ts_vae.params,
+                            },
+                            f,
+                        )
 
             # Clean up after update
             self.policy_storage.after_update()
 
         self.envs.close()
-        print("Finished training, closing everything")
+        logging.info("Finished training, closing everything")
         return
