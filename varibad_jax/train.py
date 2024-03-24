@@ -23,7 +23,7 @@ from pathlib import Path
 import gymnasium as gym
 from varibad_jax.base_trainer import BaseTrainer
 from varibad_jax.models.helpers import init_params as init_params_vae
-from varibad_jax.models.helpers import encode_trajectory, decode
+from varibad_jax.models.helpers import encode_trajectory, decode, get_prior
 from varibad_jax.models.update import update_vae
 from varibad_jax.agents.ppo.ppo import update_policy
 from varibad_jax.agents.ppo.helpers import init_params as init_params_policy
@@ -118,6 +118,14 @@ class VAETrainer(BaseTrainer):
             config=FrozenConfigDict(self.config.vae),
         )
 
+        self.get_prior = partial(
+            jax.jit(
+                get_prior.apply,
+                static_argnames=("config", "batch_size"),
+            ),
+            config=FrozenConfigDict(self.config.vae),
+        )
+
         ts_vae = TrainState.create(apply_fn=encode_apply, params=vae_params, tx=tx_vae)
 
         policy_apply = partial(
@@ -169,33 +177,35 @@ class VAETrainer(BaseTrainer):
         # ipdb.set_trace()
 
         # use all zeros as priors
-        latent = np.zeros((self.num_processes, self.config.vae.latent_dim * 2))
-        latent_sample = np.zeros((self.num_processes, self.config.vae.latent_dim))
-        latent_mean = np.zeros((self.num_processes, self.config.vae.latent_dim))
-        latent_logvar = np.zeros((self.num_processes, self.config.vae.latent_dim))
-        hidden_state = np.zeros((self.num_processes, self.config.vae.lstm_hidden_size))
+        # latent = np.zeros((self.num_processes, self.config.vae.latent_dim * 2))
+        # latent_sample = np.zeros((self.num_processes, self.config.vae.latent_dim))
+        # latent_mean = np.zeros((self.num_processes, self.config.vae.latent_dim))
+        # latent_logvar = np.zeros((self.num_processes, self.config.vae.latent_dim))
+        # hidden_state = np.zeros((self.num_processes, self.config.vae.lstm_hidden_size))
 
         state = self.envs.reset()
         if len(state.shape) == 1:  # add extra dimension
             state = state[..., np.newaxis]
 
+        prior_outputs = self.get_prior(
+            self.ts_vae.params, next(self.rng_seq), batch_size=self.num_processes
+        )
+
+        latent_sample = prior_outputs.latent_sample
+        latent_mean = prior_outputs.latent_mean
+        latent_logvar = prior_outputs.latent_logvar
+        latent = jnp.concatenate([latent_mean, latent_logvar], axis=-1)
+        hidden_state = prior_outputs.hidden_state
+
+        # import ipdb
+
+        # ipdb.set_trace()
         self.policy_storage.prev_state[0] = state
         self.policy_storage.hidden_states[0] = hidden_state.copy()
         self.policy_storage.latent_samples.append(latent_sample.copy())
         self.policy_storage.latent_mean.append(latent_mean.copy())
         self.policy_storage.latent_logvar.append(latent_logvar.copy())
 
-        import ipdb
-
-        ipdb.set_trace()
-
-        import ipdb
-
-        ipdb.set_trace()
-
-        # import ipdb
-
-        # ipdb.set_trace()
         for step in range(self.steps_per_rollout):
             # sample random action from policy
             policy_output = self.ts_policy.apply_fn(
@@ -268,7 +278,9 @@ class VAETrainer(BaseTrainer):
 
             # update state
             state = next_state
-            latent = encode_outputs.latent
+            latent_mean = encode_outputs.latent_mean
+            latent_logvar = encode_outputs.latent_logvar
+            latent = jnp.concatenate([latent_mean, latent_logvar], axis=-1)
             hidden_state = encode_outputs.hidden_state
             self.total_steps += self.num_processes
 
@@ -325,6 +337,7 @@ class VAETrainer(BaseTrainer):
                 config=FrozenConfigDict(self.config),
                 batch=self.vae_storage.get_batch(self.config.vae.trajs_per_batch),
                 decode_fn=self.decode_apply,
+                get_prior_fn=self.get_prior,
             )
         vae_update_time = time.time() - update_start
         vae_metrics = gutl.prefix_dict_keys(vae_metrics, prefix="vae/")

@@ -66,6 +66,8 @@ class BaseTrainer:
         if not self.config.enable_jit:
             jax_config.update("jax_disable_jit", True)
 
+        logging.info(f"state_dim: {self.state_dim}, action_dim: {self.action_dim}")
+
     def create_ts(self):
         raise NotImplementedError
 

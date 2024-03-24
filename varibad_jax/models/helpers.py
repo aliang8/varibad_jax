@@ -23,6 +23,12 @@ def encode_trajectory(config: FrozenConfigDict, **kwargs):
 
 
 @hk.transform
+def get_prior(config: FrozenConfigDict, **kwargs):
+    model = VaribadVAE(config=config)
+    return model.get_prior(**kwargs)
+
+
+@hk.transform
 def decode(config: FrozenConfigDict, **kwargs):
     model = VaribadVAE(config=config)
     return model.decode(**kwargs)

@@ -5,6 +5,7 @@ import itertools
 from typing import List
 from brax.envs import State
 import gymnasium as gym
+from gymnasium.utils import seeding
 
 
 class GridNavi:
@@ -35,7 +36,6 @@ class GridNavi:
         self.possible_goals.remove((1, 1))
         self.possible_goals.remove((1, 0))
         self.possible_goals = jnp.array(self.possible_goals)
-        self.np_random = np.random.default_rng(seed=seed)
 
     def reset(self, rng: jax.Array):
         init_xy = jnp.array(self.init_state)
@@ -43,7 +43,7 @@ class GridNavi:
         reward, done, zero = jnp.zeros(3)
 
         # sample a random goal
-        indx = self.np_random.integers(0, len(self.possible_goals))
+        indx = jax.random.randint(rng, (1,), 0, len(self.possible_goals))[0]
         goal = self.possible_goals[indx]
 
         # sample a new task from num_cells

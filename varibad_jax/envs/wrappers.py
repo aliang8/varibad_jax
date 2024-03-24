@@ -43,11 +43,8 @@ class BAMDPWrapper(Wrapper):
 
         # when the MDP is done, we reset back to initial state, but keep the same task
         init_xy = jnp.array(self.init_state)
-        init_obs = self._get_obs(init_xy)
-        new_obs = jnp.where(done_mdp, init_obs, state.obs)
+        new_obs = jnp.where(done_mdp, init_xy, state.obs)
         state = state.replace(obs=new_obs)
-        xy_coord = jnp.where(done_mdp, init_xy, state.info["xy_coord"])
-        state.info["xy_coord"] = xy_coord
 
         # also reset step count
         state.info["step_count"] = jnp.where(

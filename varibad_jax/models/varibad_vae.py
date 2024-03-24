@@ -42,6 +42,9 @@ class VaribadVAE(hk.Module):
             layer_sizes=list(config.rew_decoder_layers),
         )
 
+    def get_prior(self, batch_size: int):
+        return self.encoder.get_prior(batch_size)
+
     def encode(
         self,
         states: jnp.ndarray,

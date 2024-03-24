@@ -29,30 +29,49 @@ def loss_vae(
     batch: Batch,
     config: FrozenConfigDict,
     decode_fn: Callable,
+    get_prior_fn: Callable,
 ):
     logging.debug("inside loss_vae")
-    T, B, state_dim = batch.prev_obs.shape
+    T, B, state_dim = batch.next_obs.shape
     logging.debug(f"T: {T}, B: {B}, state_dim: {state_dim}")
 
-    encode_key, sample_key, decode_key = jax.random.split(rng_key, 3)
+    encode_key, prior_key, decode_key = jax.random.split(rng_key, 3)
+
+    # import ipdb
+
+    # ipdb.set_trace()
+
+    # encode the first state to get prior
+    prior_output = get_prior_fn(params, prior_key, batch_size=B)
+    hidden_state = prior_output.hidden_state
+    prior_mean = jnp.expand_dims(prior_output.latent_mean, axis=0)
+    prior_logvar = jnp.expand_dims(prior_output.latent_logvar, axis=0)
+    prior_samples = jnp.expand_dims(prior_output.latent_sample, axis=0)
 
     # encode the full trajectory and get latent posteriors
     encode_outputs = ts.apply_fn(
         params,
         encode_key,
-        states=batch.prev_obs,
+        states=batch.next_obs,
         actions=batch.actions,
         rewards=batch.rewards,
+        hidden_state=hidden_state,
     )
 
-    latents = encode_outputs.latent
     latent_mean = encode_outputs.latent_mean
     latent_logvar = encode_outputs.latent_logvar
-    latent_dist = tfd.Normal(loc=latent_mean, scale=jnp.exp(latent_logvar))
-    latent_samples = latent_dist.sample(seed=sample_key)
+    latent_samples = encode_outputs.latent_sample
 
-    num_elbos = latents.shape[0]
+    latent_mean = jnp.concatenate([prior_mean, latent_mean], axis=0)
+    latent_logvar = jnp.concatenate([prior_logvar, latent_logvar], axis=0)
+    latent_samples = jnp.concatenate([prior_samples, latent_samples], axis=0)
+
+    num_elbos = latent_samples.shape[0]
     num_decodes = T
+
+    # import ipdb
+
+    # ipdb.set_trace()
 
     # reconstruction loss
     prev_obs = batch.prev_obs
@@ -107,6 +126,7 @@ def loss_vae(
     logS = all_logvars[:-1]
     posterior = tfd.Normal(loc=mu, scale=jnp.exp(logE))
     prior = tfd.Normal(loc=m, scale=jnp.exp(logS))
+
     kld = tfd.kl_divergence(posterior, prior).sum(axis=-1)
     kld = kld.sum(axis=0).sum(axis=0).mean()
 
@@ -129,6 +149,7 @@ def update_vae(
     batch,
     rng_key: PRNGKey,
     decode_fn: Callable,
+    get_prior_fn: Callable,
 ):
     prev_obs, next_obs, actions, rewards, tasks, trajectory_lens = batch
     batch = Batch(
@@ -146,17 +167,19 @@ def update_vae(
         config=config,
         rng_key=rng_key,
         decode_fn=decode_fn,
+        get_prior_fn=get_prior_fn,
     )
     return ts, (total_loss, loss_dict)
 
 
-@partial(jax.jit, static_argnames=("config", "decode_fn"))
+@partial(jax.jit, static_argnames=("config", "decode_fn", "get_prior_fn"))
 def update_jit(
     ts: TrainState,
     config: FrozenConfigDict,
     rng_key: PRNGKey,
     batch: Batch,
     decode_fn: Callable,
+    get_prior_fn: Callable,
 ):
     logging.info("update jit vae!!!!! VAEE")
     loss_and_grad_fn = jax.value_and_grad(loss_vae, has_aux=True)
@@ -168,6 +191,7 @@ def update_jit(
         rng_key=rng_key,
         batch=batch,
         decode_fn=decode_fn,
+        get_prior_fn=get_prior_fn,
     )
 
     # compute norm of grads for each set of parameters

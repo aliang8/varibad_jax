@@ -41,10 +41,10 @@ class Decoder(hk.Module):
         self.latent_embed = hk.Linear(
             self.embedding_dim, name="latent_embed", **init_kwargs
         )
-        # self.state_embed = hk.Linear(
-        #     self.embedding_dim, name="state_embed", **init_kwargs
-        # )
-        self.state_embed = hk.Embed(vocab_size=25, embed_dim=self.embedding_dim)
+        self.state_embed = hk.Linear(
+            self.embedding_dim, name="state_embed", **init_kwargs
+        )
+        # self.state_embed = hk.Embed(vocab_size=25, embed_dim=self.embedding_dim)
 
         if self.input_action:
             self.action_embed = hk.Linear(
@@ -70,7 +70,7 @@ class Decoder(hk.Module):
         latent_embed = self.latent_embed(latents)
         latent_embed = nn.gelu(latent_embed)
 
-        next_state_embed = self.state_embed(next_states.astype(jnp.int32)).squeeze()
+        next_state_embed = self.state_embed(next_states)
         next_state_embed = nn.gelu(next_state_embed)
         inputs = jnp.concatenate((latent_embed, next_state_embed), axis=-1)
 
