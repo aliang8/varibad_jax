@@ -66,13 +66,11 @@ class GridNavi:
             info=info,
         )
 
-    def reached_goal(self, state):
-        return np.array_equal(state, self.get_task())
-
     def step(self, state: State, action: jax.Array):
         curr_obs = state.info["xy_coord"]
 
         # Define the possible actions: up, down, left, right
+        # 0 = right, 1 = left, 2 = down, 3 = up, 4 = noop
         actions = jnp.array([(0, 1), (0, -1), (-1, 0), (1, 0), (0, 0)])
 
         new_xy = curr_obs + actions[action[0]]

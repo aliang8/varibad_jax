@@ -48,7 +48,7 @@ def loss_vae(
     latents = encode_outputs.latent
     latent_mean = encode_outputs.latent_mean
     latent_logvar = encode_outputs.latent_logvar
-    latent_dist = tfd.Normal(loc=latent_mean, scale=jnp.exp(0.5 * latent_logvar))
+    latent_dist = tfd.Normal(loc=latent_mean, scale=jnp.exp(latent_logvar))
     latent_samples = latent_dist.sample(seed=sample_key)
 
     num_elbos = latents.shape[0]
@@ -105,8 +105,8 @@ def loss_vae(
     m = all_means[:-1]
     logE = all_logvars[1:]
     logS = all_logvars[:-1]
-    posterior = tfd.Normal(loc=mu, scale=jnp.exp(logS))
-    prior = tfd.Normal(loc=m, scale=jnp.exp(logE))
+    posterior = tfd.Normal(loc=mu, scale=jnp.exp(logE))
+    prior = tfd.Normal(loc=m, scale=jnp.exp(logS))
     kld = tfd.kl_divergence(posterior, prior).sum(axis=-1)
     kld = kld.sum(axis=0).sum(axis=0).mean()
 
@@ -117,6 +117,7 @@ def loss_vae(
     loss_dict = {
         "kld": kld,
         "rew_recon_loss": rew_recon_loss,
+        "total_loss": total_loss,
     }
 
     return total_loss, loss_dict
@@ -136,6 +137,9 @@ def update_vae(
         actions=actions,
         rewards=rewards,
     )
+    # import ipdb
+
+    # ipdb.set_trace()
     ts, (total_loss, loss_dict) = update_jit(
         ts=ts,
         batch=batch,

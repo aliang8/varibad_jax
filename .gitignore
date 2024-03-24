@@ -9,3 +9,4 @@ varibad_jax/hyperparams/*
 commands.txt
 varibad_jax/results
 varibad_jax/wandb
+varibad_jax/start.sh

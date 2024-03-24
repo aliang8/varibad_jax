@@ -5,11 +5,13 @@ from typing import ClassVar, Optional
 
 from brax.envs import Env, State, Wrapper
 from varibad_jax.envs.gridworld_jax import GridNavi
+from varibad_jax.envs.wrappers import BAMDPWrapper
 
 
-def make_envs(env_id, seed: int = 0, num_envs: int = 1):
+def make_envs(env_id, seed: int = 0, num_envs: int = 1, num_episodes_per_rollout: int = 4):
     # env = gym.make(env_id)
     env = GridNavi()
+    env = BAMDPWrapper(env, num_episodes_per_rollout=num_episodes_per_rollout)
     if num_envs > 1:
         env = VmapWrapper(env, num_envs=num_envs)
     env = GymWrapper(env, seed)
