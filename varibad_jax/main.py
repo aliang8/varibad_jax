@@ -83,12 +83,13 @@ def main(_):
     config = _CONFIG.value.to_dict()
     if config["smoke_test"] is False:
         config.update(param_space)
-        train_model = tune.with_resources(train_model_fn, {"cpu": 1, "gpu": 0.2})
+        train_model = tune.with_resources(train_model_fn, {"cpu": 5, "gpu": 0.2})
 
+        ray_path = Path(config["root_dir"]) / config["ray_logdir"]
         run_config = RunConfig(
             name=config["exp_name"],
-            local_dir="/data/anthony/varibad_jax/ray_results",
-            storage_path="/data/anthony/varibad_jax/ray_results",
+            local_dir=ray_path,
+            storage_path=ray_path,
             log_to_file=True,
         )
         tuner = tune.Tuner(

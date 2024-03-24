@@ -180,6 +180,10 @@ class VAETrainer(BaseTrainer):
         self.policy_storage.latent_mean.append(latent_mean.copy())
         self.policy_storage.latent_logvar.append(latent_logvar.copy())
 
+        import ipdb
+
+        ipdb.set_trace()
+
         for step in range(self.steps_per_rollout):
             # sample random action from policy
             policy_output = self.ts_policy.apply_fn(

@@ -23,6 +23,7 @@ moviepy
 
 # Logging
 wandb
+ipdb
 
 absl-py
 dataclasses

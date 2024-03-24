@@ -7,9 +7,9 @@ from brax.envs import Env, State, Wrapper
 from varibad_jax.envs.gridworld_jax import GridNavi
 
 
-def make_envs(env_id, seed: int = 0, num_envs: int = 1):
+def make_envs(env_id, seed: int = 0, num_envs: int = 1, env_kwargs=dict()):
     # env = gym.make(env_id)
-    env = GridNavi()
+    env = GridNavi(seed=seed, **env_kwargs)
     if num_envs > 1:
         env = VmapWrapper(env, num_envs=num_envs)
     env = GymWrapper(env, seed)

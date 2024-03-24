@@ -106,8 +106,9 @@ def get_config(config_string: str = None):
     # number of warmup steps before training
     config.warmup_steps = 10000
     # where to save experiment artifacts (videos, checkpoints, etc)
-    config.root_dir = "/data/anthony/varibad_jax/varibad_jax/"
+    config.root_dir = "/scr/aliang80/varibad_jax/varibad_jax/"
     config.exp_name = ""
+    config.ray_logdir = "ray_results"
 
     # for rollout visualization
     config.fps = 5

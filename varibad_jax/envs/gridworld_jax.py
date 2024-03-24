@@ -10,12 +10,12 @@ import gymnasium as gym
 class GridNavi:
     """Grid navigation environment in BRAX."""
 
-    def __init__(self, episode_length: int = 15, num_cells: int = 5):
+    def __init__(self, seed: int = 0, num_cells: int = 5, episode_length: int = 15):
         super().__init__()
         self._max_episode_steps = episode_length
         self.num_cells = num_cells
 
-        obs_shape = (1,)
+        obs_shape = (2,)  # x, y coordinates
         self.observation_space = gym.spaces.Box(
             low=0, high=self.num_cells - 1, shape=obs_shape
         )
@@ -35,28 +35,24 @@ class GridNavi:
         self.possible_goals.remove((1, 1))
         self.possible_goals.remove((1, 0))
         self.possible_goals = jnp.array(self.possible_goals)
-
-    def _get_obs(self, xy: jnp.ndarray):
-        return self.xy_to_id(xy)[..., jnp.newaxis]
+        self.np_random = np.random.default_rng(seed=seed)
 
     def reset(self, rng: jax.Array):
         init_xy = jnp.array(self.init_state)
-        obs = self._get_obs(init_xy)
+        obs = init_xy
         reward, done, zero = jnp.zeros(3)
 
         # sample a random goal
-        indx = np.random.randint(0, len(self.possible_goals))
+        indx = self.np_random.integers(0, len(self.possible_goals))
         goal = self.possible_goals[indx]
-        task = self._get_obs(goal)
 
         # sample a new task from num_cells
         info = {
-            "xy_coord": jnp.zeros(2).astype(jnp.int32),
             "goal": goal,
-            "task": task,
             "timestep": 0,
         }
         metrics = {"reward": reward}
+
         return State(
             pipeline_state=None,
             obs=obs,
@@ -66,11 +62,8 @@ class GridNavi:
             info=info,
         )
 
-    def reached_goal(self, state):
-        return np.array_equal(state, self.get_task())
-
     def step(self, state: State, action: jax.Array):
-        curr_obs = state.info["xy_coord"]
+        curr_obs = state.obs
 
         # Define the possible actions: up, down, left, right
         actions = jnp.array([(0, 1), (0, -1), (-1, 0), (1, 0), (0, 0)])
@@ -80,20 +73,19 @@ class GridNavi:
         new_xy = jnp.clip(
             new_xy, jnp.array([0, 0]), jnp.array([self.num_cells, self.num_cells]) - 1
         )
-        obs = self._get_obs(new_xy)
-        reached_goal = jnp.array_equal(state.info["task"], obs)
+        obs = new_xy
+        reached_goal = jnp.array_equal(state.info["goal"], obs)
         reward = jnp.where(reached_goal, 1.0, -0.1)
 
         metrics = {"reward": reward, "reached_goal": reached_goal}
-        state.info["xy_coord"] = new_xy
         state.info["timestep"] = state.info["timestep"] + 1
         done = state.info["timestep"] >= self._max_episode_steps
         return state.replace(obs=obs, reward=reward, done=done, metrics=metrics)
 
-    def xy_to_id(self, xy: jax.Array):
-        mat = jnp.arange(0, self.num_cells**2).reshape((self.num_cells, self.num_cells))
-        id = mat[xy[0], xy[1]]
-        return id
+    # def xy_to_id(self, xy: jax.Array):
+    #     mat = jnp.arange(0, self.num_cells**2).reshape((self.num_cells, self.num_cells))
+    #     id = mat[xy[0], xy[1]]
+    #     return id
 
     @property
     def max_episode_steps(self):

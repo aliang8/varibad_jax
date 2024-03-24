@@ -1,1 +1,1 @@
-## VariBAD JAX Implementation
+## JAX Implementation of VariBAD
