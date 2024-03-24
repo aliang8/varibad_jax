@@ -56,6 +56,7 @@ class GymWrapper(gym.Env):
         self._state = None
         self.observation_space = self._env.observation_space
         self.action_space = self._env.action_space
+        self.task_dim = self._env.task_dim
 
         def reset(key):
             key1, key2 = jax.random.split(key)

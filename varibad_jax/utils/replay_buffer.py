@@ -212,7 +212,6 @@ class OnlineStorage:
         gamma: float,
         tau: float,
         use_proper_time_limits=True,
-        vae=None,
     ):
         """
         Compute the returns for each step in the buffer.
@@ -305,16 +304,20 @@ class OnlineStorage:
         return len(self.prev_state) * self.num_processes
 
     def before_update(self, ts, rng_key):
-        latent = np.concatenate(
-            [self.latent_mean[:-1], self.latent_logvar[:-1]], axis=-1
-        )
+        if self.latent_mean is not None:
+            latent = np.concatenate(
+                [self.latent_mean[:-1], self.latent_logvar[:-1]], axis=-1
+            )
+        else:
+            latent = None
+
+        task = self.tasks[:-1]
+
         policy_output = ts.apply_fn(
-            ts.params,
-            rng_key,
-            env_state=self.prev_state[:-1],
-            latent=latent,
+            ts.params, rng_key, env_state=self.prev_state[:-1], latent=latent, task=task
         )
-        self.action_log_probs = policy_output.log_prob
+        log_probs = policy_output.dist.log_prob(self.actions.astype(np.int32).squeeze())
+        self.action_log_probs = log_probs
         # [T, B]
 
         if len(self.action_log_probs.shape) == 2:

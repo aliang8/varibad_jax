@@ -21,30 +21,22 @@ from functools import partial
 import haiku as hk
 from pathlib import Path
 import gymnasium as gym
-from varibad_jax.base_trainer import BaseTrainer
-from varibad_jax.models.helpers import init_params as init_params_vae
-from varibad_jax.models.helpers import encode_trajectory, decode, get_prior
-from varibad_jax.models.update import update_vae
+from varibad_jax.trainers.base_trainer import BaseTrainer
 from varibad_jax.agents.ppo.ppo import update_policy
 from varibad_jax.agents.ppo.helpers import init_params as init_params_policy
 from varibad_jax.agents.ppo.helpers import policy_fn
 
 from varibad_jax.utils.replay_buffer import OnlineStorage
-from varibad_jax.utils.replay_vae import RolloutStorageVAE
 import varibad_jax.utils.general_utils as gutl
 
 
-class VAETrainer(BaseTrainer):
+class RLTrainer(BaseTrainer):
     def __init__(self, config: ConfigDict):
         super().__init__(config)
         self.total_steps = 0
         self.num_processes = self.config.env.num_processes
 
         continuous_actions = not isinstance(self.envs.action_space, gym.spaces.Discrete)
-        if continuous_actions:
-            self.vae_action_dim = self.action_dim
-        else:
-            self.vae_action_dim = 1
         self.continuous_actions = continuous_actions
 
         # this is for the case with fixed length sessions
@@ -58,36 +50,19 @@ class VAETrainer(BaseTrainer):
         )
         logging.info(f"num rl updates = {self.num_updates}")
         logging.info(f"steps per rollout = {steps_per_rollout}")
-        logging.info(
-            f"vae action dim = {self.vae_action_dim}, action_dim = {self.action_dim}"
-        )
+        logging.info(f"action_dim = {self.action_dim}")
 
-        self.ts_vae, self.ts_policy = self.create_ts()
-        self.policy_storage, self.vae_storage = self.setup_replay_buffers()
+        self.ts_policy = self.create_ts()
+        self.policy_storage = self.setup_replay_buffers()
 
     def create_ts(self):
-        vae_params = init_params_vae(
-            config=self.config.vae,
-            rng_key=next(self.rng_seq),
-            state_dim=self.state_dim,
-            action_dim=self.vae_action_dim,
-        )
-
-        # count number of vae params
-        num_vae_params = sum(p.size for p in jax.tree_util.tree_leaves(vae_params))
-        logging.info(f"num vae params = {num_vae_params}")
-
-        tx_vae = optax.chain(
-            # optax.clip(self.config.vae.max_grad_norm),
-            optax.adam(self.config.vae.lr, eps=self.config.vae.eps),
-        )
-
         policy_params = init_params_policy(
             config=self.config.policy,
             rng_key=next(self.rng_seq),
             state_dim=self.state_dim,
-            latent_dim=self.config.vae.latent_dim * 2,
+            latent_dim=0,
             action_space=self.envs.action_space,
+            task_dim=self.envs.task_dim,
         )
         # import ipdb
 
@@ -98,35 +73,9 @@ class VAETrainer(BaseTrainer):
         logging.info(f"num policy params = {num_policy_params}")
 
         tx_policy = optax.chain(
-            optax.clip_by_global_norm(self.config.policy.max_grad_norm),
+            # optax.clip_by_global_norm(self.config.policy.max_grad_norm),
             optax.adam(self.config.policy.lr, eps=self.config.policy.eps),
         )
-
-        encode_apply = partial(
-            jax.jit(
-                encode_trajectory.apply,
-                static_argnames=("config"),
-            ),
-            config=FrozenConfigDict(self.config.vae),
-        )
-
-        self.decode_apply = partial(
-            jax.jit(
-                decode.apply,
-                static_argnames=("config"),
-            ),
-            config=FrozenConfigDict(self.config.vae),
-        )
-
-        self.get_prior = partial(
-            jax.jit(
-                get_prior.apply,
-                static_argnames=("config", "batch_size"),
-            ),
-            config=FrozenConfigDict(self.config.vae),
-        )
-
-        ts_vae = TrainState.create(apply_fn=encode_apply, params=vae_params, tx=tx_vae)
 
         policy_apply = partial(
             jax.jit(
@@ -142,7 +91,7 @@ class VAETrainer(BaseTrainer):
             params=policy_params,
             tx=tx_policy,
         )
-        return ts_vae, ts_policy
+        return ts_policy
 
     def setup_replay_buffers(self):
         policy_storage = OnlineStorage(
@@ -152,59 +101,24 @@ class VAETrainer(BaseTrainer):
             state_dim=self.state_dim,
             latent_dim=self.config.vae.latent_dim * 2,
             belief_dim=0,
-            task_dim=0,
+            task_dim=self.envs.task_dim,
             action_space=self.envs.action_space,
             hidden_size=self.config.vae.lstm_hidden_size,
             normalise_rewards=self.config.env.normalize_rews,
         )
-
-        vae_storage = RolloutStorageVAE(
-            num_processes=self.num_processes,
-            max_trajectory_len=self.steps_per_rollout,
-            zero_pad=True,
-            max_num_rollouts=self.config.vae.buffer_size,
-            state_dim=self.state_dim,
-            action_dim=self.vae_action_dim,
-            task_dim=0,
-            vae_buffer_add_thresh=1.0,
-        )
-        return policy_storage, vae_storage
+        return policy_storage
 
     def collect_rollouts(self):
         logging.debug("inside rollout")
-        # import ipdb
-
-        # ipdb.set_trace()
-
-        # use all zeros as priors
-        # latent = np.zeros((self.num_processes, self.config.vae.latent_dim * 2))
-        # latent_sample = np.zeros((self.num_processes, self.config.vae.latent_dim))
-        # latent_mean = np.zeros((self.num_processes, self.config.vae.latent_dim))
-        # latent_logvar = np.zeros((self.num_processes, self.config.vae.latent_dim))
-        # hidden_state = np.zeros((self.num_processes, self.config.vae.lstm_hidden_size))
 
         state = self.envs.reset()
+
         if len(state.shape) == 1:  # add extra dimension
             state = state[..., np.newaxis]
 
-        prior_outputs = self.get_prior(
-            self.ts_vae.params, next(self.rng_seq), batch_size=self.num_processes
-        )
+        task = self.envs._state.info["goal"]
 
-        latent_sample = prior_outputs.latent_sample
-        latent_mean = prior_outputs.latent_mean
-        latent_logvar = prior_outputs.latent_logvar
-        latent = jnp.concatenate([latent_mean, latent_logvar], axis=-1)
-        hidden_state = prior_outputs.hidden_state
-
-        # import ipdb
-
-        # ipdb.set_trace()
         self.policy_storage.prev_state[0] = state
-        self.policy_storage.hidden_states[0] = hidden_state.copy()
-        self.policy_storage.latent_samples.append(latent_sample.copy())
-        self.policy_storage.latent_mean.append(latent_mean.copy())
-        self.policy_storage.latent_logvar.append(latent_logvar.copy())
 
         for step in range(self.steps_per_rollout):
             # sample random action from policy
@@ -212,7 +126,7 @@ class VAETrainer(BaseTrainer):
                 self.ts_policy.params,
                 next(self.rng_seq),
                 env_state=state,
-                latent=latent,
+                task=task,
             )
 
             # take a step in the environment
@@ -231,27 +145,7 @@ class VAETrainer(BaseTrainer):
             reward = rew_raw[:, np.newaxis]
             reward_norm = rew_norm[:, np.newaxis]
             value = policy_output.value
-
-            # after seeing the next observation and getting more
-            # information, we can update the belief over the task variable
-            encode_outputs = self.ts_vae.apply_fn(
-                self.ts_vae.params,
-                next(self.rng_seq),
-                states=next_state,
-                actions=action,
-                rewards=reward,
-                hidden_state=hidden_state,
-            )
-
-            # add transition to vae buffer
-            self.vae_storage.insert(
-                prev_state=state,
-                next_state=next_state,
-                actions=action,
-                rewards=reward,
-                done=done,
-                task=None,
-            )
+            # task = infos["goal"]  # xy location
 
             self.policy_storage.next_state[step] = next_state.copy()
 
@@ -262,7 +156,7 @@ class VAETrainer(BaseTrainer):
             self.policy_storage.insert(
                 state=next_state,
                 belief=None,
-                task=None,
+                task=task,
                 actions=action,
                 rewards_raw=reward,
                 rewards_normalised=reward_norm,
@@ -270,18 +164,10 @@ class VAETrainer(BaseTrainer):
                 bad_masks=masks_done,  # TODO: fix this?
                 value_preds=value,
                 done=done,
-                hidden_states=hidden_state,
-                latent_mean=encode_outputs.latent_mean,
-                latent_logvar=encode_outputs.latent_logvar,
-                latent_sample=encode_outputs.latent_mean,
             )
 
             # update state
             state = next_state
-            latent_mean = encode_outputs.latent_mean
-            latent_logvar = encode_outputs.latent_logvar
-            latent = jnp.concatenate([latent_mean, latent_logvar], axis=-1)
-            hidden_state = encode_outputs.hidden_state
             self.total_steps += self.num_processes
 
         # compute next value for bootstrapping
@@ -289,7 +175,7 @@ class VAETrainer(BaseTrainer):
             self.ts_policy.params,
             next(self.rng_seq),
             env_state=state,
-            latent=latent,
+            task=task,
         )
         next_value = policy_output.value
 
@@ -301,10 +187,6 @@ class VAETrainer(BaseTrainer):
             tau=self.config.policy.tau,
             use_proper_time_limits=False,
         )
-
-        # import ipdb
-
-        # ipdb.set_trace()
         logging.debug("done collecting rollouts")
 
     def perform_update(self):
@@ -327,25 +209,7 @@ class VAETrainer(BaseTrainer):
         policy_metrics = gutl.prefix_dict_keys(policy_metrics, prefix="policy/")
         metrics.update(policy_metrics)
         logging.debug("done updating policy")
-
-        # update vae
-        update_start = time.time()
-        for _ in range(self.config.vae.num_vae_updates):
-            self.ts_vae, (_, vae_metrics) = update_vae(
-                ts=self.ts_vae,
-                rng_key=next(self.rng_seq),
-                config=FrozenConfigDict(self.config),
-                batch=self.vae_storage.get_batch(self.config.vae.trajs_per_batch),
-                decode_fn=self.decode_apply,
-                get_prior_fn=self.get_prior,
-            )
-        vae_update_time = time.time() - update_start
-        vae_metrics = gutl.prefix_dict_keys(vae_metrics, prefix="vae/")
-        metrics.update(vae_metrics)
-        metrics["time/vae_update_time"] = vae_update_time
         metrics["time/policy_update_time"] = policy_update_time
-
-        logging.debug("done updating vae")
         return metrics
 
     def train(self):
@@ -383,10 +247,8 @@ class VAETrainer(BaseTrainer):
                     step=self.iter_idx,
                 )
 
-            if (
-                len(self.vae_storage) == 0 and not self.config.vae.buffer_size == 0
-            ) or (self.config.warmup_steps > self.total_steps):
-                logging.info("Not updating yet because; filling up the VAE buffer.")
+            if self.config.warmup_steps > self.total_steps:
+                logging.info("Not updating yet ...")
                 self.policy_storage.after_update()
                 continue
 
@@ -458,7 +320,6 @@ class VAETrainer(BaseTrainer):
                             {
                                 "config": self.config.to_dict(),
                                 "ts_policy": self.ts_policy.params,
-                                "ts_vae": self.ts_vae.params,
                             },
                             f,
                         )

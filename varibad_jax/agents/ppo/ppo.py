@@ -32,16 +32,16 @@ def loss_policy(
     log_pi_old: jnp.ndarray,
     gae: jnp.ndarray,
     action: jnp.ndarray,
-    latent: jnp.ndarray,
+    latent: jnp.ndarray = None,
+    task: jnp.ndarray = None,
 ):
-    # import ipdb
-
-    # ipdb.set_trace()
-    policy_output = ts.apply_fn(params, rng_key, env_state=state, latent=latent)
+    policy_output = ts.apply_fn(
+        params, rng_key, env_state=state, latent=latent, task=task
+    )
     policy_dist = policy_output.dist
     value_pred = policy_output.value
 
-    log_prob = policy_dist.log_prob(action.squeeze())
+    log_prob = policy_dist.log_prob(action.astype(np.int32).squeeze())
     if len(log_prob.shape) == 1:
         log_prob = jnp.expand_dims(log_prob, axis=-1)
 
@@ -52,7 +52,9 @@ def loss_policy(
     value_losses_clipped = jnp.square(value_pred_clipped - target)
     value_loss = 0.5 * jnp.maximum(value_losses, value_losses_clipped).mean()
 
-    ratio = jnp.exp(log_prob - log_pi_old)
+    log_ratio = log_prob - log_pi_old
+    ratio = jnp.exp(log_ratio)
+
     gae_norm = (gae - gae.mean()) / (gae.std() + 1e-8)
     loss_actor1 = ratio * gae_norm
     loss_actor2 = (
@@ -62,6 +64,11 @@ def loss_policy(
     loss_actor = loss_actor.mean()
 
     entropy = policy_dist.entropy().mean()
+
+    # calculate approx_kl http://joschu.net/blog/kl-approx.html
+    old_approx_kl = (-log_ratio).mean()
+    approx_kl = ((ratio - 1) - log_ratio).mean()
+    # clipfracs = [((ratio - 1.0).abs() > config.clip_eps).float().mean()]
 
     total_loss = (
         loss_actor
@@ -76,6 +83,7 @@ def loss_policy(
         "value_pred_mean": value_pred.mean(),
         "target_mean": target.mean(),
         "gae_mean": gae.mean(),
+        "approx_kl": approx_kl,
     }
 
 
@@ -91,7 +99,8 @@ def update_jit(
     value: np.ndarray,
     target: np.ndarray,
     gae: np.ndarray,
-    latent: np.ndarray,
+    latent: np.ndarray = None,
+    task: np.ndarray = None,
 ):
     logging.info("update jit policy! POLICY!!!")
     for idx in idxes:
@@ -107,7 +116,8 @@ def update_jit(
             log_pi_old=log_pi_old[idx],
             gae=gae[idx],
             action=action[idx],
-            latent=latent[idx],
+            latent=latent[idx] if latent is not None else latent,
+            task=task[idx] if task is not None else task,
         )
         grad_norms, stats = gutl.compute_all_grad_norm(grad_norm_type="2", grads=grads)
         loss_dict.update(stats)
@@ -142,10 +152,18 @@ def update_policy(
     gae = advantages
 
     # latent = flatten(np.array(replay_buffer.latent[:-1]))
-    latent_mean = np.array(replay_buffer.latent_mean[:-1])
-    latent_logvar = np.array(replay_buffer.latent_logvar[:-1])
-    latent = np.concatenate([latent_mean, latent_logvar], axis=-1)
-    latent = flatten(latent)
+    if config.pass_latent_to_policy:
+        latent_mean = np.array(replay_buffer.latent_mean[:-1])
+        latent_logvar = np.array(replay_buffer.latent_logvar[:-1])
+        latent = np.concatenate([latent_mean, latent_logvar], axis=-1)
+        latent = flatten(latent)
+    else:
+        latent = None
+
+    if config.pass_task_to_policy:
+        task = flatten(np.array(replay_buffer.tasks[:-1]))
+    else:
+        task = None
 
     for _ in range(config.num_epochs):
         idxes = np.random.permutation(idxes)
@@ -165,6 +183,7 @@ def update_policy(
             target=target,
             gae=gae,
             latent=latent,
+            task=task,
         )
 
         for k, v in epoch_metrics.items():

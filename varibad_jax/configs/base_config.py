@@ -88,6 +88,7 @@ def get_config(config_string: str = None):
     # Experiment stuff
     # =============================================================
 
+    config.trainer = "vae_trainer"
     config.seed = 521
     config.mode = "train"
     config.use_wb = False

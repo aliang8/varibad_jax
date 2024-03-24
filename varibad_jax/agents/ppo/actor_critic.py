@@ -18,7 +18,6 @@ tfb = tfp.bijectors
 @chex.dataclass
 class PolicyOutput:
     action: jnp.ndarray
-    log_prob: jnp.ndarray
     value: jnp.ndarray
     entropy: jnp.ndarray
     dist: Any
@@ -53,6 +52,11 @@ class ActorCritic(hk.Module):
                 self.config.embedding_dim, name="latent_embed", **init_kwargs
             )
 
+        if self.config.pass_task_to_policy:
+            self.task_embed = hk.Linear(
+                self.config.embedding_dim, name="task_embed", **init_kwargs
+            )
+
         self.critic_mlp = hk.nets.MLP(
             list(self.config.mlp_layers) + [1],
             activation=nn.gelu,
@@ -77,17 +81,25 @@ class ActorCritic(hk.Module):
             self.mean = hk.Linear(action_dim, name="mean", **init_kwargs)
             self.logvar = hk.Linear(action_dim, name="logvar", **init_kwargs)
 
-    def __call__(self, state: jnp.ndarray, latent: jnp.ndarray):
+    def __call__(
+        self, state: jnp.ndarray, latent: jnp.ndarray = None, task: jnp.ndarray = None
+    ):
         state_embed = self.state_embed(state)
         state_embed = nn.gelu(state_embed)
 
         policy_input = state_embed
 
         # Encode latent
-        if self.config.pass_latent_to_policy:
+        if self.config.pass_latent_to_policy and latent is not None:
             latent_embed = self.latent_embed(latent)
             latent_embed = nn.gelu(latent_embed)
             policy_input = jnp.concatenate((policy_input, latent_embed), axis=-1)
+
+        # Encode task
+        if self.config.pass_task_to_policy and task is not None:
+            task_embed = self.task_embed(task)
+            task_embed = nn.gelu(task_embed)
+            policy_input = jnp.concatenate((policy_input, task_embed), axis=-1)
 
         value = self.critic_mlp(policy_input)
 
@@ -97,7 +109,6 @@ class ActorCritic(hk.Module):
             logits = self.logits(h)
             action_dist = tfd.Categorical(logits=logits)
             action = action_dist.sample(seed=hk.next_rng_key())
-            log_prob = action_dist.log_prob(action)
         else:
             mean = self.mean(h)
             logvar = self.logvar(h)
@@ -105,11 +116,9 @@ class ActorCritic(hk.Module):
                 loc=mean, scale_diag=jnp.exp(logvar)
             )
             action = action_dist.sample(seed=hk.next_rng_key())
-            log_prob = action_dist.log_prob(action)
 
         return PolicyOutput(
             action=action,
-            log_prob=log_prob,
             value=value,
             entropy=action_dist.entropy(),
             dist=action_dist,

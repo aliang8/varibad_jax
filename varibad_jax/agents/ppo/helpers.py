@@ -10,9 +10,16 @@ import gymnasium as gym
 
 
 @hk.transform
-def policy_fn(config: ConfigDict, is_continuous, action_dim, env_state, latent):
+def policy_fn(
+    config: ConfigDict,
+    is_continuous,
+    action_dim,
+    env_state,
+    latent: jnp.ndarray = None,
+    task: jnp.ndarray = None,
+):
     policy = ActorCritic(config, is_continuous, action_dim)
-    policy_output = policy(state=env_state, latent=latent)
+    policy_output = policy(state=env_state, latent=latent, task=task)
     return policy_output
 
 
@@ -22,11 +29,20 @@ def init_params(
     state_dim: int,
     latent_dim: int,
     action_space: gym.spaces.Space,
+    task_dim: int = 0,
 ):
     t = 2
     bs = 2
     dummy_states = np.zeros((t, bs, state_dim))
-    dummy_latents = np.zeros((t, bs, latent_dim))
+    if config.pass_latent_to_policy:
+        dummy_latents = np.zeros((t, bs, latent_dim))
+    else:
+        dummy_latents = None
+
+    if config.pass_task_to_policy:
+        dummy_tasks = np.zeros((t, bs, task_dim))
+    else:
+        dummy_tasks = None
 
     if isinstance(action_space, gym.spaces.Discrete):
         action_dim = action_space.n
@@ -40,5 +56,6 @@ def init_params(
         action_dim=action_dim,
         env_state=dummy_states,
         latent=dummy_latents,
+        task=dummy_tasks,
     )
     return params

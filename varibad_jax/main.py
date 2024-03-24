@@ -16,7 +16,8 @@ import pickle
 from pathlib import Path
 from ray import train, tune
 from ray.train import RunConfig, ScalingConfig
-from varibad_jax.train import VAETrainer
+from varibad_jax.trainers.meta_trainer import VAETrainer
+from varibad_jax.trainers.rl_trainer import RLTrainer
 
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.01"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
@@ -56,7 +57,11 @@ def train_model_fn(config):
     # wrap config in ConfigDict
     config = ConfigDict(config)
 
-    trainer_cls = VAETrainer
+    if config.trainer == "rl_trainer":
+        trainer_cls = RLTrainer
+    elif config.trainer == "vae_trainer":
+        trainer_cls = VAETrainer
+
     trainer = trainer_cls(config)
     if config.mode == "train":
         trainer.train()

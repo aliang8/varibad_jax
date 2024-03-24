@@ -23,6 +23,7 @@ class GridNavi:
 
         # noop, up, right, down, left
         self.action_space = gym.spaces.Discrete(5)
+        self.task_dim = 2
 
         # possible starting states
         # always starting at the bottom right
