@@ -22,6 +22,7 @@ class PolicyOutput:
     value: jnp.ndarray
     entropy: jnp.ndarray
     dist: Any
+    logits: Optional[jnp.ndarray] = None
 
 
 class ActorCritic(hk.Module):
@@ -33,15 +34,16 @@ class ActorCritic(hk.Module):
         is_continuous: bool,
         action_dim: int,
         w_init=hk.initializers.VarianceScaling(scale=2.0),
-        b_init=hk.initializers.Constant(0.0),
+        b_init=hk.initializers.Constant(0.01),
     ):
         super().__init__(name="ActorCritic")
         init_kwargs = dict(w_init=w_init, b_init=b_init)
 
         self.config = config
-        self.state_embed = hk.Linear(
-            self.config.embedding_dim, name="state_embed", **init_kwargs
-        )
+        # self.state_embed = hk.Linear(
+        #     self.config.embedding_dim, name="state_embed", **init_kwargs
+        # )
+        self.state_embed = hk.Embed(vocab_size=25, embed_dim=self.config.embedding_dim)
         self.action_embed = hk.Linear(
             self.config.embedding_dim, name="action_embed", **init_kwargs
         )
@@ -76,7 +78,7 @@ class ActorCritic(hk.Module):
             self.logvar = hk.Linear(action_dim, name="logvar", **init_kwargs)
 
     def __call__(self, state: jnp.ndarray, latent: jnp.ndarray):
-        state_embed = self.state_embed(state)
+        state_embed = self.state_embed(state.astype(jnp.int32)).squeeze()
         state_embed = nn.gelu(state_embed)
 
         policy_input = state_embed
@@ -111,4 +113,5 @@ class ActorCritic(hk.Module):
             value=value,
             entropy=action_dist.entropy(),
             dist=action_dist,
+            logits=logits,
         )

@@ -201,21 +201,19 @@ class RolloutStorageVAE:
                                 # add; note: num trajectories are along dim=1,
                                 # trajectory length along dim=0, to match pynp RNN interface
                                 self.prev_state[:, self.insert_idx] = (
-                                    self.running_prev_state[:, i].to("cpu")
+                                    self.running_prev_state[:, i]
                                 )
                                 self.next_state[:, self.insert_idx] = (
-                                    self.running_next_state[:, i].to("cpu")
+                                    self.running_next_state[:, i]
                                 )
                                 self.actions[:, self.insert_idx] = self.running_actions[
                                     :, i
-                                ].to("cpu")
+                                ]
                                 self.rewards[:, self.insert_idx] = self.running_rewards[
                                     :, i
-                                ].to("cpu")
+                                ]
                                 if self.tasks is not None:
-                                    self.tasks[self.insert_idx] = self.running_tasks[
-                                        i
-                                    ].to("cpu")
+                                    self.tasks[self.insert_idx] = self.running_tasks[i]
                                 self.trajectory_lens[self.insert_idx] = (
                                     self.curr_timestep[i].copy()
                                 )

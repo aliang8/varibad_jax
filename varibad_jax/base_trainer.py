@@ -12,7 +12,7 @@ from ml_collections import FrozenConfigDict
 from pathlib import Path
 from varibad_jax.envs.utils import make_envs
 import gymnasium as gym
-from jax import config
+from jax import config as jax_config
 
 
 class BaseTrainer:
@@ -49,6 +49,7 @@ class BaseTrainer:
             self.config.env.env_id,
             seed=self.config.seed,
             num_envs=self.config.env.num_processes,
+            num_episodes_per_rollout=self.config.env.num_episodes_per_rollout,
         )
 
         self.state_dim = self.envs.observation_space.shape[0]
@@ -63,7 +64,7 @@ class BaseTrainer:
             logging.set_verbosity(logging.DEBUG)
 
         if not self.config.enable_jit:
-            config.update("jax_disable_jit", True)
+            jax_config.update("jax_disable_jit", True)
 
     def create_ts(self):
         raise NotImplementedError

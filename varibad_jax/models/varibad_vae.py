@@ -30,6 +30,7 @@ class VaribadVAE(hk.Module):
             embedding_dim=config.embedding_dim,
             latent_dim=config.latent_dim,
             lstm_hidden_size=config.lstm_hidden_size,
+            batch_first=False,
         )
 
         self.encoder = encoder_cls(**encoder_kwargs)

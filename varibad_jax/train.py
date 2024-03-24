@@ -78,7 +78,7 @@ class VAETrainer(BaseTrainer):
         logging.info(f"num vae params = {num_vae_params}")
 
         tx_vae = optax.chain(
-            optax.clip(self.config.vae.max_grad_norm),
+            # optax.clip(self.config.vae.max_grad_norm),
             optax.adam(self.config.vae.lr, eps=self.config.vae.eps),
         )
 
@@ -89,14 +89,16 @@ class VAETrainer(BaseTrainer):
             latent_dim=self.config.vae.latent_dim * 2,
             action_space=self.envs.action_space,
         )
+        # import ipdb
 
+        # ipdb.set_trace()
         num_policy_params = sum(
             p.size for p in jax.tree_util.tree_leaves(policy_params)
         )
         logging.info(f"num policy params = {num_policy_params}")
 
         tx_policy = optax.chain(
-            optax.clip(self.config.policy.max_grad_norm),
+            optax.clip_by_global_norm(self.config.policy.max_grad_norm),
             optax.adam(self.config.policy.lr, eps=self.config.policy.eps),
         )
 
@@ -162,6 +164,9 @@ class VAETrainer(BaseTrainer):
 
     def collect_rollouts(self):
         logging.debug("inside rollout")
+        # import ipdb
+
+        # ipdb.set_trace()
 
         # use all zeros as priors
         latent = np.zeros((self.num_processes, self.config.vae.latent_dim * 2))
@@ -184,6 +189,13 @@ class VAETrainer(BaseTrainer):
 
         ipdb.set_trace()
 
+        import ipdb
+
+        ipdb.set_trace()
+
+        # import ipdb
+
+        # ipdb.set_trace()
         for step in range(self.steps_per_rollout):
             # sample random action from policy
             policy_output = self.ts_policy.apply_fn(
@@ -257,6 +269,7 @@ class VAETrainer(BaseTrainer):
             # update state
             state = next_state
             latent = encode_outputs.latent
+            hidden_state = encode_outputs.hidden_state
             self.total_steps += self.num_processes
 
         # compute next value for bootstrapping
@@ -277,6 +290,9 @@ class VAETrainer(BaseTrainer):
             use_proper_time_limits=False,
         )
 
+        # import ipdb
+
+        # ipdb.set_trace()
         logging.debug("done collecting rollouts")
 
     def perform_update(self):
@@ -285,6 +301,10 @@ class VAETrainer(BaseTrainer):
 
         # compute ppo update
         update_start = time.time()
+
+        # import ipdb
+
+        # ipdb.set_trace()
         policy_metrics, self.ts_policy = update_policy(
             ts=self.ts_policy,
             replay_buffer=self.policy_storage,
@@ -317,6 +337,7 @@ class VAETrainer(BaseTrainer):
 
     def train(self):
         logging.info("Training starts")
+        start_time = time.time()
 
         for self.iter_idx in tqdm.tqdm(
             range(0, self.num_updates), smoothing=0.1, disable=self.config.disable_tqdm
@@ -329,6 +350,9 @@ class VAETrainer(BaseTrainer):
             # collect rollout
             rollout_start = time.time()
             self.collect_rollouts()
+            # import ipdb
+
+            # ipdb.set_trace()
             rollout_time = time.time() - rollout_start
 
             # Log episodic rewards for completed environments
@@ -365,12 +389,16 @@ class VAETrainer(BaseTrainer):
                         "state_min": self.policy_storage.prev_state.min(),
                         "rew_max": self.policy_storage.rewards_raw.max(),
                         "rew_min": self.policy_storage.rewards_raw.min(),
+                        "rew_avg": self.policy_storage.rewards_raw.mean(),
+                        "rew_sum": self.policy_storage.rewards_raw.sum(),
+                        "rew_goal": (self.policy_storage.rewards_raw == 1).sum(),
                     }
                     env_stats = gutl.prefix_dict_keys(env_stats, prefix="env/")
                     metrics = {
                         **train_metrics,
                         **env_stats,
                         "time/rollout_time": rollout_time,
+                        "time/fps": self.total_steps / (time.time() - start_time),
                     }
                     if self.wandb_run is not None:
                         self.wandb_run.log(metrics, step=self.iter_idx)

@@ -66,6 +66,7 @@ class GridNavi:
         curr_obs = state.obs
 
         # Define the possible actions: up, down, left, right
+        # 0 = right, 1 = left, 2 = down, 3 = up, 4 = noop
         actions = jnp.array([(0, 1), (0, -1), (-1, 0), (1, 0), (0, 0)])
 
         new_xy = curr_obs + actions[action[0]]

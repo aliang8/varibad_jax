@@ -30,7 +30,7 @@ class LSTMTrajectoryEncoder(hk.Module):
         lstm_hidden_size: int = 64,
         batch_first: bool = False,
         w_init=hk.initializers.VarianceScaling(scale=2.0),
-        b_init=hk.initializers.Constant(0.0),
+        b_init=hk.initializers.Constant(0.01),
     ):
         super().__init__(name="LSTMTrajectoryEncoder")
 
@@ -41,9 +41,10 @@ class LSTMTrajectoryEncoder(hk.Module):
         self.lstm_hidden_size = lstm_hidden_size
         self.batch_first = batch_first
 
-        self.state_embed = hk.Linear(
-            self.embedding_dim, name="state_embed", **init_kwargs
-        )
+        # self.state_embed = hk.Linear(
+        #     self.embedding_dim, name="state_embed", **init_kwargs
+        # )
+        self.state_embed = hk.Embed(vocab_size=25, embed_dim=self.embedding_dim)
         self.action_embed = hk.Linear(
             self.embedding_dim, name="action_embed", **init_kwargs
         )
@@ -75,7 +76,7 @@ class LSTMTrajectoryEncoder(hk.Module):
         Returns:
             encode_output: EncodeOutputs
         """
-        state_embeds = self.state_embed(states)
+        state_embeds = self.state_embed(states.astype(jnp.int32)).squeeze()
         state_embeds = nn.gelu(state_embeds)
         action_embeds = self.action_embed(actions)
         action_embeds = nn.gelu(action_embeds)
@@ -121,6 +122,8 @@ class LSTMTrajectoryEncoder(hk.Module):
         # predict distribution for latent variable for each timestep
         latent_mean = self.latent_mean(hidden_state)
         latent_logvar = self.latent_logvar(hidden_state)
+        # clamp logvar
+        latent_logvar = jnp.clip(latent_logvar, a_min=-10, a_max=10)
         latent = jnp.concatenate((latent_mean, latent_logvar), axis=-1)
 
         # if just a single timestep, remove the time dimension

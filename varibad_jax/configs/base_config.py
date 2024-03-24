@@ -42,7 +42,7 @@ def get_config(config_string: str = None):
     vae_config.max_grad_norm = 2.0
     vae_config.eps = 1e-8
 
-    vae_config.kl_to_fixed_prior = True
+    vae_config.kl_to_fixed_prior = False
     vae_config.embedding_dim = 8
     vae_config.subsample_elbos = 0
     vae_config.subsample_decode_timesteps = 0
@@ -76,11 +76,11 @@ def get_config(config_string: str = None):
     policy_config.lr = 7e-4
     policy_config.eps = 1e-8
     policy_config.value_loss_coeff = 0.5
-    policy_config.entropy_coeff = 0.1
+    policy_config.entropy_coeff = 0.01
     policy_config.gamma = 0.95
     policy_config.use_gae = True
     policy_config.tau = 0.95
-    policy_config.max_grad_norm = 2.0
+    policy_config.max_grad_norm = 0.5
     policy_config.embedding_dim = 32
     config.policy = policy_config
 
