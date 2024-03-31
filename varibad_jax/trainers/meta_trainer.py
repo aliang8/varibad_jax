@@ -117,7 +117,7 @@ class VAETrainer(BaseTrainer):
         encode_apply = partial(
             jax.jit(
                 encode_trajectory.apply,
-                static_argnames=("config"),
+                static_argnames=("config", "deterministic"),
             ),
             config=FrozenConfigDict(self.config.vae),
         )
@@ -270,11 +270,13 @@ class VAETrainer(BaseTrainer):
                     actions=actions,
                     rewards=rewards,
                     mask=masks,
+                    deterministic=True,
                 )
+
                 # take the last timestep for every item
-                encode_outputs.latent_mean = encode_outputs.latent_mean[step + 1]
-                encode_outputs.latent_logvar = encode_outputs.latent_logvar[step + 1]
-                encode_outputs.latent_sample = encode_outputs.latent_sample[step + 1]
+                encode_outputs.latent_mean = encode_outputs.latent_mean[step]
+                encode_outputs.latent_logvar = encode_outputs.latent_logvar[step]
+                encode_outputs.latent_sample = encode_outputs.latent_sample[step]
 
             # add transition to vae buffer
             self.vae_storage.insert(

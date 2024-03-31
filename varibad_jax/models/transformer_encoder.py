@@ -45,15 +45,19 @@ class TransformerLayer(hk.Module):
         self,
         x: jax.Array,
         mask: jax.Array,
+        deterministic: bool = False,
     ) -> jax.Array:
         h_norm = self.ln(x)
         h_attn = self.attn_block(h_norm, h_norm, h_norm, mask=mask)
-        h_attn = hk.dropout(hk.next_rng_key(), self.dropout_rate, h_attn)
+        # jax.debug.breakpoint()
+        if not deterministic:
+            h_attn = hk.dropout(hk.next_rng_key(), self.dropout_rate, h_attn)
         h = x + h_attn
 
         h_norm = self.ln(h)
         h_dense = self.dense_block(h_norm)
-        h_dense = hk.dropout(hk.next_rng_key(), self.dropout_rate, h_dense)
+        if not deterministic:
+            h_dense = hk.dropout(hk.next_rng_key(), self.dropout_rate, h_dense)
         h = h + h_dense
         return h
 
@@ -95,6 +99,7 @@ class TransformerEncoder(hk.Module):
         self,
         embeddings: jax.Array,  # [B, T, D]
         mask: jax.Array,  # [B, T]
+        deterministic: bool = False,
     ) -> jax.Array:  # [B, T, D]
         """Transforms input embedding sequences to output embedding sequences."""
         _, seq_len, D = embeddings.shape
@@ -107,7 +112,7 @@ class TransformerEncoder(hk.Module):
 
         h = embeddings
         for layer in self.layers:
-            h = layer(h, mask)
+            h = layer(h, mask, deterministic=deterministic)
 
         return self.ln(h)
 
@@ -147,6 +152,7 @@ class SARTransformerEncoder(hk.Module):
         actions: jax.Array,  # [T, B, D]
         rewards: jax.Array,  # [T, B, 1]
         mask: jax.Array,  # [T, B]
+        deterministic: bool = False,
         **kwargs
     ) -> jax.Array:
         # make batch first
@@ -161,7 +167,8 @@ class SARTransformerEncoder(hk.Module):
         state_embed = self.state_embed(states)
         action_embed = self.action_embed(actions)
         reward_embed = self.reward_embed(rewards)
-        timestep_embed = self.timestep_embed(jnp.arange(T))
+        timestep_embed = self.timestep_embed(jnp.arange(T)[None].repeat(B, axis=0))
+        # jax.debug.breakpoint()
 
         state_embed = state_embed + timestep_embed
         action_embed = action_embed + timestep_embed
@@ -171,7 +178,7 @@ class SARTransformerEncoder(hk.Module):
         embeddings = nn.gelu(embeddings)
         embeddings = self.embed(embeddings)
         embeddings = nn.gelu(embeddings)
-        embeddings = self.transformer(embeddings, mask)
+        embeddings = self.transformer(embeddings, mask, deterministic=deterministic)
 
         # this is [B, T, D], need to reshape
 

@@ -105,6 +105,7 @@ class VaribadVAE(hk.Module):
         rewards: jnp.ndarray,
         hidden_state: jnp.ndarray = None,
         mask: Optional[jnp.ndarray] = None,
+        deterministic: bool = False,
         **kwargs
     ):
         hidden_state = self.encoder(
@@ -113,6 +114,7 @@ class VaribadVAE(hk.Module):
             rewards=rewards,
             hidden_state=hidden_state,
             mask=mask,
+            deterministic=deterministic,
         )
 
         # predict distribution for latent variable for each timestep
