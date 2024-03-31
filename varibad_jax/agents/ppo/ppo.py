@@ -55,6 +55,10 @@ def loss_policy(
     log_ratio = log_prob - log_pi_old
     ratio = jnp.exp(log_ratio)
 
+    # import ipdb
+
+    # ipdb.set_trace()
+
     gae_norm = (gae - gae.mean()) / (gae.std() + 1e-8)
     loss_actor1 = ratio * gae_norm
     loss_actor2 = (

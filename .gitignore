@@ -11,3 +11,5 @@ varibad_jax/results
 varibad_jax/wandb
 varibad_jax/start.sh
 build/*
+varibad_jax/ray_results/*
+varibad_jax/varibad_jax/ray_results/*

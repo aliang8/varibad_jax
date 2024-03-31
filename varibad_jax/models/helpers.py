@@ -43,8 +43,11 @@ def init_params(
     dummy_actions = np.zeros((t, bs, action_dim))
     dummy_rewards = np.zeros((t, bs, 1))
     dummy_hs = np.zeros((bs, config.lstm_hidden_size))
-
     dummy_latents = np.zeros((t, bs, config.latent_dim))
+    if config.encoder == "transformer":
+        dummy_mask = np.ones((t, bs))
+    else:
+        dummy_mask = None
 
     encoder_key, decoder_key = jax.random.split(rng_key)
 
@@ -56,6 +59,7 @@ def init_params(
             actions=dummy_actions,
             rewards=dummy_rewards,
             hidden_state=dummy_hs,
+            mask=dummy_mask,
         )
     )
     decoder_params = decode.init(

@@ -56,6 +56,17 @@ def get_config(config_string: str = None):
     vae_config.input_action = False
     vae_config.input_prev_state = False
     vae_config.rew_decoder_layers = [32, 32]
+
+    # Transformer encoder config
+    vae_config.encoder = "lstm"
+    vae_config.hidden_dim = 64
+    vae_config.num_heads = 4
+    vae_config.num_layers = 2
+    vae_config.attn_size = 32
+    vae_config.widening_factor = 4
+    vae_config.dropout_rate = 0.1
+    vae_config.max_timesteps = 1000
+
     config.vae = vae_config
 
     # =============================================================
@@ -81,7 +92,7 @@ def get_config(config_string: str = None):
     policy_config.use_gae = True
     policy_config.tau = 0.95
     policy_config.max_grad_norm = 0.5
-    policy_config.embedding_dim = 32
+    policy_config.embedding_dim = 16
     config.policy = policy_config
 
     # =============================================================
@@ -108,7 +119,7 @@ def get_config(config_string: str = None):
     config.warmup_steps = 10000
     # where to save experiment artifacts (videos, checkpoints, etc)
     config.root_dir = "/scr/aliang80/varibad_jax/varibad_jax/"
-    config.exp_name = ""
+    config.exp_name = "vb_jax"
     config.ray_logdir = "ray_results"
 
     # for rollout visualization
@@ -124,6 +135,6 @@ def get_config(config_string: str = None):
     config.max_ckpt_to_keep = None
 
     # resume training / evaluation
-    config.restore_from_ckpt = False
+    config.load_from_ckpt = False
     config.checkpoint_step = config_dict.placeholder(int)
     return config

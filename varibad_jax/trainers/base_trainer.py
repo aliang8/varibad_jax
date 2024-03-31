@@ -36,7 +36,7 @@ class BaseTrainer:
             self.wandb_run = None
 
         # setup log dirs
-        self.exp_dir = Path(self.config.root_dir) / "log" / self.config.exp_name
+        self.exp_dir = Path(self.config.root_dir) / self.config.exp_name
         print("experiment dir: ", self.exp_dir)
 
         self.ckpt_dir = self.exp_dir / "model_ckpts"

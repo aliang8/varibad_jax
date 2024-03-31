@@ -10,6 +10,7 @@ import pickle
 import time
 import jax
 import flax
+import collections
 from ml_collections import ConfigDict, FieldReference, FrozenConfigDict, config_flags
 from typing import Any
 import pickle
@@ -27,20 +28,28 @@ _CONFIG = config_flags.DEFINE_config_file("config")
 # shorthands for config parameters
 psh = {
     "batch_size": "bs",
-    "env_id": "eid",
-    "hidden_size": "hs",
-    "max_episode_steps": "mes",
-    "num_epochs": "ne",
-    "train_perc": "tp",
-    "trainer": "t",
-    "num_trajs": "nt",
-    "policy_cls": "pc",
-    "num_policies": "np",
-    "num_eval_episodes": "nee",
+    "seed": "s",
+    "env": {
+        "env_id": "eid",
+        "num_frames": "nf",
+        "num_processes": "np",
+    },
+    "vae": {
+        "lr": "vlr",
+        "kl_weight": "klw",
+        "latent_dim": "ld",
+        "kl_to_fixed_prior": "klfp",
+        "encoder": "enc",
+    },
+    "policy": {"pass_latent_to_policy": "pltp", "pass_task_to_policy": "pttp"},
 }
 
 # run with ray tune
-param_space = {}
+param_space = {
+    "seed": tune.grid_search([0]),
+    "env": {"env_id": tune.grid_search(["GridNaviJAX-v0"])},
+    "vae": {"encoder": tune.grid_search(["transformer"])},
+}
 
 
 def train_model_fn(config):
@@ -69,12 +78,35 @@ def train_model_fn(config):
         trainer.eval()
 
 
+def update(source, overrides):
+    """
+    Update a nested dictionary or similar mapping.
+    Modify ``source`` in place.
+    """
+    for key, value in overrides.items():
+        if type(source[key]) != type(overrides[key]):
+            source[key] = overrides[key]
+        elif isinstance(value, collections.abc.Mapping) and value:
+            returned = update(source.get(key, {}), value)
+            source[key] = returned
+        else:
+            source[key] = overrides[key]
+    return source
+
+
 def trial_str_creator(trial):
     trial_str = ""
-    for k, v in trial.config.items():
-        if k in psh and k in param_space:
-            trial_str += f"{psh[k]}-{v}_"
-    # trial_str += str(trial.trial_id)
+
+    for k, override in param_space.items():
+        if k in trial.config:
+            if isinstance(override, dict) and "grid_search" not in override:
+                for k2 in override.keys():
+                    if k2 in trial.config[k]:
+                        trial_str += f"{psh[k][k2]}-{trial.config[k][k2]}_"
+            else:
+                trial_str += f"{psh[k]}-{trial.config[k]}_"
+
+    trial_str = trial_str[:-1]
     print("trial_str: ", trial_str)
     return trial_str
 
@@ -87,7 +119,9 @@ def main(_):
 
     config = _CONFIG.value.to_dict()
     if config["smoke_test"] is False:
-        config.update(param_space)
+        config["use_wb"] = True  # log to wandb
+        # update dict of dict
+        config = update(config, param_space)
         train_model = tune.with_resources(train_model_fn, {"cpu": 5, "gpu": 0.2})
 
         ray_path = Path(config["root_dir"]) / config["ray_logdir"]

@@ -172,7 +172,7 @@ class OnlineStorage:
             self.latent_samples.append(latent_sample.copy())
             self.latent_mean.append(latent_mean.copy())
             self.latent_logvar.append(latent_logvar.copy())
-            self.hidden_states[self.step + 1] = hidden_states
+            # self.hidden_states[self.step + 1] = hidden_states
         self.actions[self.step] = actions.copy()
         self.rewards_raw[self.step] = rewards_raw
         self.rewards_normalised[self.step] = rewards_normalised
@@ -198,7 +198,7 @@ class OnlineStorage:
             self.latent_samples = []
             self.latent_mean = []
             self.latent_logvar = []
-            self.hidden_states[0] = self.hidden_states[-1]
+            # self.hidden_states[0] = self.hidden_states[-1]
         self.done[0] = self.done[-1]
         self.masks[0] = self.masks[-1]
         self.bad_masks[0] = self.bad_masks[-1]

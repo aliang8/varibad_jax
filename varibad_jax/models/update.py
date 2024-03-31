@@ -37,10 +37,6 @@ def loss_vae(
 
     encode_key, prior_key, decode_key = jax.random.split(rng_key, 3)
 
-    # import ipdb
-
-    # ipdb.set_trace()
-
     # encode the first state to get prior
     prior_output = get_prior_fn(params, prior_key, batch_size=B)
     hidden_state = prior_output.hidden_state
@@ -56,6 +52,7 @@ def loss_vae(
         actions=batch.actions,
         rewards=batch.rewards,
         hidden_state=hidden_state,
+        mask=jnp.zeros((T, B)) if config.vae.encoder == "transformer" else None,
     )
 
     latent_mean = encode_outputs.latent_mean
@@ -98,7 +95,9 @@ def loss_vae(
         params,
         decode_key,
         latent_samples=dec_embedding,
+        prev_states=dec_prev_obs,
         next_states=dec_next_obs,
+        actions=dec_actions,
     )
 
     # reward reconstruction loss
@@ -108,24 +107,28 @@ def loss_vae(
     rew_recon_loss = rew_recon_loss.sum(axis=0).sum(axis=0).mean()
 
     # kl loss
-    all_means = jnp.concatenate(
-        (
-            jnp.zeros((1, *latent_mean.shape[1:])),
-            latent_mean,
+    if config.vae.kl_to_fixed_prior:
+        posterior = tfd.Normal(loc=latent_mean, scale=jnp.exp(latent_logvar))
+        prior = tfd.Normal(loc=0, scale=1)
+    else:
+        all_means = jnp.concatenate(
+            (
+                jnp.zeros((1, *latent_mean.shape[1:])),
+                latent_mean,
+            )
         )
-    )
-    all_logvars = jnp.concatenate(
-        (
-            jnp.zeros((1, *latent_logvar.shape[1:])),
-            latent_logvar,
+        all_logvars = jnp.concatenate(
+            (
+                jnp.zeros((1, *latent_logvar.shape[1:])),
+                latent_logvar,
+            )
         )
-    )
-    mu = all_means[1:]
-    m = all_means[:-1]
-    logE = all_logvars[1:]
-    logS = all_logvars[:-1]
-    posterior = tfd.Normal(loc=mu, scale=jnp.exp(logE))
-    prior = tfd.Normal(loc=m, scale=jnp.exp(logS))
+        mu = all_means[1:]
+        m = all_means[:-1]
+        logE = all_logvars[1:]
+        logS = all_logvars[:-1]
+        posterior = tfd.Normal(loc=mu, scale=jnp.exp(logE))
+        prior = tfd.Normal(loc=m, scale=jnp.exp(logS))
 
     kld = tfd.kl_divergence(posterior, prior).sum(axis=-1)
     kld = kld.sum(axis=0).sum(axis=0).mean()

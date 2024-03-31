@@ -66,12 +66,31 @@ class VAETrainer(BaseTrainer):
         self.policy_storage, self.vae_storage = self.setup_replay_buffers()
 
     def create_ts(self):
-        vae_params = init_params_vae(
-            config=self.config.vae,
-            rng_key=next(self.rng_seq),
-            state_dim=self.state_dim,
-            action_dim=self.vae_action_dim,
-        )
+        if self.config.load_from_ckpt:
+            import ipdb
+
+            ipdb.set_trace()
+            model_ckpt_dir = Path(self.config.root_dir) / "model_ckpts"
+            ckpt_file = model_ckpt_dir / f"ckpt_{self.config.checkpoint_step}.pkl"
+
+            with open(ckpt_file, "rb") as f:
+                ckpt = pickle.load(f)
+                vae_params = ckpt["ts_vae"]
+                policy_params = ckpt["ts_policy"]
+        else:
+            vae_params = init_params_vae(
+                config=self.config.vae,
+                rng_key=next(self.rng_seq),
+                state_dim=self.state_dim,
+                action_dim=self.vae_action_dim,
+            )
+            policy_params = init_params_policy(
+                config=self.config.policy,
+                rng_key=next(self.rng_seq),
+                state_dim=self.state_dim,
+                latent_dim=self.config.vae.latent_dim * 2,
+                action_space=self.envs.action_space,
+            )
 
         # count number of vae params
         num_vae_params = sum(p.size for p in jax.tree_util.tree_leaves(vae_params))
@@ -82,13 +101,6 @@ class VAETrainer(BaseTrainer):
             optax.adam(self.config.vae.lr, eps=self.config.vae.eps),
         )
 
-        policy_params = init_params_policy(
-            config=self.config.policy,
-            rng_key=next(self.rng_seq),
-            state_dim=self.state_dim,
-            latent_dim=self.config.vae.latent_dim * 2,
-            action_space=self.envs.action_space,
-        )
         # import ipdb
 
         # ipdb.set_trace()
@@ -98,7 +110,7 @@ class VAETrainer(BaseTrainer):
         logging.info(f"num policy params = {num_policy_params}")
 
         tx_policy = optax.chain(
-            optax.clip_by_global_norm(self.config.policy.max_grad_norm),
+            # optax.clip_by_global_norm(self.config.policy.max_grad_norm),
             optax.adam(self.config.policy.lr, eps=self.config.policy.eps),
         )
 
@@ -172,16 +184,6 @@ class VAETrainer(BaseTrainer):
 
     def collect_rollouts(self):
         logging.debug("inside rollout")
-        # import ipdb
-
-        # ipdb.set_trace()
-
-        # use all zeros as priors
-        # latent = np.zeros((self.num_processes, self.config.vae.latent_dim * 2))
-        # latent_sample = np.zeros((self.num_processes, self.config.vae.latent_dim))
-        # latent_mean = np.zeros((self.num_processes, self.config.vae.latent_dim))
-        # latent_logvar = np.zeros((self.num_processes, self.config.vae.latent_dim))
-        # hidden_state = np.zeros((self.num_processes, self.config.vae.lstm_hidden_size))
 
         state = self.envs.reset()
         if len(state.shape) == 1:  # add extra dimension
@@ -201,10 +203,21 @@ class VAETrainer(BaseTrainer):
 
         # ipdb.set_trace()
         self.policy_storage.prev_state[0] = state
-        self.policy_storage.hidden_states[0] = hidden_state.copy()
+        # self.policy_storage.hidden_states[0] = hidden_state.copy()
         self.policy_storage.latent_samples.append(latent_sample.copy())
         self.policy_storage.latent_mean.append(latent_mean.copy())
         self.policy_storage.latent_logvar.append(latent_logvar.copy())
+
+        # if using a transformer, we need to keep track of the full history
+        if self.config.vae.encoder == "transformer":
+            states = np.zeros(
+                (self.steps_per_rollout, self.num_processes, self.state_dim)
+            )
+            actions = np.zeros(
+                (self.steps_per_rollout, self.num_processes, self.vae_action_dim)
+            )
+            rewards = np.zeros((self.steps_per_rollout, self.num_processes, 1))
+            masks = np.zeros((self.steps_per_rollout, self.num_processes))
 
         for step in range(self.steps_per_rollout):
             # sample random action from policy
@@ -234,14 +247,34 @@ class VAETrainer(BaseTrainer):
 
             # after seeing the next observation and getting more
             # information, we can update the belief over the task variable
-            encode_outputs = self.ts_vae.apply_fn(
-                self.ts_vae.params,
-                next(self.rng_seq),
-                states=next_state,
-                actions=action,
-                rewards=reward,
-                hidden_state=hidden_state,
-            )
+            if self.config.vae.encoder == "lstm":
+                encode_outputs = self.ts_vae.apply_fn(
+                    self.ts_vae.params,
+                    next(self.rng_seq),
+                    states=next_state,
+                    actions=action,
+                    rewards=reward,
+                    hidden_state=hidden_state,
+                )
+            elif self.config.vae.encoder == "transformer":
+                states[step] = next_state
+                actions[step] = action
+                rewards[step] = reward
+                masks[step] = 1.0 - done.flatten()
+
+                # we want to embed the full sequence cause jax
+                encode_outputs = self.ts_vae.apply_fn(
+                    self.ts_vae.params,
+                    next(self.rng_seq),
+                    states=states,
+                    actions=actions,
+                    rewards=rewards,
+                    mask=masks,
+                )
+                # take the last timestep for every item
+                encode_outputs.latent_mean = encode_outputs.latent_mean[step + 1]
+                encode_outputs.latent_logvar = encode_outputs.latent_logvar[step + 1]
+                encode_outputs.latent_sample = encode_outputs.latent_sample[step + 1]
 
             # add transition to vae buffer
             self.vae_storage.insert(
@@ -270,10 +303,10 @@ class VAETrainer(BaseTrainer):
                 bad_masks=masks_done,  # TODO: fix this?
                 value_preds=value,
                 done=done,
-                hidden_states=hidden_state,
+                # hidden_states=encode_outputs.hidden_state,
                 latent_mean=encode_outputs.latent_mean,
                 latent_logvar=encode_outputs.latent_logvar,
-                latent_sample=encode_outputs.latent_mean,
+                latent_sample=encode_outputs.latent_sample,
             )
 
             # update state
@@ -407,9 +440,19 @@ class VAETrainer(BaseTrainer):
                         "rew_goal": (self.policy_storage.rewards_raw == 1).sum(),
                     }
                     env_stats = gutl.prefix_dict_keys(env_stats, prefix="env/")
+                    encoder_stats = {
+                        "latent_mean": np.array(self.policy_storage.latent_mean).mean(),
+                        "latent_logvar": np.array(
+                            self.policy_storage.latent_logvar
+                        ).mean(),
+                    }
+                    encoder_stats = gutl.prefix_dict_keys(
+                        encoder_stats, prefix="encoder/"
+                    )
                     metrics = {
                         **train_metrics,
                         **env_stats,
+                        **encoder_stats,
                         "time/rollout_time": rollout_time,
                         "time/fps": self.total_steps / (time.time() - start_time),
                     }
@@ -469,3 +512,6 @@ class VAETrainer(BaseTrainer):
         self.envs.close()
         logging.info("Finished training, closing everything")
         return
+
+    def eval(self):
+        pass
