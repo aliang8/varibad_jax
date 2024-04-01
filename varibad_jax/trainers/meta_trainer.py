@@ -81,13 +81,13 @@ class VAETrainer(BaseTrainer):
             vae_params = init_params_vae(
                 config=self.config.vae,
                 rng_key=next(self.rng_seq),
-                obs_shape=self.obs_shape,
+                observation_space=self.envs.observation_space,
                 action_dim=self.vae_action_dim,
             )
             policy_params = init_params_policy(
                 config=self.config.policy,
                 rng_key=next(self.rng_seq),
-                obs_shape=self.obs_shape,
+                observation_space=self.envs.observation_space,
                 latent_dim=self.config.vae.latent_dim * 2,
                 action_space=self.envs.action_space,
             )
@@ -190,6 +190,7 @@ class VAETrainer(BaseTrainer):
         logging.debug("inside rollout")
 
         state = self.envs.reset()
+        state = state.astype(np.float32)
         if len(state.shape) == 1:  # add extra dimension
             state = state[..., np.newaxis]
 
@@ -215,7 +216,7 @@ class VAETrainer(BaseTrainer):
         # if using a transformer, we need to keep track of the full history
         if self.config.vae.encoder == "transformer":
             states = np.zeros(
-                (self.steps_per_rollout, self.num_processes, self.state_dim)
+                (self.steps_per_rollout, self.num_processes, *self.obs_shape)
             )
             actions = np.zeros(
                 (self.steps_per_rollout, self.num_processes, self.vae_action_dim)
@@ -234,15 +235,16 @@ class VAETrainer(BaseTrainer):
 
             # take a step in the environment
             action = policy_output.action
-            if len(action.shape) == 1:
-                action = action[..., np.newaxis]
-
             next_state, rew_raw, done, infos = self.envs.step(action)
+            next_state = next_state.astype(np.float32)
             rew_norm = rew_raw
 
             # add extra dimension
             if len(next_state.shape) == 1:
                 next_state = next_state[np.newaxis]
+
+            if len(action.shape) == 1:
+                action = action[..., np.newaxis]
 
             done = done[:, np.newaxis]
             reward = rew_raw[:, np.newaxis]

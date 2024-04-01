@@ -10,6 +10,7 @@ import jax
 import jax.numpy as jnp
 from tensorflow_probability.substrates import jax as tfp
 from flax.linen.initializers import glorot_normal, orthogonal, zeros_init
+from varibad_jax.models.common import ImageEncoder
 
 tfd = tfp.distributions
 
@@ -37,36 +38,7 @@ class LSTMTrajectoryEncoder(hk.Module):
         self.batch_first = batch_first
 
         if self.image_obs:
-            self.state_embed = hk.Sequential(
-                [
-                    hk.Conv2D(
-                        16,
-                        (2, 2),
-                        padding="VALID",
-                        w_init=w_init,
-                    ),
-                    nn.gelu,
-                    hk.Conv2D(
-                        32,
-                        (2, 2),
-                        padding="VALID",
-                        w_init=w_init,
-                    ),
-                    nn.gelu,
-                    hk.Conv2D(
-                        64,
-                        (2, 2),
-                        padding="VALID",
-                        w_init=w_init,
-                    ),
-                    nn.gelu,
-                    hk.Flatten(preserve_dims=1),
-                    hk.Linear(
-                        self.embedding_dim,
-                        w_init=w_init,
-                    ),
-                ]
-            )
+            self.state_embed = ImageEncoder(self.embedding_dim, **init_kwargs)
         else:
             self.state_embed = hk.Linear(
                 self.embedding_dim, name="state_embed", **init_kwargs
@@ -98,16 +70,7 @@ class LSTMTrajectoryEncoder(hk.Module):
 
         Returns:
         """
-        T, B, *_ = states.shape
-        if self.image_obs:
-            # flatten the time and batch dimensions and run through CNN
-            states = jnp.reshape(states, (-1, *states.shape[2:]))
-            state_embeds = self.state_embed(states)
-            # reshape back
-            state_embeds = jnp.reshape(state_embeds, (T, B, -1))
-        else:
-            state_embeds = self.state_embed(states)
-
+        state_embeds = self.state_embed(states)
         state_embeds = nn.gelu(state_embeds)
         action_embeds = self.action_embed(actions)
         action_embeds = nn.gelu(action_embeds)

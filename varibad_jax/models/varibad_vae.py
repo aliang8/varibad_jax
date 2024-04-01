@@ -73,6 +73,7 @@ class VaribadVAE(hk.Module):
         )
 
         self.reward_decoder = Decoder(
+            image_obs=config.image_obs,
             input_action=config.input_action,
             input_prev_state=config.input_prev_state,
             embedding_dim=config.embedding_dim,

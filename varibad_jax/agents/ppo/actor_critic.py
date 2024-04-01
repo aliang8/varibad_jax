@@ -10,6 +10,7 @@ from ml_collections.config_dict import ConfigDict
 import numpy as np
 from tensorflow_probability.substrates import jax as tfp
 import gymnasium as gym
+from varibad_jax.models.common import ImageEncoder
 
 tfd = tfp.distributions
 tfb = tfp.bijectors
@@ -41,36 +42,7 @@ class ActorCritic(hk.Module):
         self.config = config
         self.image_obs = config.image_obs
         if self.config.image_obs:
-            self.state_embed = hk.Sequential(
-                [
-                    hk.Conv2D(
-                        16,
-                        (2, 2),
-                        padding="VALID",
-                        w_init=w_init,
-                    ),
-                    nn.gelu,
-                    hk.Conv2D(
-                        32,
-                        (2, 2),
-                        padding="VALID",
-                        w_init=w_init,
-                    ),
-                    nn.gelu,
-                    hk.Conv2D(
-                        64,
-                        (2, 2),
-                        padding="VALID",
-                        w_init=w_init,
-                    ),
-                    nn.gelu,
-                    hk.Flatten(preserve_dims=1),
-                    hk.Linear(
-                        self.embedding_dim,
-                        w_init=w_init,
-                    ),
-                ]
-            )
+            self.state_embed = ImageEncoder(config.embedding_dim, **init_kwargs)
         else:
             self.state_embed = hk.Linear(
                 self.config.embedding_dim, name="state_embed", **init_kwargs
@@ -117,14 +89,7 @@ class ActorCritic(hk.Module):
     def __call__(
         self, state: jnp.ndarray, latent: jnp.ndarray = None, task: jnp.ndarray = None
     ):
-        B, _ = state.shape
-        if self.image_obs:
-            state_embeds = self.state_embed(state)
-            # reshape back
-            state_embeds = jnp.reshape(state_embeds, (B, -1))
-        else:
-            state_embeds = self.state_embed(state)
-
+        state_embed = self.state_embed(state)
         state_embed = nn.gelu(state_embed)
 
         policy_input = state_embed

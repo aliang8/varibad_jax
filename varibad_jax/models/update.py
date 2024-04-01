@@ -32,8 +32,8 @@ def loss_vae(
     get_prior_fn: Callable,
 ):
     logging.debug("inside loss_vae")
-    T, B, state_dim = batch.next_obs.shape
-    logging.debug(f"T: {T}, B: {B}, state_dim: {state_dim}")
+    T, B, *_ = batch.next_obs.shape
+    logging.debug(f"T: {T}, B: {B}")
 
     encode_key, prior_key, decode_key = jax.random.split(rng_key, 3)
 
@@ -77,7 +77,8 @@ def loss_vae(
     rewards = batch.rewards
 
     def repeat_elbos(x):
-        return einops.repeat(x, "t b d -> elbo t b d", elbo=num_elbos)
+        # add an extra dim and repeat num elbos time
+        return einops.repeat(x, "t b ... -> elbo t b ...", elbo=num_elbos)
 
     dec_prev_obs = repeat_elbos(prev_obs)
     dec_next_obs = repeat_elbos(next_obs)
@@ -198,7 +199,7 @@ def update_jit(
     )
 
     # compute norm of grads for each set of parameters
-    _, stats = gutl.compute_all_grad_norm(grad_norm_type="2", grads=grads)
-    metrics.update(stats)
+    # _, stats = gutl.compute_all_grad_norm(grad_norm_type="2", grads=grads)
+    # metrics.update(stats)
     ts = ts.apply_gradients(grads=grads)
     return ts, (vae_loss, metrics)

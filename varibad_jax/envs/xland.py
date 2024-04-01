@@ -127,7 +127,7 @@ class BAMDPWrapper(Wrapper):
 
         # calculate horizon length H^+
         self.num_episodes = num_episodes_per_rollout
-        self.max_episode_steps = self.env.time_limit(env_params)
+        self.max_episode_steps = 15  # self.env.time_limit(env_params)
         self.episode_length = self.max_episode_steps
         self.horizon = self.episode_length * self.num_episodes
 
@@ -188,6 +188,11 @@ class BAMDPWrapper(Wrapper):
         done_bamdp = jnp.where(info["step_count_bamdp"] == self.horizon, one, zero)
         info["done_bamdp"] = done_bamdp
         info["done"] = done_bamdp
+
+        # finish the episode
+        timestep = timestep.replace(
+            step_type=jnp.where(done_bamdp, 2, timestep.step_type)
+        )
 
         info["truncation"] = jnp.where(
             info["step_count_bamdp"] >= self.horizon, 1 - done_bamdp, zero

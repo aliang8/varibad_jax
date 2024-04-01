@@ -13,6 +13,7 @@ import jax.numpy as jnp
 from jax.random import PRNGKey
 from ml_collections.config_dict import ConfigDict
 import numpy as np
+import einops
 from tensorflow_probability.substrates import jax as tfp
 import varibad_jax.utils.general_utils as gutl
 from varibad_jax.agents.ppo.helpers import policy_fn
@@ -123,8 +124,8 @@ def update_jit(
             latent=latent[idx] if latent is not None else latent,
             task=task[idx] if task is not None else task,
         )
-        grad_norms, stats = gutl.compute_all_grad_norm(grad_norm_type="2", grads=grads)
-        loss_dict.update(stats)
+        # grad_norms, stats = gutl.compute_all_grad_norm(grad_norm_type="2", grads=grads)
+        # loss_dict.update(stats)
         ts = ts.apply_gradients(grads=grads)
 
     return ts, (_, loss_dict)
@@ -146,7 +147,7 @@ def update_policy(
     metrics = defaultdict(int)
 
     # flatten T and B dimension
-    flatten = lambda x: x.reshape(-1, x.shape[-1])
+    flatten = lambda x: einops.rearrange(x, "T B ... -> (T B) ...")
     state = flatten(replay_buffer.prev_state[:-1])
     action = flatten(replay_buffer.actions)
     value = flatten(replay_buffer.value_preds[:-1])

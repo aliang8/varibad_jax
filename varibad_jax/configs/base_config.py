@@ -14,7 +14,7 @@ def get_config(config_string: str = None):
     config = config_dict.ConfigDict()
 
     env_config = config_dict.ConfigDict()
-    env_config.env = "gridworld"  # xland'
+    env_config.env_name = "gridworld"  # xland'
 
     # additional config for xland
     env_config.env_kwargs = dict(

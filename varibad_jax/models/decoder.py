@@ -5,6 +5,7 @@ import flax.linen as nn
 import haiku as hk
 import jax
 import jax.numpy as jnp
+from varibad_jax.models.common import ImageEncoder
 
 
 @dataclasses.dataclass
@@ -13,6 +14,7 @@ class Decoder(hk.Module):
 
     def __init__(
         self,
+        image_obs: bool = False,
         input_action: bool = False,
         input_prev_state: bool = False,
         embedding_dim: int = 8,
@@ -34,6 +36,7 @@ class Decoder(hk.Module):
 
         init_kwargs = dict(w_init=w_init, b_init=b_init)
 
+        self.image_obs = image_obs
         self.input_action = input_action
         self.input_prev_state = input_prev_state
         self.embedding_dim = embedding_dim
@@ -41,10 +44,13 @@ class Decoder(hk.Module):
         self.latent_embed = hk.Linear(
             self.embedding_dim, name="latent_embed", **init_kwargs
         )
-        self.state_embed = hk.Linear(
-            self.embedding_dim, name="state_embed", **init_kwargs
-        )
-        # self.state_embed = hk.Embed(vocab_size=25, embed_dim=self.embedding_dim)
+
+        if self.image_obs:
+            self.state_embed = ImageEncoder(self.embedding_dim, **init_kwargs)
+        else:
+            self.state_embed = hk.Linear(
+                self.embedding_dim, name="state_embed", **init_kwargs
+            )
 
         if self.input_action:
             self.action_embed = hk.Linear(
