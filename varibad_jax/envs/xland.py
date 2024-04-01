@@ -190,14 +190,11 @@ class BAMDPWrapper(Wrapper):
         info["done"] = done_bamdp
 
         # finish the episode
-        timestep = timestep.replace(
-            step_type=jnp.where(done_bamdp, 2, timestep.step_type)
-        )
+        timestep = timestep.replace(step_type=jnp.where(done_bamdp, 2, 0))
 
         info["truncation"] = jnp.where(
             info["step_count_bamdp"] >= self.horizon, 1 - done_bamdp, zero
         )
-
         xtimestep = XLandTimestep(timestep=timestep, info=info)
         return xtimestep
 

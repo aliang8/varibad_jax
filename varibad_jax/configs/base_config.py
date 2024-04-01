@@ -14,37 +14,52 @@ def get_config(config_string: str = None):
     config = config_dict.ConfigDict()
 
     env_config = config_dict.ConfigDict()
-    env_config.env_name = "gridworld"  # xland'
+    env_config.num_frames = 20_000_000
 
-    # additional config for xland
-    env_config.env_kwargs = dict(
-        view_size=5,
-        height=5,
-        width=5,
-    )
+    # define env specific configs
+    envs = {
+        "gridworld": config_dict.ConfigDict(
+            dict(
+                env_name="gridworld",
+                env_id="GridNaviJAX-v0",
+                num_episodes_per_rollout=4,
+                steps_per_rollout=15,
+                num_processes=16,
+                normalize_rews=False,
+                image_obs=False,
+            )
+        ),
+        "xland": config_dict.ConfigDict(
+            dict(
+                env_name="xland",
+                env_kwargs=dict(
+                    view_size=5,
+                    height=5,
+                    width=5,
+                ),
+                benchmark_path="/scr/aliang80/varibad_jax/varibad_jax/envs/xland_benchmarks/test_ruleset.pkl",
+                ruleset_id=0,
+                env_id="XLand-MiniGrid-R1-9x9",
+                num_episodes_per_rollout=4,
+                steps_per_rollout=15,
+                num_processes=16,
+                normalize_rews=False,
+                image_obs=True,
+            )
+        ),
+    }
 
-    env_config.benchmark_path = (
-        "/scr/aliang80/varibad_jax/varibad_jax/envs/xland_benchmarks/test_ruleset.pkl"
-    )
-    env_config.ruleset_id = 0
-    env_config.env_id = "XLand-MiniGrid-R1-9x9"
+    for k, v in envs.items():
+        if k in config_string:
+            env_config.update(v)
 
-    # env_config.env_id = "GridNaviJAX-v0"
-    env_config.num_frames = 20_000_000  # 20M
-
-    env_config.num_episodes_per_rollout = 4
-    env_config.steps_per_rollout = 15
-
-    # number of parallel training environments
-    env_config.num_processes = 16
-    env_config.normalize_rews = False
     config.env = env_config
 
     # =============================================================
     # VariBAD VAE configuration
     # =============================================================
     vae_config = config_dict.ConfigDict()
-    vae_config.image_obs = False
+    vae_config.image_obs = env_config.get_ref("image_obs")
 
     vae_config.lr = 1e-3
     vae_config.buffer_size = 100_000
@@ -60,29 +75,55 @@ def get_config(config_string: str = None):
     vae_config.eps = 1e-8
 
     vae_config.kl_to_fixed_prior = False
-    vae_config.embedding_dim = 8
     vae_config.subsample_elbos = 0
     vae_config.subsample_decode_timesteps = 0
 
     vae_config.latent_dim = 5
-    vae_config.lstm_hidden_size = 64
 
     # Reward prediction
     vae_config.decode_rewards = True
     vae_config.rew_recon_weight = 1.0
-    vae_config.input_action = False
-    vae_config.input_prev_state = False
-    vae_config.rew_decoder_layers = [32, 32]
 
-    # Transformer encoder config
-    vae_config.encoder = "lstm"
-    vae_config.hidden_dim = 64
-    vae_config.num_heads = 8
-    vae_config.num_layers = 3
-    vae_config.attn_size = 32
-    vae_config.widening_factor = 4
-    vae_config.dropout_rate = 0.1
-    vae_config.max_timesteps = 1000
+    # encoder specific configs
+    encoder = {
+        "lstm": config_dict.ConfigDict(
+            dict(name="lstm", lstm_hidden_size=64, batch_first=False)
+        ),
+        "transformer": config_dict.ConfigDict(
+            dict(
+                name="transformer",
+                hidden_dim=64,
+                num_heads=8,
+                num_layers=3,
+                attn_size=32,
+                widening_factor=4,
+                dropout_rate=0.1,
+                max_timesteps=1000,
+            )
+        ),
+    }
+
+    for k, v in encoder.items():
+        if k in config_string:
+            encoder_config = v
+            break
+
+    encoder_config.embedding_dim = 8
+    encoder_config.image_obs = env_config.get_ref("image_obs")
+
+    # decoder specific kwargs
+    decoder_config = config_dict.ConfigDict(
+        dict(
+            image_obs=env_config.get_ref("image_obs"),
+            input_action=False,
+            input_prev_state=False,
+            embedding_dim=encoder_config.get_ref("embedding_dim"),
+            layer_sizes=[32, 32],
+        )
+    )
+
+    vae_config.encoder = encoder_config
+    vae_config.decoder = decoder_config
 
     config.vae = vae_config
 
@@ -90,7 +131,7 @@ def get_config(config_string: str = None):
     # Policy configs
     # =============================================================
     policy_config = config_dict.ConfigDict()
-    policy_config.image_obs = False
+    policy_config.image_obs = env_config.get_ref("image_obs")
     policy_config.pass_state_to_policy = True
     policy_config.pass_latent_to_policy = True
     policy_config.pass_belief_to_policy = False
@@ -147,7 +188,7 @@ def get_config(config_string: str = None):
     # number of eval rollout videos to save
     config.save_video = True
     config.num_eval_rollouts_save = 3
-    config.skip_first_eval = True
+    config.skip_first_eval = False
 
     # for saving checkpoints
     config.max_ckpt_to_keep = None

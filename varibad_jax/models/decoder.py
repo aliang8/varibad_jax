@@ -21,6 +21,7 @@ class Decoder(hk.Module):
         layer_sizes: List[int] = [32, 32],
         w_init=hk.initializers.VarianceScaling(scale=2.0),
         b_init=hk.initializers.Constant(0.0),
+        **kwargs
     ):
         """Decodes the rewards in a trajectory given the latent information
 
@@ -58,7 +59,7 @@ class Decoder(hk.Module):
             )
 
         self.output_mlp = hk.nets.MLP(
-            layer_sizes + [1],
+            list(layer_sizes) + [1],
             activation=nn.gelu,
             name="reward_mlp",
             activate_final=False,

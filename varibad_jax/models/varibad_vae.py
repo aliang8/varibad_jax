@@ -41,29 +41,12 @@ class VaribadVAE(hk.Module):
         b_init = hk.initializers.Constant(0.0)
         init_kwargs = dict(w_init=w_init, b_init=b_init)
 
-        if self.config.encoder == "lstm":
+        if self.config.encoder.name == "lstm":
             encoder_cls = LSTMTrajectoryEncoder
-            encoder_kwargs = dict(
-                image_obs=config.image_obs,
-                embedding_dim=config.embedding_dim,
-                lstm_hidden_size=config.lstm_hidden_size,
-                batch_first=False,
-            )
-        elif self.config.encoder == "transformer":
+        elif self.config.encoder.name == "transformer":
             encoder_cls = SARTransformerEncoder
-            encoder_kwargs = dict(
-                image_obs=config.image_obs,
-                embedding_dim=config.embedding_dim,
-                hidden_dim=config.hidden_dim,
-                num_heads=config.num_heads,
-                attn_size=config.attn_size,
-                num_layers=config.num_layers,
-                dropout_rate=config.dropout_rate,
-                widening_factor=config.widening_factor,
-                max_timesteps=config.max_timesteps,
-            )
 
-        self.encoder = encoder_cls(**encoder_kwargs)
+        self.encoder = encoder_cls(**self.config.encoder)
 
         self.latent_mean = hk.Linear(
             self.config.latent_dim, name="latent_mean", **init_kwargs
@@ -72,19 +55,13 @@ class VaribadVAE(hk.Module):
             self.config.latent_dim, name="latent_logvar", **init_kwargs
         )
 
-        self.reward_decoder = Decoder(
-            image_obs=config.image_obs,
-            input_action=config.input_action,
-            input_prev_state=config.input_prev_state,
-            embedding_dim=config.embedding_dim,
-            layer_sizes=list(config.rew_decoder_layers),
-        )
+        self.reward_decoder = Decoder(**self.config.decoder)
 
     def get_prior(self, batch_size: int):
-        if self.config.encoder == "lstm":
+        if self.config.encoder.name == "lstm":
             hidden_state = self.encoder.recurrent.initial_state(batch_size)
-        elif self.config.encoder == "transformer":
-            hidden_state = jnp.zeros((batch_size, self.config.hidden_dim))
+        elif self.config.encoder.name == "transformer":
+            hidden_state = jnp.zeros((batch_size, self.config.encoder.hidden_dim))
 
         latent_mean = self.latent_mean(hidden_state)
         latent_logvar = self.latent_logvar(hidden_state)

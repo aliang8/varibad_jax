@@ -19,6 +19,9 @@ from jax import config as jax_config
 class BaseTrainer:
     def __init__(self, config: FrozenConfigDict):
         self.config = config
+
+        print(self.config)
+
         self.global_step = 0
         self.rng_seq = hk.PRNGSequence(config.seed)
 
@@ -46,18 +49,31 @@ class BaseTrainer:
         self.video_dir.mkdir(parents=True, exist_ok=True)
 
         # create env
-        if self.config.env == "gridworld":
+        if self.config.env.env_name == "gridworld":
             self.envs = make_envs(
                 self.config.env.env_id,
                 seed=self.config.seed,
                 num_envs=self.config.env.num_processes,
                 num_episodes_per_rollout=self.config.env.num_episodes_per_rollout,
             )
+            self.eval_envs = make_envs(
+                self.config.env.env_id,
+                seed=self.config.seed + 10000,
+                num_envs=self.config.env.num_processes,
+                num_episodes_per_rollout=self.config.env.num_episodes_per_rollout,
+            )
         else:
-
             self.envs = make_envs_xland(
                 env_id=self.config.env.env_id,
                 seed=self.config.seed,
+                num_envs=self.config.env.num_processes,
+                num_episodes_per_rollout=self.config.env.num_episodes_per_rollout,
+                benchmark_path=self.config.env.benchmark_path,
+                ruleset_id=self.config.env.ruleset_id,
+            )
+            self.eval_envs = make_envs_xland(
+                env_id=self.config.env.env_id,
+                seed=self.config.seed + 10000,
                 num_envs=self.config.env.num_processes,
                 num_episodes_per_rollout=self.config.env.num_episodes_per_rollout,
                 benchmark_path=self.config.env.benchmark_path,

@@ -27,6 +27,7 @@ class LSTMTrajectoryEncoder(hk.Module):
         image_obs: bool = False,
         w_init=hk.initializers.VarianceScaling(scale=2.0),
         b_init=hk.initializers.Constant(0.0),
+        **kwargs
     ):
         super().__init__(name="LSTMTrajectoryEncoder")
 

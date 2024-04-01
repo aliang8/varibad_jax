@@ -5,6 +5,7 @@ import jax.numpy as jnp
 import flax.linen as nn
 import numpy as np
 import einops
+from varibad_jax.models.common import ImageEncoder
 
 
 class TransformerLayer(hk.Module):
@@ -16,6 +17,7 @@ class TransformerLayer(hk.Module):
         dropout_rate: float,
         widening_factor: int = 4,
         w_init: hk.initializers.Initializer = hk.initializers.VarianceScaling(1.0),
+        b_init: hk.initializers.Initializer = hk.initializers.Constant(0.0),
     ):
         super().__init__()
         self.hidden_dim = hidden_dim
@@ -131,8 +133,10 @@ class SARTransformerEncoder(hk.Module):
         max_timesteps: int = 1000,
         w_init=hk.initializers.VarianceScaling(scale=2.0),
         b_init=hk.initializers.Constant(0.0),
+        **kwargs
     ):
         super().__init__()
+        self.image_obs = image_obs
         self.transformer = TransformerEncoder(
             hidden_dim=hidden_dim,
             num_heads=num_heads,
@@ -143,7 +147,11 @@ class SARTransformerEncoder(hk.Module):
         )
 
         init_kwargs = dict(w_init=w_init, b_init=b_init)
-        self.state_embed = hk.Linear(embedding_dim, **init_kwargs)
+
+        if self.image_obs:
+            self.state_embed = ImageEncoder(embedding_dim, **init_kwargs)
+        else:
+            self.state_embed = hk.Linear(embedding_dim, **init_kwargs)
         self.action_embed = hk.Linear(embedding_dim, **init_kwargs)
         self.reward_embed = hk.Linear(embedding_dim, **init_kwargs)
         self.timestep_embed = hk.Embed(max_timesteps, embedding_dim)

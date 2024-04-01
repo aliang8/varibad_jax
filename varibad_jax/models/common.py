@@ -15,18 +15,25 @@ class ImageEncoder(hk.Module):
         kernel_shape = (2, 2)
         padding = "VALID"
 
-        self.encoder = hk.Sequential(
-            [
-                *[
+        net = []
+        for out_channels in output_channels:
+            net.extend(
+                [
                     hk.Conv2D(
-                        output_channels[i],
+                        out_channels,
                         kernel_shape,
                         padding=padding,
                         w_init=w_init,
-                    )
-                    for i in range(len(output_channels))
-                ],
-                nn.gelu,
+                        b_init=b_init,
+                        data_format="NHWC",
+                    ),
+                    nn.gelu,
+                ]
+            )
+
+        self.encoder = hk.Sequential(
+            [
+                *net,
                 hk.Flatten(preserve_dims=1),
                 hk.Linear(embedding_dim, w_init=w_init, b_init=b_init),
             ]
@@ -34,9 +41,9 @@ class ImageEncoder(hk.Module):
 
     def __call__(self, x):
         if x.ndim >= 5:
-            # last three are C, H, W
+            # last three are H, W, C
             lead_dims = x.shape[:-3]
-            enc_input = einops.rearrange(x, "... C H W -> (...) C H W")
+            enc_input = einops.rearrange(x, "... H W C -> (...) H W C")
         else:
             enc_input = x
 

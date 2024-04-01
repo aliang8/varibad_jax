@@ -32,6 +32,7 @@ from varibad_jax.agents.ppo.helpers import policy_fn
 from varibad_jax.utils.replay_buffer import OnlineStorage
 from varibad_jax.utils.replay_vae import RolloutStorageVAE
 import varibad_jax.utils.general_utils as gutl
+from varibad_jax.utils.rollout import eval_rollout
 
 
 class VAETrainer(BaseTrainer):
@@ -167,9 +168,9 @@ class VAETrainer(BaseTrainer):
             task_dim=0,
             action_space=self.envs.action_space,
             hidden_size=(
-                self.config.vae.lstm_hidden_size
-                if self.config.vae.encoder == "lstm"
-                else self.config.vae.hidden_dim
+                self.config.vae.encoder.lstm_hidden_size
+                if self.config.vae.encoder.name == "lstm"
+                else self.config.vae.encoder.hidden_dim
             ),
             normalise_rewards=self.config.env.normalize_rews,
         )
@@ -181,7 +182,7 @@ class VAETrainer(BaseTrainer):
             max_num_rollouts=self.config.vae.buffer_size,
             state_dim=self.envs.observation_space.shape,
             action_dim=self.vae_action_dim,
-            task_dim=0,
+            task_dim=None,
             vae_buffer_add_thresh=1.0,
         )
         return policy_storage, vae_storage
@@ -214,7 +215,7 @@ class VAETrainer(BaseTrainer):
         self.policy_storage.latent_logvar.append(latent_logvar.copy())
 
         # if using a transformer, we need to keep track of the full history
-        if self.config.vae.encoder == "transformer":
+        if self.config.vae.encoder.name == "transformer":
             states = np.zeros(
                 (self.steps_per_rollout, self.num_processes, *self.obs_shape)
             )
@@ -253,7 +254,7 @@ class VAETrainer(BaseTrainer):
 
             # after seeing the next observation and getting more
             # information, we can update the belief over the task variable
-            if self.config.vae.encoder == "lstm":
+            if self.config.vae.encoder.name == "lstm":
                 encode_outputs = self.ts_vae.apply_fn(
                     self.ts_vae.params,
                     next(self.rng_seq),
@@ -262,7 +263,7 @@ class VAETrainer(BaseTrainer):
                     rewards=reward,
                     hidden_state=hidden_state,
                 )
-            elif self.config.vae.encoder == "transformer":
+            elif self.config.vae.encoder.name == "transformer":
                 states[step] = next_state
                 actions[step] = action
                 rewards[step] = reward
@@ -293,7 +294,13 @@ class VAETrainer(BaseTrainer):
                 done=done,
                 task=None,
             )
-
+            # print(done)
+            # print(self.vae_storage.curr_timestep)
+            # print(self.envs._xtimestep.info["done"])
+            # print(self.envs._xtimestep.info["done_bamdp"])
+            # print(self.envs._xtimestep.timestep.last())
+            # print(self.envs._xtimestep.info["step_count_bamdp"])
+            # print("-" * 20)
             self.policy_storage.next_state[step] = next_state.copy()
 
             # mask out timesteps that are done
@@ -324,6 +331,10 @@ class VAETrainer(BaseTrainer):
             latent = jnp.concatenate([latent_mean, latent_logvar], axis=-1)
             hidden_state = encode_outputs.hidden_state
             self.total_steps += self.num_processes
+
+        # import ipdb
+
+        # ipdb.set_trace()
 
         # compute next value for bootstrapping
         policy_output = self.ts_policy.apply_fn(
@@ -389,9 +400,29 @@ class VAETrainer(BaseTrainer):
         logging.debug("done updating vae")
         return metrics
 
+    def eval(self):
+        logging.info("Evaluating policy...")
+
+        eval_metrics = eval_rollout(
+            next(self.rng_seq),
+            env=self.eval_envs,
+            config=self.config,
+            ts_policy=self.ts_policy,
+            ts_vae=self.ts_vae,
+            get_prior=self.get_prior,
+            action_dim=self.vae_action_dim,
+            steps_per_rollout=self.steps_per_rollout,
+            num_eval_rollouts=self.config.num_eval_rollouts,
+        )
+        return eval_metrics
+
     def train(self):
         logging.info("Training starts")
         start_time = time.time()
+
+        # first eval
+        if not self.config.skip_first_eval:
+            eval_metrics = self.eval()
 
         for self.iter_idx in tqdm.tqdm(
             range(0, self.num_updates), smoothing=0.1, disable=self.config.disable_tqdm
@@ -467,29 +498,11 @@ class VAETrainer(BaseTrainer):
                     if self.wandb_run is not None:
                         self.wandb_run.log(metrics, step=self.iter_idx)
 
-                # if (self.iter_idx + 1) % self.config.eval_interval == 0:
-                #   print('Evaluating...')
-                #   returns_per_episode = evaluate(
-                #       config=self.config,
-                #       ts_policy=self.ts_policy,
-                #       ts_vae=self.ts_vae,
-                #       rng_seq=self.rng_seq,
-                #       transition_matrix=self.goal_transition_matrix,
-                #       video_dir=self.eval_video_dir,
-                #       iter_idx=self.iter_idx + 1,
-                #   )
-                #   avg_returns_per_episode = returns_per_episode.mean(axis=0)
-
-                #   eval_metrics = {
-                #       f'returns_per_episode/avg/episode_{j}': avg_returns_per_episode[j]
-                #       for j in range(len(avg_returns_per_episode))
-                #   }
-                #   eval_metrics['returns_per_episode/avg'] = returns_per_episode.mean()
-                #   self.log(
-                #       eval_metrics,
-                #       phase='eval',
-                #       self.iter_idx=self.iter_idx,
-                #   )
+                if (self.iter_idx + 1) % self.config.eval_interval == 0:
+                    eval_metrics = self.eval()
+                    if self.wandb_run is not None:
+                        eval_metrics = gutl.prefix_dict_keys(eval_metrics, "eval")
+                        self.wandb_run.log(eval_metrics, step=self.iter_idx)
 
                 if ((self.iter_idx + 1) % self.config.save_interval) == 0:
                     # # Bundle everything together.
@@ -520,6 +533,3 @@ class VAETrainer(BaseTrainer):
         self.envs.close()
         logging.info("Finished training, closing everything")
         return
-
-    def eval(self):
-        pass

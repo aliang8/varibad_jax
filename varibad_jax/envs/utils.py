@@ -10,7 +10,6 @@ from varibad_jax.envs.wrappers import BAMDPWrapper
 
 
 def make_envs(
-    env: str,
     env_id: str,
     seed: int = 0,
     num_envs: int = 1,
