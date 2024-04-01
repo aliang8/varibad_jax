@@ -28,3 +28,6 @@ ipdb
 absl-py
 dataclasses
 ml_collections
+
+# Env
+xminigrid

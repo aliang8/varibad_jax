@@ -14,14 +14,29 @@ def get_config(config_string: str = None):
     config = config_dict.ConfigDict()
 
     env_config = config_dict.ConfigDict()
-    env_config.env_id = "GridNaviJAX-v0"
+    env_config.env = "gridworld"  # xland'
+
+    # additional config for xland
+    env_config.env_kwargs = dict(
+        view_size=5,
+        height=5,
+        width=5,
+    )
+
+    env_config.benchmark_path = (
+        "/scr/aliang80/varibad_jax/varibad_jax/envs/xland_benchmarks/test_ruleset.pkl"
+    )
+    env_config.ruleset_id = 0
+    env_config.env_id = "XLand-MiniGrid-R1-9x9"
+
+    # env_config.env_id = "GridNaviJAX-v0"
     env_config.num_frames = 20_000_000  # 20M
 
     env_config.num_episodes_per_rollout = 4
     env_config.steps_per_rollout = 15
 
     # number of parallel training environments
-    env_config.num_processes = 64
+    env_config.num_processes = 16
     env_config.normalize_rews = False
     config.env = env_config
 
@@ -29,6 +44,8 @@ def get_config(config_string: str = None):
     # VariBAD VAE configuration
     # =============================================================
     vae_config = config_dict.ConfigDict()
+    vae_config.image_obs = False
+
     vae_config.lr = 1e-3
     vae_config.buffer_size = 100_000
     vae_config.trajs_per_batch = 25
@@ -60,8 +77,8 @@ def get_config(config_string: str = None):
     # Transformer encoder config
     vae_config.encoder = "lstm"
     vae_config.hidden_dim = 64
-    vae_config.num_heads = 4
-    vae_config.num_layers = 2
+    vae_config.num_heads = 8
+    vae_config.num_layers = 3
     vae_config.attn_size = 32
     vae_config.widening_factor = 4
     vae_config.dropout_rate = 0.1
@@ -73,6 +90,7 @@ def get_config(config_string: str = None):
     # Policy configs
     # =============================================================
     policy_config = config_dict.ConfigDict()
+    policy_config.image_obs = False
     policy_config.pass_state_to_policy = True
     policy_config.pass_latent_to_policy = True
     policy_config.pass_belief_to_policy = False

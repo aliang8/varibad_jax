@@ -29,6 +29,7 @@ class TransformerLayer(hk.Module):
             key_size=self.attn_size,
             model_size=hidden_dim,
             w_init=w_init,
+            with_bias=True,
         )
 
         self.dense_block = hk.Sequential(
@@ -108,7 +109,6 @@ class TransformerEncoder(hk.Module):
         mask = mask[:, None, None, :]  # [B, H=1, T'=1, T]
         causal_mask = np.tril(np.ones((1, 1, seq_len, seq_len)))  # [B=1, H=1, T, T]
         mask = mask * causal_mask  # [B, H=1, T, T]
-        # jax.debug.breakpoint()
 
         h = embeddings
         for layer in self.layers:
@@ -120,6 +120,7 @@ class TransformerEncoder(hk.Module):
 class SARTransformerEncoder(hk.Module):
     def __init__(
         self,
+        image_obs: bool,
         embedding_dim: int,
         hidden_dim: int,
         num_heads: int,
@@ -128,6 +129,8 @@ class SARTransformerEncoder(hk.Module):
         dropout_rate: float,
         widening_factor: int = 4,
         max_timesteps: int = 1000,
+        w_init=hk.initializers.VarianceScaling(scale=2.0),
+        b_init=hk.initializers.Constant(0.0),
     ):
         super().__init__()
         self.transformer = TransformerEncoder(
@@ -139,12 +142,13 @@ class SARTransformerEncoder(hk.Module):
             widening_factor=widening_factor,
         )
 
-        self.state_embed = hk.Linear(embedding_dim)
-        self.action_embed = hk.Linear(embedding_dim)
-        self.reward_embed = hk.Linear(embedding_dim)
+        init_kwargs = dict(w_init=w_init, b_init=b_init)
+        self.state_embed = hk.Linear(embedding_dim, **init_kwargs)
+        self.action_embed = hk.Linear(embedding_dim, **init_kwargs)
+        self.reward_embed = hk.Linear(embedding_dim, **init_kwargs)
         self.timestep_embed = hk.Embed(max_timesteps, embedding_dim)
 
-        self.embed = hk.Linear(hidden_dim)
+        self.embed = hk.Linear(hidden_dim, **init_kwargs)
 
     def __call__(
         self,

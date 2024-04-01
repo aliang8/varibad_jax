@@ -44,6 +44,7 @@ class VaribadVAE(hk.Module):
         if self.config.encoder == "lstm":
             encoder_cls = LSTMTrajectoryEncoder
             encoder_kwargs = dict(
+                image_obs=config.image_obs,
                 embedding_dim=config.embedding_dim,
                 lstm_hidden_size=config.lstm_hidden_size,
                 batch_first=False,
@@ -51,6 +52,7 @@ class VaribadVAE(hk.Module):
         elif self.config.encoder == "transformer":
             encoder_cls = SARTransformerEncoder
             encoder_kwargs = dict(
+                image_obs=config.image_obs,
                 embedding_dim=config.embedding_dim,
                 hidden_dim=config.hidden_dim,
                 num_heads=config.num_heads,

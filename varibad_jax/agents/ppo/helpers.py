@@ -26,14 +26,14 @@ def policy_fn(
 def init_params(
     config: ConfigDict,
     rng_key: PRNGKey,
-    state_dim: int,
+    obs_shape: tuple,
     latent_dim: int,
     action_space: gym.spaces.Space,
     task_dim: int = 0,
 ):
     t = 2
     bs = 2
-    dummy_states = np.zeros((t, bs, state_dim))
+    dummy_states = np.zeros((t, bs, obs_shape))
     if config.pass_latent_to_policy:
         dummy_latents = np.zeros((t, bs, latent_dim))
     else:

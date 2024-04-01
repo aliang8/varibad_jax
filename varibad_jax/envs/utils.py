@@ -1,6 +1,7 @@
 import gymnasium as gym
 import numpy as np
 import jax
+import xminigrid
 from typing import ClassVar, Optional
 
 from brax.envs import Env, State, Wrapper
@@ -9,13 +10,14 @@ from varibad_jax.envs.wrappers import BAMDPWrapper
 
 
 def make_envs(
-    env_id,
+    env: str,
+    env_id: str,
     seed: int = 0,
     num_envs: int = 1,
     num_episodes_per_rollout: int = 4,
     env_kwargs=dict(),
 ):
-    # env = gym.make(env_id)
+    # setup environment
     env = GridNavi(seed=seed, **env_kwargs)
     env = BAMDPWrapper(env, num_episodes_per_rollout=num_episodes_per_rollout)
     if num_envs > 1:

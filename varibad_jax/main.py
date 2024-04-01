@@ -40,6 +40,10 @@ psh = {
         "latent_dim": "ld",
         "kl_to_fixed_prior": "klfp",
         "encoder": "enc",
+        "num_layers": "nl",
+        "num_heads": "nh",
+        "dropout_rate": "do",
+        "num_vae_updates": "nvu",
     },
     "policy": {"pass_latent_to_policy": "pltp", "pass_task_to_policy": "pttp"},
 }
@@ -48,7 +52,14 @@ psh = {
 param_space = {
     "seed": tune.grid_search([0]),
     "env": {"env_id": tune.grid_search(["GridNaviJAX-v0"])},
-    "vae": {"encoder": tune.grid_search(["transformer"])},
+    "vae": {
+        "encoder": tune.grid_search(["transformer"]),
+        "num_layers": tune.grid_search([1]),
+        "num_heads": tune.grid_search([3]),
+        "dropout_rate": tune.grid_search([0.0]),
+        # "lr": tune.grid_search([1e-3]),
+        "num_vae_updates": tune.grid_search([10]),
+    },
 }
 
 

@@ -13,3 +13,6 @@ varibad_jax/start.sh
 build/*
 varibad_jax/ray_results/*
 varibad_jax/varibad_jax/ray_results/*
+*.pkl
+*.mp4
+test*

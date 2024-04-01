@@ -52,7 +52,7 @@ def loss_vae(
         actions=batch.actions,
         rewards=batch.rewards,
         hidden_state=hidden_state,
-        mask=jnp.zeros((T, B)) if config.vae.encoder == "transformer" else None,
+        mask=jnp.ones((T, B)) if config.vae.encoder == "transformer" else None,
     )
 
     latent_mean = encode_outputs.latent_mean

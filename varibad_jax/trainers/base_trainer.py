@@ -11,6 +11,7 @@ import wandb
 from ml_collections import FrozenConfigDict
 from pathlib import Path
 from varibad_jax.envs.utils import make_envs
+from varibad_jax.envs.xland import make_envs as make_envs_xland
 import gymnasium as gym
 from jax import config as jax_config
 
@@ -45,14 +46,25 @@ class BaseTrainer:
         self.video_dir.mkdir(parents=True, exist_ok=True)
 
         # create env
-        self.envs = make_envs(
-            self.config.env.env_id,
-            seed=self.config.seed,
-            num_envs=self.config.env.num_processes,
-            num_episodes_per_rollout=self.config.env.num_episodes_per_rollout,
-        )
+        if self.config.env == "gridworld":
+            self.envs = make_envs(
+                self.config.env.env_id,
+                seed=self.config.seed,
+                num_envs=self.config.env.num_processes,
+                num_episodes_per_rollout=self.config.env.num_episodes_per_rollout,
+            )
+        else:
 
-        self.state_dim = self.envs.observation_space.shape[0]
+            self.envs = make_envs_xland(
+                env_id=self.config.env.env_id,
+                seed=self.config.seed,
+                num_envs=self.config.env.num_processes,
+                num_episodes_per_rollout=self.config.env.num_episodes_per_rollout,
+                benchmark_path=self.config.env.benchmark_path,
+                ruleset_id=self.config.env.ruleset_id,
+            )
+
+        self.obs_shape = self.envs.observation_space.shape
         if isinstance(self.envs.action_space, gym.spaces.Discrete):
             self.action_dim = self.envs.action_space.n
         else:
@@ -66,7 +78,7 @@ class BaseTrainer:
         if not self.config.enable_jit:
             jax_config.update("jax_disable_jit", True)
 
-        logging.info(f"state_dim: {self.state_dim}, action_dim: {self.action_dim}")
+        logging.info(f"obs_shape: {self.obs_shape}, action_dim: {self.action_dim}")
 
     def create_ts(self):
         raise NotImplementedError

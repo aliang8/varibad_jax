@@ -81,13 +81,13 @@ class VAETrainer(BaseTrainer):
             vae_params = init_params_vae(
                 config=self.config.vae,
                 rng_key=next(self.rng_seq),
-                state_dim=self.state_dim,
+                obs_shape=self.obs_shape,
                 action_dim=self.vae_action_dim,
             )
             policy_params = init_params_policy(
                 config=self.config.policy,
                 rng_key=next(self.rng_seq),
-                state_dim=self.state_dim,
+                obs_shape=self.obs_shape,
                 latent_dim=self.config.vae.latent_dim * 2,
                 action_space=self.envs.action_space,
             )
@@ -161,12 +161,16 @@ class VAETrainer(BaseTrainer):
             args=self.config,
             num_steps=self.steps_per_rollout,
             num_processes=self.num_processes,
-            state_dim=self.state_dim,
+            state_dim=self.envs.observation_space.shape,
             latent_dim=self.config.vae.latent_dim * 2,
             belief_dim=0,
             task_dim=0,
             action_space=self.envs.action_space,
-            hidden_size=self.config.vae.lstm_hidden_size,
+            hidden_size=(
+                self.config.vae.lstm_hidden_size
+                if self.config.vae.encoder == "lstm"
+                else self.config.vae.hidden_dim
+            ),
             normalise_rewards=self.config.env.normalize_rews,
         )
 
@@ -175,7 +179,7 @@ class VAETrainer(BaseTrainer):
             max_trajectory_len=self.steps_per_rollout,
             zero_pad=True,
             max_num_rollouts=self.config.vae.buffer_size,
-            state_dim=self.state_dim,
+            state_dim=self.envs.observation_space.shape,
             action_dim=self.vae_action_dim,
             task_dim=0,
             vae_buffer_add_thresh=1.0,

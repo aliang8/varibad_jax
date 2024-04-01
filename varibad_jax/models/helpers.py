@@ -35,11 +35,11 @@ def decode(config: FrozenConfigDict, **kwargs):
 
 
 def init_params(
-    config: FrozenConfigDict, rng_key: PRNGKey, state_dim: int, action_dim: int
+    config: FrozenConfigDict, rng_key: PRNGKey, obs_shape: tuple, action_dim: int
 ):
     t = 2
     bs = 2
-    dummy_states = np.zeros((t, bs, state_dim))
+    dummy_states = np.zeros((t, bs, *obs_shape))
     dummy_actions = np.zeros((t, bs, action_dim))
     dummy_rewards = np.zeros((t, bs, 1))
     dummy_hs = np.zeros((bs, config.lstm_hidden_size))
