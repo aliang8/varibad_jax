@@ -23,6 +23,8 @@ from pathlib import Path
 import gymnasium as gym
 import wandb
 import einops
+import jax.tree_util as jtu
+
 from varibad_jax.trainers.base_trainer import BaseTrainer
 from varibad_jax.models.helpers import init_params as init_params_vae
 from varibad_jax.models.helpers import encode_trajectory, decode, get_prior
@@ -408,7 +410,9 @@ class VAETrainer(BaseTrainer):
         rng_keys = jax.random.split(next(self.rng_seq), self.config.num_eval_rollouts)
 
         start = time.time()
-        eval_metrics, imgs = jax.vmap(
+
+        # render function doesn't work with vmap
+        eval_metrics, transitions = jax.vmap(
             eval_rollout,
             in_axes=(0, None, None, None, None, None, None, None, None),
         )(
@@ -422,6 +426,7 @@ class VAETrainer(BaseTrainer):
             self.steps_per_rollout,
             self.config.visualize_rollouts,
         )
+
         rollout_time = time.time() - start
         fps = (self.config.num_eval_rollouts * self.steps_per_rollout) / rollout_time
 
@@ -435,8 +440,24 @@ class VAETrainer(BaseTrainer):
         if self.wandb_run is not None:
             # imgs is N x T x H x W x C
             # we want N x T x C x H x W
-            imgs = einops.rearrange(imgs, "n t h w c -> n t c h w")
-            self.wandb_run.log({"eval_rollouts": wandb.Video(np.array(imgs), fps=5)})
+
+            # generate the images
+            videos = []
+            for rollout_indx in range(self.config.num_eval_rollouts):
+                images = []
+                for step in range(self.steps_per_rollout):
+                    timestep = jtu.tree_map(
+                        lambda x: x[rollout_indx][step], transitions
+                    )
+                    images.append(
+                        self.eval_envs.render(self.eval_envs.env_params, timestep)
+                    )
+                videos.append(images)
+
+            videos = np.array(videos)
+
+            videos = einops.rearrange(videos, "n t h w c -> n t c h w")
+            self.wandb_run.log({"eval_rollouts": wandb.Video(np.array(videos), fps=5)})
 
         return eval_metrics
 

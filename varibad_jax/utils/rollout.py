@@ -5,13 +5,37 @@ from xminigrid.environment import Environment, EnvParamsT
 from flax.training.train_state import TrainState
 from typing import Callable
 import numpy as np
-from xminigrid.experimental.img_obs import _render_obs
+from xminigrid.experimental.img_obs import TILE_W_AGENT_CACHE, TILE_CACHE, TILE_SIZE
+from xminigrid.core.constants import NUM_COLORS, TILES_REGISTRY, Tiles
 
 
 @chex.dataclass
 class RolloutStats:
     reward: jnp.ndarray
     length: jnp.ndarray
+
+
+# rendering with cached tiles
+def _render_obs(obs: jax.Array, agent_location) -> jax.Array:
+    view_size = obs.shape[0]
+
+    obs_flat_idxs = obs[:, :, 0] * NUM_COLORS + obs[:, :, 1]
+    # render all tiles
+    rendered_obs = jnp.take(TILE_CACHE, obs_flat_idxs, axis=0)
+
+    # add agent tile
+    agent_tile = TILE_W_AGENT_CACHE[obs_flat_idxs[view_size - 1, view_size // 2]]
+
+    import ipdb
+
+    ipdb.set_trace()
+    rendered_obs = rendered_obs.at[view_size - 1, view_size // 2].set(agent_tile)
+    # [view_size, view_size, tile_size, tile_size, 3] -> [view_size * tile_size, view_size * tile_size, 3]
+    rendered_obs = rendered_obs.transpose((0, 2, 1, 3, 4)).reshape(
+        view_size * TILE_SIZE, view_size * TILE_SIZE, 3
+    )
+
+    return rendered_obs
 
 
 def eval_rollout(
@@ -22,7 +46,7 @@ def eval_rollout(
     ts_vae: TrainState,
     get_prior: Callable,
     action_dim: int,
-    steps_per_epoch: int,
+    steps_per_rollout: int,
     visualize: bool = False,
 ) -> RolloutStats:
 
@@ -40,29 +64,7 @@ def eval_rollout(
     latent = jnp.concatenate([latent_mean, latent_logvar], axis=-1)
     hidden_state = prior_outputs.hidden_state
 
-    if visualize:
-        img = _render_obs(xtimestep.timestep.state.grid)
-        imgs = jnp.zeros((steps_per_epoch, *img.shape))
-        imgs = imgs.at[stats.length].set(img)
-
-    # jax.debug.breakpoint()
-
-    def _cond_fn(carry):
-        (
-            rng,
-            stats,
-            timestep,
-            prev_action,
-            prev_reward,
-            done,
-            latent,
-            hidden_state,
-            imgs,
-        ) = carry
-        # while not done
-        return jnp.logical_not(done)
-
-    def _body_fn(carry):
+    def _step_fn(carry, _):
         (
             rng,
             stats,
@@ -72,8 +74,8 @@ def eval_rollout(
             done,
             latent,
             hidden_state,
-            imgs,
         ) = carry
+
         rng, policy_rng, encoder_rng = jax.random.split(rng, 3)
         observation = xtimestep.timestep.observation
         observation = observation.astype(jnp.float32)
@@ -93,10 +95,6 @@ def eval_rollout(
         done = timestep.last()
         next_obs = next_obs.astype(jnp.float32)
 
-        if visualize:
-            img = _render_obs(xtimestep.timestep.state.grid)
-            imgs = imgs.at[stats.length + 1].set(img)
-
         # add extra dimension for batch
         next_obs = next_obs[jnp.newaxis]
         action = action.reshape(1, 1).astype(jnp.float32)
@@ -111,6 +109,7 @@ def eval_rollout(
             rewards=reward,
             hidden_state=hidden_state,
         )
+
         hidden_state = encode_outputs.hidden_state
         latent_mean = encode_outputs.latent_mean
         latent_logvar = encode_outputs.latent_logvar
@@ -121,7 +120,16 @@ def eval_rollout(
             length=stats.length + 1,
         )
 
-        return (rng, stats, xtimestep, action, reward, done, latent, hidden_state, imgs)
+        return (
+            rng,
+            stats,
+            xtimestep,
+            action,
+            reward,
+            done,
+            latent,
+            hidden_state,
+        ), timestep
 
     init_carry = (
         rng,
@@ -132,8 +140,10 @@ def eval_rollout(
         done,
         latent,
         hidden_state,
-        imgs,
     )
 
-    final_carry = jax.lax.while_loop(_cond_fn, _body_fn, init_val=init_carry)
-    return final_carry[1], final_carry[-1]
+    carry, transitions = jax.lax.scan(
+        _step_fn, init_carry, None, length=steps_per_rollout
+    )
+    stats = carry[1]
+    return stats, transitions
