@@ -43,6 +43,9 @@ def eval_rollout(
     if visualize:
         img = _render_obs(xtimestep.timestep.state.grid)
         imgs = jnp.zeros((steps_per_epoch, *img.shape))
+        imgs = imgs.at[stats.length].set(img)
+
+    # jax.debug.breakpoint()
 
     def _cond_fn(carry):
         (
@@ -56,7 +59,8 @@ def eval_rollout(
             hidden_state,
             imgs,
         ) = carry
-        return done
+        # while not done
+        return jnp.logical_not(done)
 
     def _body_fn(carry):
         (
@@ -91,7 +95,7 @@ def eval_rollout(
 
         if visualize:
             img = _render_obs(xtimestep.timestep.state.grid)
-            imgs = imgs.at[stats.length].set(img)
+            imgs = imgs.at[stats.length + 1].set(img)
 
         # add extra dimension for batch
         next_obs = next_obs[jnp.newaxis]
@@ -132,4 +136,4 @@ def eval_rollout(
     )
 
     final_carry = jax.lax.while_loop(_cond_fn, _body_fn, init_val=init_carry)
-    return final_carry[1], imgs
+    return final_carry[1], final_carry[-1]
