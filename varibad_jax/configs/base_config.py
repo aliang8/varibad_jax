@@ -172,7 +172,7 @@ def get_config(config_string: str = None):
     config.disable_tqdm = True
     config.smoke_test = True
     config.notes = "VariBAD JAX"
-    config.tags = ["varibad", "jax", "gridworld"]
+    config.tags = ["varibad", "jax"]
 
     # number of warmup steps before training
     config.warmup_steps = 10000
@@ -186,7 +186,7 @@ def get_config(config_string: str = None):
     config.num_eval_rollouts = 10
 
     # number of eval rollout videos to save
-    config.save_video = True
+    config.visualize_rollouts = False
     config.num_eval_rollouts_save = 3
     config.skip_first_eval = False
 

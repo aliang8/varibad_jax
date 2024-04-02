@@ -15,7 +15,7 @@ from xminigrid.core.constants import Tiles, Colors, TILES_REGISTRY
 from xminigrid.rendering.rgb_render import render
 from xminigrid.core.goals import check_goal, AgentNearGoal
 from xminigrid.core.rules import check_rule, AgentNearRule
-from xminigrid.types import RuleSet
+from xminigrid.types import RuleSet, StepType
 from xminigrid.rendering.text_render import print_ruleset
 from xminigrid.benchmarks import Benchmark, load_benchmark, load_benchmark_from_path
 from xminigrid.core.rules import EmptyRule
@@ -84,6 +84,7 @@ def make_envs(
     benchmark_path: str = "",
     ruleset_id: int = 0,
     env_kwargs=dict(),
+    training: bool = True,
 ):
     # setup environment
     env, env_params = xminigrid.make(env_id, **env_kwargs)
@@ -101,9 +102,11 @@ def make_envs(
     env = BAMDPWrapper(
         env, env_params, num_episodes_per_rollout=num_episodes_per_rollout
     )
-    if num_envs > 1:
+    if num_envs > 1 and training:
         env = VmapWrapper(env, num_envs=num_envs)
-    env = GymWrapper(env, env_params, seed)
+
+    if training:
+        env = GymWrapper(env, env_params, seed)
     return env
 
 
@@ -124,6 +127,7 @@ class BAMDPWrapper(Wrapper):
         """
         super().__init__(env)
         self.env = env
+        self._env_params = env_params
 
         # calculate horizon length H^+
         self.num_episodes = num_episodes_per_rollout
@@ -134,14 +138,14 @@ class BAMDPWrapper(Wrapper):
     def reset(self, env_params: EnvParamsT, rng: PRNGKey):
         timestep = self.env.reset(env_params, rng)
 
-        zeros = jnp.zeros(rng.shape[:-1], dtype=jnp.int32)
         xtimestep = XLandTimestep(
             timestep=timestep,
             info=dict(
-                step_count=zeros,
-                step_count_bamdp=zeros,
-                done_mdp=zeros,
-                done_bamdp=zeros,
+                step_count=0,
+                step_count_bamdp=0,
+                done_mdp=0,
+                done_bamdp=0,
+                done=0,
             ),
         )
         return xtimestep
@@ -160,13 +164,10 @@ class BAMDPWrapper(Wrapper):
         timestep = self.env.step(env_params, xtimestep.timestep, action)
 
         # ignore environment done
-        one = jnp.ones_like(timestep.step_type, dtype=jnp.int32)
-        zero = jnp.zeros_like(timestep.step_type, dtype=jnp.int32)
-
         info = xtimestep.info
         info["step_count"] = info["step_count"] + 1
         steps = info["step_count"]
-        done_mdp = jnp.where(steps >= self.episode_length, one, zero)
+        done_mdp = jnp.where(steps >= self.episode_length, 1, 0)
         info["done_mdp"] = done_mdp
 
         # when the MDP is done, we reset back to initial timestep, but keep the same task
@@ -185,18 +186,24 @@ class BAMDPWrapper(Wrapper):
 
         # check if the entire rollout is complete
         info["step_count_bamdp"] = info["step_count_bamdp"] + 1
-        done_bamdp = jnp.where(info["step_count_bamdp"] == self.horizon, one, zero)
+        done_bamdp = jnp.where(info["step_count_bamdp"] == self.horizon, 1, 0)
         info["done_bamdp"] = done_bamdp
         info["done"] = done_bamdp
 
         # finish the episode
-        timestep = timestep.replace(step_type=jnp.where(done_bamdp, 2, 0))
-
-        info["truncation"] = jnp.where(
-            info["step_count_bamdp"] >= self.horizon, 1 - done_bamdp, zero
+        timestep = timestep.replace(
+            step_type=jnp.where(done_bamdp, StepType.LAST, StepType.FIRST)
         )
+
+        # info["truncation"] = jnp.where(
+        #     info["step_count_bamdp"] >= self.horizon, 1 - done_bamdp, zero
+        # )
         xtimestep = XLandTimestep(timestep=timestep, info=info)
         return xtimestep
+
+    @property
+    def env_params(self):
+        return self._env_params
 
 
 class VmapWrapper(Wrapper):
@@ -221,6 +228,10 @@ class VmapWrapper(Wrapper):
     @property
     def max_episode_steps(self):
         return self._env.max_episode_steps
+
+    @property
+    def env_params(self):
+        return self._env.env_params
 
 
 class GymWrapper(Wrapper):
@@ -281,9 +292,6 @@ class GymWrapper(Wrapper):
 
     def seed(self, seed: int = 0):
         self._key = jax.random.PRNGKey(seed)
-
-    def render(self, mode="human"):
-        return self._env.render(self.env_params, self._xtimestep.timestep)
 
     @property
     def max_episode_steps(self):

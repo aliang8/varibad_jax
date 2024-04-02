@@ -78,6 +78,7 @@ class BaseTrainer:
                 num_episodes_per_rollout=self.config.env.num_episodes_per_rollout,
                 benchmark_path=self.config.env.benchmark_path,
                 ruleset_id=self.config.env.ruleset_id,
+                training=False,
             )
 
         self.obs_shape = self.envs.observation_space.shape

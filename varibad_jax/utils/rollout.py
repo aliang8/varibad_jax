@@ -5,6 +5,7 @@ from xminigrid.environment import Environment, EnvParamsT
 from flax.training.train_state import TrainState
 from typing import Callable
 import numpy as np
+from xminigrid.experimental.img_obs import _render_obs
 
 
 @chex.dataclass
@@ -21,63 +22,81 @@ def eval_rollout(
     ts_vae: TrainState,
     get_prior: Callable,
     action_dim: int,
-    steps_per_rollout: int = 1,
-    num_eval_rollouts: int = 1,
+    steps_per_epoch: int,
+    visualize: bool = False,
 ) -> RolloutStats:
 
-    # @jax.jit
-    # def _cond_fn(carry):
-    #     rng, stats, timestep, prev_action, prev_reward, latent, hidden_state = carry
-    #     return jnp.less(jnp.sum(stats.episodes), 1)
+    stats = RolloutStats(reward=0, length=0)
 
-    # @jax.jit
-    # def _body_fn(carry):
-    #     rng, stats, prev_obs, prev_action, prev_reward, latent, hidden_state = carry
+    rng, reset_rng, prior_rng = jax.random.split(rng, 3)
+    xtimestep = env.reset(env.env_params, reset_rng)
+    prev_action = jnp.zeros((1, action_dim))
+    prev_reward = jnp.zeros((1, 1))
+    done = False
 
-    stats = RolloutStats(
-        reward=jnp.zeros((config.env.num_processes, 1)),
-        length=jnp.zeros((config.env.num_processes, 1)),
-    )
-
-    init_state = env.reset()
-    init_state = init_state.astype(jnp.float32)
-    prev_obs = init_state
-    prev_action = jnp.zeros((config.env.num_processes, action_dim))
-    prev_reward = jnp.zeros((config.env.num_processes, 1))
-
-    rng, prior_rng = jax.random.split(rng)
-    prior_outputs = get_prior(
-        ts_vae.params, prior_rng, batch_size=config.env.num_processes
-    )
+    prior_outputs = get_prior(ts_vae.params, prior_rng, batch_size=1)
     latent_mean = prior_outputs.latent_mean
     latent_logvar = prior_outputs.latent_logvar
     latent = jnp.concatenate([latent_mean, latent_logvar], axis=-1)
     hidden_state = prior_outputs.hidden_state
 
-    for _ in range(steps_per_rollout):
+    if visualize:
+        img = _render_obs(xtimestep.timestep.state.grid)
+        imgs = jnp.zeros((steps_per_epoch, *img.shape))
+
+    def _cond_fn(carry):
+        (
+            rng,
+            stats,
+            timestep,
+            prev_action,
+            prev_reward,
+            done,
+            latent,
+            hidden_state,
+            imgs,
+        ) = carry
+        return done
+
+    def _body_fn(carry):
+        (
+            rng,
+            stats,
+            xtimestep,
+            prev_action,
+            prev_reward,
+            done,
+            latent,
+            hidden_state,
+            imgs,
+        ) = carry
         rng, policy_rng, encoder_rng = jax.random.split(rng, 3)
+        observation = xtimestep.timestep.observation
+        observation = observation.astype(jnp.float32)
+        observation = observation[jnp.newaxis]
+
         policy_output = ts_policy.apply_fn(
             ts_policy.params,
             policy_rng,
-            env_state=prev_obs,
+            env_state=observation,
             latent=latent,
         )
         action = policy_output.action
-        next_obs, reward, done, info = env.step(action)
+        xtimestep = env.step(env.env_params, xtimestep, action.squeeze())
+        timestep = xtimestep.timestep
+        next_obs = timestep.observation
+        reward = timestep.reward
+        done = timestep.last()
         next_obs = next_obs.astype(jnp.float32)
 
+        if visualize:
+            img = _render_obs(xtimestep.timestep.state.grid)
+            imgs = imgs.at[stats.length].set(img)
+
         # add extra dimension for batch
-        if len(next_obs.shape) == 1:
-            next_obs = next_obs[jnp.newaxis]
-
-        if len(action.shape) == 1:
-            action = action[..., jnp.newaxis].astype(jnp.float32)
-
-        if len(reward.shape) == 1:
-            reward = reward[..., jnp.newaxis]
-
-        if len(done.shape) == 1:
-            done = done[..., jnp.newaxis]
+        next_obs = next_obs[jnp.newaxis]
+        action = action.reshape(1, 1).astype(jnp.float32)
+        reward = reward.reshape(1, 1)
 
         # update hidden state
         encode_outputs = ts_vae.apply_fn(
@@ -94,28 +113,23 @@ def eval_rollout(
         latent = jnp.concatenate([latent_mean, latent_logvar], axis=-1)
 
         stats = stats.replace(
-            reward=stats.reward + reward,
+            reward=stats.reward + timestep.reward,
             length=stats.length + 1,
         )
 
-    metrics = {
-        "return": np.array(jnp.sum(stats.reward)),
-        "avg_length": np.array(jnp.mean(stats.length)),
-    }
-    return metrics
-    # init_carry = (
-    #     rng,
-    #     RolloutStats(
-    #         reward=jnp.zeros((config.env.num_processes, 1)),
-    #         length=jnp.zeros((config.env.num_processes, 1)),
-    #         episodes=jnp.zeros((config.env.num_processes, 1)),
-    #     ),
-    #     init_state,
-    #     prev_action,
-    #     prev_reward,
-    #     latent,
-    #     hidden_state,
-    # )
+        return (rng, stats, xtimestep, action, reward, done, latent, hidden_state, imgs)
 
-    # final_carry = jax.lax.while_loop(_cond_fn, _body_fn, init_val=init_carry)
-    # return final_carry[1]
+    init_carry = (
+        rng,
+        stats,
+        xtimestep,
+        prev_action,
+        prev_reward,
+        done,
+        latent,
+        hidden_state,
+        imgs,
+    )
+
+    final_carry = jax.lax.while_loop(_cond_fn, _body_fn, init_val=init_carry)
+    return final_carry[1], imgs

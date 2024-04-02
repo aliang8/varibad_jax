@@ -21,6 +21,8 @@ from functools import partial
 import haiku as hk
 from pathlib import Path
 import gymnasium as gym
+import wandb
+import einops
 from varibad_jax.trainers.base_trainer import BaseTrainer
 from varibad_jax.models.helpers import init_params as init_params_vae
 from varibad_jax.models.helpers import encode_trajectory, decode, get_prior
@@ -403,17 +405,39 @@ class VAETrainer(BaseTrainer):
     def eval(self):
         logging.info("Evaluating policy...")
 
-        eval_metrics = eval_rollout(
-            next(self.rng_seq),
-            env=self.eval_envs,
-            config=self.config,
-            ts_policy=self.ts_policy,
-            ts_vae=self.ts_vae,
-            get_prior=self.get_prior,
-            action_dim=self.vae_action_dim,
-            steps_per_rollout=self.steps_per_rollout,
-            num_eval_rollouts=self.config.num_eval_rollouts,
+        rng_keys = jax.random.split(next(self.rng_seq), self.config.num_eval_rollouts)
+
+        start = time.time()
+        eval_metrics, imgs = jax.vmap(
+            eval_rollout,
+            in_axes=(0, None, None, None, None, None, None, None, None),
+        )(
+            rng_keys,
+            self.eval_envs,
+            self.config,
+            self.ts_policy,
+            self.ts_vae,
+            self.get_prior,
+            self.vae_action_dim,
+            self.steps_per_rollout,
+            self.config.visualize_rollouts,
         )
+        rollout_time = time.time() - start
+        fps = (self.config.num_eval_rollouts * self.steps_per_rollout) / rollout_time
+
+        eval_metrics = {
+            "return": jnp.sum(eval_metrics["reward"]),
+            "avg_length": jnp.mean(eval_metrics["length"]),
+            "fps": fps,
+        }
+
+        # visualize the rollouts
+        if self.wandb_run is not None:
+            # imgs is N x T x H x W x C
+            # we want N x T x C x H x W
+            imgs = einops.rearrange(imgs, "n t h w c -> n t c h w")
+            self.wandb_run.log({"eval_rollouts": wandb.Video(np.array(imgs), fps=5)})
+
         return eval_metrics
 
     def train(self):
