@@ -99,6 +99,7 @@ def get_config(config_string: str = None):
                 widening_factor=4,
                 dropout_rate=0.1,
                 max_timesteps=1000,
+                encode_separate=False,  # encode (s,a,r) as separate tokens
             )
         ),
     }

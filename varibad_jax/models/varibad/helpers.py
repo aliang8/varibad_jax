@@ -5,7 +5,7 @@ import jax.numpy as jnp
 from jax.random import PRNGKey
 from ml_collections.config_dict import ConfigDict, FrozenConfigDict
 import numpy as np
-from varibad_jax.models.varibad_vae import VaribadVAE
+from varibad_jax.models.varibad.vae import VaribadVAE
 
 
 @chex.dataclass

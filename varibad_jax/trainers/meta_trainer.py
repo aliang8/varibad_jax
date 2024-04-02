@@ -26,9 +26,9 @@ import einops
 import jax.tree_util as jtu
 
 from varibad_jax.trainers.base_trainer import BaseTrainer
-from varibad_jax.models.helpers import init_params as init_params_vae
-from varibad_jax.models.helpers import encode_trajectory, decode, get_prior
-from varibad_jax.models.update import update_vae
+from varibad_jax.models.varibad.helpers import init_params as init_params_vae
+from varibad_jax.models.varibad.helpers import encode_trajectory, decode, get_prior
+from varibad_jax.models.varibad.update import update_vae
 from varibad_jax.agents.ppo.ppo import update_policy
 from varibad_jax.agents.ppo.helpers import init_params as init_params_policy
 from varibad_jax.agents.ppo.helpers import policy_fn
@@ -546,7 +546,7 @@ class VAETrainer(BaseTrainer):
                 if (self.iter_idx + 1) % self.config.eval_interval == 0:
                     eval_metrics = self.eval()
                     if self.wandb_run is not None:
-                        eval_metrics = gutl.prefix_dict_keys(eval_metrics, "eval")
+                        eval_metrics = gutl.prefix_dict_keys(eval_metrics, "eval/")
                         self.wandb_run.log(eval_metrics, step=self.iter_idx)
 
                 if ((self.iter_idx + 1) % self.config.save_interval) == 0:

@@ -16,7 +16,7 @@ from ml_collections.config_dict import FrozenConfigDict
 import numpy as np
 from tensorflow_probability.substrates import jax as tfp
 import varibad_jax.utils.general_utils as gutl
-from varibad_jax.models.helpers import Batch, encode_trajectory, decode
+from varibad_jax.models.varibad.helpers import Batch, encode_trajectory, decode
 
 tfd = tfp.distributions
 tfb = tfp.bijectors

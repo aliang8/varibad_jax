@@ -5,6 +5,7 @@ import jax.numpy as jnp
 import flax.linen as nn
 import numpy as np
 import einops
+from ml_collections import ConfigDict
 from varibad_jax.models.common import ImageEncoder
 
 
@@ -131,12 +132,14 @@ class SARTransformerEncoder(hk.Module):
         dropout_rate: float,
         widening_factor: int = 4,
         max_timesteps: int = 1000,
+        encode_separate: bool = False,
         w_init=hk.initializers.VarianceScaling(scale=2.0),
         b_init=hk.initializers.Constant(0.0),
         **kwargs
     ):
         super().__init__()
         self.image_obs = image_obs
+        self.encode_separate = encode_separate
         self.transformer = TransformerEncoder(
             hidden_dim=hidden_dim,
             num_heads=num_heads,
@@ -182,17 +185,31 @@ class SARTransformerEncoder(hk.Module):
         timestep_embed = self.timestep_embed(jnp.arange(T)[None].repeat(B, axis=0))
         # jax.debug.breakpoint()
 
-        state_embed = state_embed + timestep_embed
+        state_embed = state_embed + timestep_embed  # [B, T, D]
         action_embed = action_embed + timestep_embed
         reward_embed = reward_embed + timestep_embed
 
-        embeddings = jnp.concatenate([state_embed, action_embed, reward_embed], axis=-1)
-        embeddings = nn.gelu(embeddings)
-        embeddings = self.embed(embeddings)
-        embeddings = nn.gelu(embeddings)
+        if self.encode_separate:
+            # stack, [B, T, D] -> [B, 3, T, D]
+            # reward should be RTG
+            embeddings = jnp.stack([reward_embed, state_embed, action_embed], axis=1)
+
+            # make one long sequence
+            embeddings = einops.rearrange(embeddings, "b c t d -> b (c t) d")
+
+            # make mask
+            mask = mask[:, None, :].repeat(3, axis=1)
+            mask = einops.rearrange(mask, "b c t -> b (c t)")
+        else:
+            embeddings = jnp.concatenate(
+                [state_embed, action_embed, reward_embed], axis=-1
+            )
+            embeddings = nn.gelu(embeddings)
+            embeddings = self.embed(embeddings)
+            embeddings = nn.gelu(embeddings)
+
         embeddings = self.transformer(embeddings, mask, deterministic=deterministic)
 
         # this is [B, T, D], need to reshape
-
         embeddings = einops.rearrange(embeddings, "b t d -> t b d")
         return embeddings

@@ -6,8 +6,8 @@ import haiku as hk
 import jax.numpy as jnp
 from ml_collections.config_dict import ConfigDict, FrozenConfigDict
 
-from varibad_jax.models.decoder import Decoder
-from varibad_jax.models.lstm_encoder import LSTMTrajectoryEncoder
+from varibad_jax.models.varibad.decoder import Decoder
+from varibad_jax.models.varibad.lstm_encoder import LSTMTrajectoryEncoder
 from varibad_jax.models.transformer_encoder import SARTransformerEncoder
 from tensorflow_probability.substrates import jax as tfp
 

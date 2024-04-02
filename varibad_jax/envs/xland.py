@@ -114,6 +114,7 @@ def make_envs(
 class XLandTimestep:
     timestep: TimeStep
     info: dict
+    init_key: PRNGKey
 
 
 class BAMDPWrapper(Wrapper):
@@ -147,11 +148,14 @@ class BAMDPWrapper(Wrapper):
                 done_bamdp=0,
                 done=0,
             ),
+            init_key=rng,
         )
         return xtimestep
 
-    def __auto_reset(self, env_params: EnvParamsT, timestep: TimeStep):
-        key, _ = jax.random.split(timestep.state.key)
+    def __auto_reset(self, env_params: EnvParamsT, timestep: TimeStep, key: PRNGKey):
+        # key, _ = jax.random.split(timestep.state.key)
+        # always reset to the same initial state after a trial is complete
+        # TODO: not sure if this is always correct
         reset_timestep = self._env.reset(env_params, key)
 
         timestep = timestep.replace(
@@ -173,7 +177,7 @@ class BAMDPWrapper(Wrapper):
         # when the MDP is done, we reset back to initial timestep, but keep the same task
         timestep = jax.lax.cond(
             done_mdp,
-            lambda: self.__auto_reset(env_params, timestep),
+            lambda: self.__auto_reset(env_params, timestep, xtimestep.init_key),
             lambda: timestep,
         )
 
@@ -198,7 +202,9 @@ class BAMDPWrapper(Wrapper):
         # info["truncation"] = jnp.where(
         #     info["step_count_bamdp"] >= self.horizon, 1 - done_bamdp, zero
         # )
-        xtimestep = XLandTimestep(timestep=timestep, info=info)
+        xtimestep = XLandTimestep(
+            timestep=timestep, info=info, init_key=xtimestep.init_key
+        )
         return xtimestep
 
     @property
