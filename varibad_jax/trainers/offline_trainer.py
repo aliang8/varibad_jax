@@ -104,18 +104,20 @@ class OfflineTrainer(BaseTrainer):
         )
         logging.info(f"average return: {jnp.mean(jnp.sum(rewards, axis=-1))}")
 
-        # need to convert rewards into returns
+        # need to convert rewards into returns to go
+        # do i need to do discounting here?
+        returns = jnp.cumsum(rewards[:, ::-1], axis=1)[:, ::-1]
 
         # split into train and eval
         train_observations, train_actions, train_rewards = (
             observations[:num_train],
             actions[:num_train],
-            rewards[:num_train],
+            returns[:num_train],
         )
         eval_observations, eval_actions, eval_rewards = (
             observations[num_train:],
             actions[num_train:],
-            rewards[num_train:],
+            returns[num_train:],
         )
 
         batch_size = self.config.batch_size
@@ -236,8 +238,8 @@ class OfflineTrainer(BaseTrainer):
             if (epoch + 1) % self.config.eval_interval == 0:
                 eval_metrics = self.eval()
                 if self.wandb_run is not None:
-                    metrics = gutl.prefix_dict_keys(eval_metrics, prefix="eval/")
-                    self.wandb_run.log(metrics)
+                    eval_metrics = gutl.prefix_dict_keys(eval_metrics, prefix="eval/")
+                    self.wandb_run.log(eval_metrics)
 
     def eval(self):
         eval_metrics = dd(list)
@@ -267,5 +269,5 @@ class OfflineTrainer(BaseTrainer):
             steps_per_rollout=self.steps_per_rollout,
             wandb_run=self.wandb_run,
         )
-
+        eval_metrics.update(rollout_metrics)
         return eval_metrics

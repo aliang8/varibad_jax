@@ -21,7 +21,7 @@ from varibad_jax.trainers.meta_trainer import VAETrainer
 from varibad_jax.trainers.rl_trainer import RLTrainer
 from varibad_jax.trainers.offline_trainer import OfflineTrainer
 
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.01"
+# os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.01"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
 _CONFIG = config_flags.DEFINE_config_file("config")
@@ -46,21 +46,23 @@ psh = {
         "dropout_rate": "do",
         "num_vae_updates": "nvu",
     },
-    "policy": {"pass_latent_to_policy": "pltp", "pass_task_to_policy": "pttp"},
+    "policy": {
+        "pass_latent_to_policy": "pltp",
+        "pass_task_to_policy": "pttp",
+        "name": "pn",
+    },
 }
 
 # run with ray tune
+
+# params for varibad vae exps
 param_space = {
     "seed": tune.grid_search([0]),
-    "env": {"env_id": tune.grid_search(["GridNaviJAX-v0"])},
-    "vae": {
-        "encoder": tune.grid_search(["transformer"]),
-        "num_layers": tune.grid_search([1]),
-        "num_heads": tune.grid_search([3]),
-        "dropout_rate": tune.grid_search([0.0]),
-        # "lr": tune.grid_search([1e-3]),
-        "num_vae_updates": tune.grid_search([10]),
-    },
+}
+
+# params for offline RL DT exps
+param_space = {
+    "seed": tune.grid_search([0]),
 }
 
 
@@ -120,6 +122,11 @@ def trial_str_creator(trial):
             else:
                 trial_str += f"{psh[k]}-{trial.config[k]}_"
 
+    # also add keys to include
+    for k, v in trial.config["keys_to_include"].items():
+        for k2 in v:
+            trial_str += f"{k[0]}-{trial.config[k][k2]}_"
+
     trial_str = trial_str[:-1]
     print("trial_str: ", trial_str)
     return trial_str
@@ -136,7 +143,9 @@ def main(_):
         config["use_wb"] = True  # log to wandb
         # update dict of dict
         config = update(config, param_space)
-        train_model = tune.with_resources(train_model_fn, {"cpu": 5, "gpu": 0.2})
+        train_model = tune.with_resources(
+            train_model_fn, {"cpu": config["cpu"], "gpu": config["gpu"]}
+        )
 
         ray_path = Path(config["root_dir"]) / config["ray_logdir"]
         run_config = RunConfig(

@@ -5,6 +5,10 @@ from ml_collections import config_dict
 def get_config(config_string: str = None):
     config = get_base_config(config_string)
 
+    config.notes = "Offline DT"
+    config.tags = ["offline_rl", "dt", "jax"]
+    config.keys_to_include = {"env": ["env_name"], "policy": ["name"]}
+
     config.data_dir = "datasets"
     config.batch_size = 64
     config.num_epochs = 1000
@@ -32,4 +36,13 @@ def get_config(config_string: str = None):
     )
     config.lr = 3e-4
     config.eps = 1e-8
+
+    # =============================================================
+    # Data collection stuff
+    # =============================================================
+    config.num_rollouts_collect = 1000
+
+    config.cpu = 5
+    config.gpu = 1.0  # needs more gpu here
+
     return config

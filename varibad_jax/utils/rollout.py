@@ -57,7 +57,7 @@ def run_rollouts(
     rollout_kwargs.update(dict(env=env, config=config))
 
     # render function doesn't work with vmap
-    eval_metrics, transitions = jax.vmap(
+    eval_metrics, (transitions, actions) = jax.vmap(
         functools.partial(rollout_fn, **rollout_kwargs)
     )(rng_keys)
 
@@ -116,6 +116,11 @@ def eval_rollout_dt(
     mask = jnp.ones((1, steps_per_rollout))
     done = False
 
+    # first return-to-go is the desired return value
+    # this is probably environment / task specific
+    rtg = 40.0
+    rewards = rewards.at[0, 0].set(rtg)
+
     def _step_fn(carry, _):
         (
             rng,
@@ -124,6 +129,7 @@ def eval_rollout_dt(
             observations,
             actions,
             rewards,
+            rtg,
             mask,
             done,
         ) = carry
@@ -158,7 +164,10 @@ def eval_rollout_dt(
 
         # ipdb.set_trace()
         actions = actions.at[0, stats.length].set(action)
-        rewards = rewards.at[0, stats.length].set(reward)
+
+        # return to go is the previous return minus rewad
+        rtg = rtg - timestep.reward
+        rewards = rewards.at[0, stats.length].set(rtg)
 
         stats = stats.replace(
             reward=stats.reward + timestep.reward,
@@ -172,6 +181,7 @@ def eval_rollout_dt(
             observations,
             actions,
             rewards,
+            rtg,
             mask,
             done,
         ), (timestep, action.squeeze(axis=-1))
@@ -183,6 +193,7 @@ def eval_rollout_dt(
         observations,
         actions,
         rewards,
+        rtg,
         mask,
         done,
     )
