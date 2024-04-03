@@ -19,6 +19,7 @@ from ray import train, tune
 from ray.train import RunConfig, ScalingConfig
 from varibad_jax.trainers.meta_trainer import VAETrainer
 from varibad_jax.trainers.rl_trainer import RLTrainer
+from varibad_jax.trainers.offline_trainer import OfflineTrainer
 
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.01"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
@@ -67,20 +68,22 @@ def train_model_fn(config):
     trial_dir = train.get_context().get_trial_dir()
     if trial_dir:
         print("Trial dir: ", trial_dir)
-        config["root_dir"] = Path(trial_dir)
+        config["exp_dir"] = Path(trial_dir)
         base_name = Path(trial_dir).name
         config["exp_name"] = base_name
     else:
         suffix = f"{config['exp_name']}_s-{config['seed']}"
-        config["root_dir"] = Path(config["root_dir"]) / "results" / suffix
+        config["exp_dir"] = Path(config["exp_dir"]) / "results" / suffix
 
     # wrap config in ConfigDict
     config = ConfigDict(config)
 
-    if config.trainer == "rl_trainer":
+    if config.trainer == "rl":
         trainer_cls = RLTrainer
-    elif config.trainer == "vae_trainer":
+    elif config.trainer == "vae":
         trainer_cls = VAETrainer
+    elif config.trainer == "offline":
+        trainer_cls = OfflineTrainer
 
     trainer = trainer_cls(config)
     if config.mode == "train":

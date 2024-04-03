@@ -40,7 +40,7 @@ class ImageEncoder(hk.Module):
         )
 
     def __call__(self, x):
-        if x.ndim >= 5:
+        if x.ndim >= 4:
             # last three are H, W, C
             lead_dims = x.shape[:-3]
             enc_input = einops.rearrange(x, "... H W C -> (...) H W C")
@@ -49,7 +49,7 @@ class ImageEncoder(hk.Module):
 
         embedding = self.encoder(enc_input)
 
-        if x.ndim >= 5:
+        if x.ndim >= 4:
             # restore leading dimensions, use lead_dims
             embedding = embedding.reshape(lead_dims + (-1,))
 

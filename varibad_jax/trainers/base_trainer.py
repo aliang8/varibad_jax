@@ -8,12 +8,20 @@ import tqdm
 import pickle
 import time
 import wandb
+import optax
+import einops
+import jax.tree_util as jtu
 from ml_collections import FrozenConfigDict
 from pathlib import Path
 from varibad_jax.envs.utils import make_envs
 from varibad_jax.envs.xland import make_envs as make_envs_xland
 import gymnasium as gym
 from jax import config as jax_config
+from varibad_jax.utils.rollout import (
+    eval_rollout_with_belief_model,
+    eval_rollout,
+    eval_rollout_dt,
+)
 
 
 class BaseTrainer:
@@ -40,7 +48,7 @@ class BaseTrainer:
             self.wandb_run = None
 
         # setup log dirs
-        self.exp_dir = Path(self.config.root_dir) / self.config.exp_name
+        self.exp_dir = Path(self.config.exp_dir) / self.config.exp_name
         print("experiment dir: ", self.exp_dir)
 
         self.ckpt_dir = self.exp_dir / "model_ckpts"
@@ -82,10 +90,14 @@ class BaseTrainer:
             )
 
         self.obs_shape = self.envs.observation_space.shape
+        self.continuous_actions = not isinstance(
+            self.envs.action_space, gym.spaces.Discrete
+        )
         if isinstance(self.envs.action_space, gym.spaces.Discrete):
             self.action_dim = self.envs.action_space.n
+            self.input_action_dim = 1
         else:
-            self.action_dim = self.envs.action_space.shape[0]
+            self.input_action_dim, self.action_dim = self.envs.action_space.shape[0]
 
         if self.config.log_level == "info":
             logging.set_verbosity(logging.INFO)

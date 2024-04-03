@@ -39,7 +39,7 @@ class TransformerLayer(hk.Module):
             [
                 hk.Linear(self.hidden_dim * self.widening_factor, w_init=w_init),
                 jax.nn.gelu,
-                hk.Linear(self.hidden_dim, w_init=w_init),
+                hk.Linear(self.hidden_dim, w_init=w_init, b_init=b_init),
             ]
         )
 
@@ -133,12 +133,15 @@ class SARTransformerEncoder(hk.Module):
         widening_factor: int = 4,
         max_timesteps: int = 1000,
         encode_separate: bool = False,
+        batch_first: bool = False,
+        format: str = "SAR",
         w_init=hk.initializers.VarianceScaling(scale=2.0),
         b_init=hk.initializers.Constant(0.0),
         **kwargs
     ):
         super().__init__()
         self.image_obs = image_obs
+        self.batch_first = batch_first
         self.encode_separate = encode_separate
         self.transformer = TransformerEncoder(
             hidden_dim=hidden_dim,
@@ -171,13 +174,16 @@ class SARTransformerEncoder(hk.Module):
         **kwargs
     ) -> jax.Array:
         # make batch first
-        T, B, D = states.shape
-
-        # jax.debug.breakpoint()
-        states = states.transpose(1, 0, 2)
-        actions = actions.transpose(1, 0, 2)
-        rewards = rewards.transpose(1, 0, 2)
-        mask = mask.transpose(1, 0)
+        if self.batch_first:
+            B, T, *_ = states.shape
+        else:
+            T, B, *_ = states.shape
+            # jax.debug.breakpoint()
+            # only swap first two axes
+            states = einops.rearrange(states, "t b ... -> b t ...")
+            actions = einops.rearrange(actions, "t b ... -> b t ...")
+            rewards = einops.rearrange(rewards, "t b ... -> b t ...")
+            mask = einops.rearrange(mask, "t b -> b t")
 
         state_embed = self.state_embed(states)
         action_embed = self.action_embed(actions)
@@ -210,6 +216,8 @@ class SARTransformerEncoder(hk.Module):
 
         embeddings = self.transformer(embeddings, mask, deterministic=deterministic)
 
-        # this is [B, T, D], need to reshape
-        embeddings = einops.rearrange(embeddings, "b t d -> t b d")
+        if not self.batch_first:
+            # this is [B, T, D], need to reshape
+            embeddings = einops.rearrange(embeddings, "b t d -> t b d")
+
         return embeddings

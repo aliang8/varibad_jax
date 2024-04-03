@@ -159,7 +159,7 @@ def get_config(config_string: str = None):
     # Experiment stuff
     # =============================================================
 
-    config.trainer = "vae_trainer"
+    config.trainer = "vae"
     config.seed = 521
     config.mode = "train"
     config.use_wb = False
@@ -179,6 +179,7 @@ def get_config(config_string: str = None):
     config.warmup_steps = 10000
     # where to save experiment artifacts (videos, checkpoints, etc)
     config.root_dir = "/scr/aliang80/varibad_jax/varibad_jax/"
+    config.exp_dir = "/scr/aliang80/varibad_jax/varibad_jax/"
     config.exp_name = "vb_jax"
     config.ray_logdir = "ray_results"
 
@@ -197,4 +198,12 @@ def get_config(config_string: str = None):
     # resume training / evaluation
     config.load_from_ckpt = False
     config.checkpoint_step = config_dict.placeholder(int)
+    config.model_ckpt_dir = ""
+
+    # =============================================================
+    # Data collection stuff
+    # =============================================================
+    config.num_rollouts_collect = 1000
+    config.data_dir = "datasets"
+
     return config

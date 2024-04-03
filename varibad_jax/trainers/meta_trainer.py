@@ -36,7 +36,81 @@ from varibad_jax.agents.ppo.helpers import policy_fn
 from varibad_jax.utils.replay_buffer import OnlineStorage
 from varibad_jax.utils.replay_vae import RolloutStorageVAE
 import varibad_jax.utils.general_utils as gutl
-from varibad_jax.utils.rollout import eval_rollout
+from varibad_jax.utils.rollout import run_rollouts
+
+
+def create_ts(config, rng, envs, vae_action_dim, action_dim):
+    continuous_actions = not isinstance(envs.action_space, gym.spaces.Discrete)
+
+    if config.load_from_ckpt:
+        model_ckpt_dir = Path(config.root_dir) / config.model_ckpt_dir
+        ckpt_file = model_ckpt_dir / f"ckpt_{config.checkpoint_step}.pkl"
+
+        with open(ckpt_file, "rb") as f:
+            ckpt = pickle.load(f)
+            vae_params = ckpt["ts_vae"]
+            policy_params = ckpt["ts_policy"]
+    else:
+        rng_vae, rng_policy = jax.random.split(rng, 2)
+        vae_params = init_params_vae(
+            config=config.vae,
+            rng_key=rng_vae,
+            observation_space=envs.observation_space,
+            action_dim=vae_action_dim,
+        )
+        policy_params = init_params_policy(
+            config=config.policy,
+            rng_key=rng_policy,
+            observation_space=envs.observation_space,
+            latent_dim=config.vae.latent_dim * 2,
+            action_space=envs.action_space,
+        )
+
+    # count number of vae params
+    num_vae_params = sum(p.size for p in jax.tree_util.tree_leaves(vae_params))
+    logging.info(f"num vae params = {num_vae_params}")
+
+    tx_vae = optax.chain(
+        # optax.clip(config.vae.max_grad_norm),
+        optax.adam(config.vae.lr, eps=config.vae.eps),
+    )
+
+    # import ipdb
+
+    # ipdb.set_trace()
+    num_policy_params = sum(p.size for p in jax.tree_util.tree_leaves(policy_params))
+    logging.info(f"num policy params = {num_policy_params}")
+
+    tx_policy = optax.chain(
+        # optax.clip_by_global_norm(config.policy.max_grad_norm),
+        optax.adam(config.policy.lr, eps=config.policy.eps),
+    )
+
+    encode_apply = partial(
+        jax.jit(
+            encode_trajectory.apply,
+            static_argnames=("config", "deterministic"),
+        ),
+        config=FrozenConfigDict(config.vae),
+    )
+
+    ts_vae = TrainState.create(apply_fn=encode_apply, params=vae_params, tx=tx_vae)
+
+    policy_apply = partial(
+        jax.jit(
+            policy_fn.apply,
+            static_argnames=("config", "is_continuous", "action_dim"),
+        ),
+        config=FrozenConfigDict(config.policy),
+        is_continuous=continuous_actions,
+        action_dim=action_dim,
+    )
+    ts_policy = TrainState.create(
+        apply_fn=policy_apply,
+        params=policy_params,
+        tx=tx_policy,
+    )
+    return ts_vae, ts_policy
 
 
 class VAETrainer(BaseTrainer):
@@ -50,7 +124,6 @@ class VAETrainer(BaseTrainer):
             self.vae_action_dim = self.action_dim
         else:
             self.vae_action_dim = 1
-        self.continuous_actions = continuous_actions
 
         # this is for the case with fixed length sessions
         steps_per_rollout = (
@@ -67,72 +140,19 @@ class VAETrainer(BaseTrainer):
             f"vae action dim = {self.vae_action_dim}, action_dim = {self.action_dim}"
         )
 
-        self.ts_vae, self.ts_policy = self.create_ts()
-        self.policy_storage, self.vae_storage = self.setup_replay_buffers()
-
-    def create_ts(self):
-        if self.config.load_from_ckpt:
-            import ipdb
-
-            ipdb.set_trace()
-            model_ckpt_dir = Path(self.config.root_dir) / "model_ckpts"
-            ckpt_file = model_ckpt_dir / f"ckpt_{self.config.checkpoint_step}.pkl"
-
-            with open(ckpt_file, "rb") as f:
-                ckpt = pickle.load(f)
-                vae_params = ckpt["ts_vae"]
-                policy_params = ckpt["ts_policy"]
-        else:
-            vae_params = init_params_vae(
-                config=self.config.vae,
-                rng_key=next(self.rng_seq),
-                observation_space=self.envs.observation_space,
-                action_dim=self.vae_action_dim,
-            )
-            policy_params = init_params_policy(
-                config=self.config.policy,
-                rng_key=next(self.rng_seq),
-                observation_space=self.envs.observation_space,
-                latent_dim=self.config.vae.latent_dim * 2,
-                action_space=self.envs.action_space,
-            )
-
-        # count number of vae params
-        num_vae_params = sum(p.size for p in jax.tree_util.tree_leaves(vae_params))
-        logging.info(f"num vae params = {num_vae_params}")
-
-        tx_vae = optax.chain(
-            # optax.clip(self.config.vae.max_grad_norm),
-            optax.adam(self.config.vae.lr, eps=self.config.vae.eps),
+        self.ts_vae, self.ts_policy = create_ts(
+            config=config,
+            rng=next(self.rng_seq),
+            envs=self.envs,
+            vae_action_dim=self.vae_action_dim,
+            action_dim=self.action_dim,
         )
-
-        # import ipdb
-
-        # ipdb.set_trace()
-        num_policy_params = sum(
-            p.size for p in jax.tree_util.tree_leaves(policy_params)
-        )
-        logging.info(f"num policy params = {num_policy_params}")
-
-        tx_policy = optax.chain(
-            # optax.clip_by_global_norm(self.config.policy.max_grad_norm),
-            optax.adam(self.config.policy.lr, eps=self.config.policy.eps),
-        )
-
-        encode_apply = partial(
-            jax.jit(
-                encode_trajectory.apply,
-                static_argnames=("config", "deterministic"),
-            ),
-            config=FrozenConfigDict(self.config.vae),
-        )
-
         self.decode_apply = partial(
             jax.jit(
                 decode.apply,
                 static_argnames=("config"),
             ),
-            config=FrozenConfigDict(self.config.vae),
+            config=FrozenConfigDict(config.vae),
         )
 
         self.get_prior = partial(
@@ -140,26 +160,10 @@ class VAETrainer(BaseTrainer):
                 get_prior.apply,
                 static_argnames=("config", "batch_size"),
             ),
-            config=FrozenConfigDict(self.config.vae),
+            config=FrozenConfigDict(config.vae),
         )
 
-        ts_vae = TrainState.create(apply_fn=encode_apply, params=vae_params, tx=tx_vae)
-
-        policy_apply = partial(
-            jax.jit(
-                policy_fn.apply,
-                static_argnames=("config", "is_continuous", "action_dim"),
-            ),
-            config=FrozenConfigDict(self.config.policy),
-            is_continuous=self.continuous_actions,
-            action_dim=self.action_dim,
-        )
-        ts_policy = TrainState.create(
-            apply_fn=policy_apply,
-            params=policy_params,
-            tx=tx_policy,
-        )
-        return ts_vae, ts_policy
+        self.policy_storage, self.vae_storage = self.setup_replay_buffers()
 
     def setup_replay_buffers(self):
         policy_storage = OnlineStorage(
@@ -404,70 +408,23 @@ class VAETrainer(BaseTrainer):
         logging.debug("done updating vae")
         return metrics
 
-    def eval(self):
-        logging.info("Evaluating policy...")
-
-        rng_keys = jax.random.split(next(self.rng_seq), self.config.num_eval_rollouts)
-
-        start = time.time()
-
-        # render function doesn't work with vmap
-        eval_metrics, transitions = jax.vmap(
-            eval_rollout,
-            in_axes=(0, None, None, None, None, None, None, None, None),
-        )(
-            rng_keys,
-            self.eval_envs,
-            self.config,
-            self.ts_policy,
-            self.ts_vae,
-            self.get_prior,
-            self.vae_action_dim,
-            self.steps_per_rollout,
-            self.config.visualize_rollouts,
-        )
-
-        rollout_time = time.time() - start
-        fps = (self.config.num_eval_rollouts * self.steps_per_rollout) / rollout_time
-
-        eval_metrics = {
-            "return": jnp.sum(eval_metrics["reward"]),
-            "avg_length": jnp.mean(eval_metrics["length"]),
-            "fps": fps,
-        }
-
-        # visualize the rollouts
-        if self.wandb_run is not None:
-            # imgs is N x T x H x W x C
-            # we want N x T x C x H x W
-
-            # generate the images
-            videos = []
-            for rollout_indx in range(self.config.num_eval_rollouts):
-                images = []
-                for step in range(self.steps_per_rollout):
-                    timestep = jtu.tree_map(
-                        lambda x: x[rollout_indx][step], transitions
-                    )
-                    images.append(
-                        self.eval_envs.render(self.eval_envs.env_params, timestep)
-                    )
-                videos.append(images)
-
-            videos = np.array(videos)
-
-            videos = einops.rearrange(videos, "n t h w c -> n t c h w")
-            self.wandb_run.log({"eval_rollouts": wandb.Video(np.array(videos), fps=5)})
-
-        return eval_metrics
-
     def train(self):
         logging.info("Training starts")
         start_time = time.time()
 
         # first eval
         if not self.config.skip_first_eval:
-            eval_metrics = self.eval()
+            eval_metrics = run_rollouts(
+                rng=next(self.rng_seq),
+                num_rollouts=self.config.num_eval_rollouts,
+                env=self.eval_envs,
+                config=self.config,
+                ts_policy=self.ts_policy,
+                ts_vae=self.ts_vae,
+                get_prior=self.get_prior,
+                action_dim=self.vae_action_dim,
+                wandb_run=self.wandb_run,
+            )
 
         for self.iter_idx in tqdm.tqdm(
             range(0, self.num_updates), smoothing=0.1, disable=self.config.disable_tqdm
@@ -544,12 +501,21 @@ class VAETrainer(BaseTrainer):
                         self.wandb_run.log(metrics, step=self.iter_idx)
 
                 if (self.iter_idx + 1) % self.config.eval_interval == 0:
-                    eval_metrics = self.eval()
+                    eval_metrics = run_rollouts(
+                        rng=next(self.rng_seq),
+                        env=self.eval_envs,
+                        config=self.config,
+                        ts_policy=self.ts_policy,
+                        ts_vae=self.ts_vae,
+                        get_prior=self.get_prior,
+                        action_dim=self.vae_action_dim,
+                        wandb_run=self.wandb_run,
+                    )
                     if self.wandb_run is not None:
                         eval_metrics = gutl.prefix_dict_keys(eval_metrics, "eval/")
                         self.wandb_run.log(eval_metrics, step=self.iter_idx)
 
-                if ((self.iter_idx + 1) % self.config.save_interval) == 0:
+                if (self.iter_idx + 1) % self.config.save_interval == 0:
                     # # Bundle everything together.
                     # self.saver.save(
                     #     iter_idx=self.iter_idx + 1,
@@ -560,7 +526,7 @@ class VAETrainer(BaseTrainer):
                     #     },
                     # )
                     # save to pickle
-                    ckpt_file = Path(self.ckpt_dir) / f"ckpt_{self.iter_idx}.pkl"
+                    ckpt_file = Path(self.ckpt_dir) / f"ckpt_{self.iter_idx + 1}.pkl"
                     logging.debug(f"saving checkpoint to {ckpt_file}")
                     with open(ckpt_file, "wb") as f:
                         pickle.dump(

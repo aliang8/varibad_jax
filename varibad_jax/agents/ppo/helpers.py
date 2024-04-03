@@ -3,9 +3,10 @@ import numpy as np
 import haiku as hk
 from typing import Any
 import jax.numpy as jnp
+import flax.linen as nn
 from jax.random import PRNGKey
 from ml_collections.config_dict import ConfigDict
-from varibad_jax.agents.ppo.actor_critic import ActorCritic, PolicyOutput
+from varibad_jax.agents.ppo.actor_critic import ActorCritic
 import gymnasium as gym
 
 
