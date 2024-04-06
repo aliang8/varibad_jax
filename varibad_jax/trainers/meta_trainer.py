@@ -39,7 +39,7 @@ import varibad_jax.utils.general_utils as gutl
 from varibad_jax.utils.rollout import run_rollouts
 
 
-def create_ts(config, rng, envs, vae_action_dim, action_dim):
+def create_ts(config, rng, envs, input_action_dim, action_dim):
     continuous_actions = not isinstance(envs.action_space, gym.spaces.Discrete)
 
     if config.load_from_ckpt:
@@ -56,7 +56,7 @@ def create_ts(config, rng, envs, vae_action_dim, action_dim):
             config=config.vae,
             rng_key=rng_vae,
             observation_space=envs.observation_space,
-            action_dim=vae_action_dim,
+            action_dim=input_action_dim,
         )
         policy_params = init_params_policy(
             config=config.policy,
@@ -113,38 +113,26 @@ def create_ts(config, rng, envs, vae_action_dim, action_dim):
     return ts_vae, ts_policy
 
 
-class VAETrainer(BaseTrainer):
+class MetaRLTrainer(BaseTrainer):
     def __init__(self, config: ConfigDict):
         super().__init__(config)
         self.total_steps = 0
         self.num_processes = self.config.env.num_processes
 
-        continuous_actions = not isinstance(self.envs.action_space, gym.spaces.Discrete)
-        if continuous_actions:
-            self.vae_action_dim = self.action_dim
-        else:
-            self.vae_action_dim = 1
-
-        # this is for the case with fixed length sessions
-        steps_per_rollout = (
-            config.env.num_episodes_per_rollout * self.envs.max_episode_steps
-        )
-        self.steps_per_rollout = steps_per_rollout
-
         self.num_updates = (
-            int(config.env.num_frames) // steps_per_rollout // config.env.num_processes
+            int(config.num_frames) // self.steps_per_rollout // self.num_processes
         )
         logging.info(f"num rl updates = {self.num_updates}")
-        logging.info(f"steps per rollout = {steps_per_rollout}")
+        logging.info(f"steps per rollout = {self.steps_per_rollout}")
         logging.info(
-            f"vae action dim = {self.vae_action_dim}, action_dim = {self.action_dim}"
+            f"input action dim = {self.input_action_dim}, action_dim = {self.action_dim}"
         )
 
         self.ts_vae, self.ts_policy = create_ts(
             config=config,
             rng=next(self.rng_seq),
             envs=self.envs,
-            vae_action_dim=self.vae_action_dim,
+            input_action_dim=self.input_action_dim,
             action_dim=self.action_dim,
         )
         self.decode_apply = partial(
@@ -189,7 +177,7 @@ class VAETrainer(BaseTrainer):
             zero_pad=True,
             max_num_rollouts=self.config.vae.buffer_size,
             state_dim=self.envs.observation_space.shape,
-            action_dim=self.vae_action_dim,
+            action_dim=self.input_action_dim,
             task_dim=None,
             vae_buffer_add_thresh=1.0,
         )
@@ -198,7 +186,10 @@ class VAETrainer(BaseTrainer):
     def collect_rollouts(self):
         logging.debug("inside rollout")
 
-        state = self.envs.reset()
+        reset_rng = next(self.rng_seq)
+        reset_rng = jax.random.split(reset_rng, self.num_processes)
+        xtimestep = self.jit_reset(self.env_params, reset_rng)
+        state = xtimestep.timestep.observation
         state = state.astype(np.float32)
         if len(state.shape) == 1:  # add extra dimension
             state = state[..., np.newaxis]
@@ -213,9 +204,6 @@ class VAETrainer(BaseTrainer):
         latent = jnp.concatenate([latent_mean, latent_logvar], axis=-1)
         hidden_state = prior_outputs.hidden_state
 
-        # import ipdb
-
-        # ipdb.set_trace()
         self.policy_storage.prev_state[0] = state
         # self.policy_storage.hidden_states[0] = hidden_state.copy()
         self.policy_storage.latent_samples.append(latent_sample.copy())
@@ -228,7 +216,7 @@ class VAETrainer(BaseTrainer):
                 (self.steps_per_rollout, self.num_processes, *self.obs_shape)
             )
             actions = np.zeros(
-                (self.steps_per_rollout, self.num_processes, self.vae_action_dim)
+                (self.steps_per_rollout, self.num_processes, self.input_action_dim)
             )
             rewards = np.zeros((self.steps_per_rollout, self.num_processes, 1))
             masks = np.zeros((self.steps_per_rollout, self.num_processes))
@@ -244,8 +232,14 @@ class VAETrainer(BaseTrainer):
 
             # take a step in the environment
             action = policy_output.action
-            next_state, rew_raw, done, infos = self.envs.step(action)
+
+            step_rng = next(self.rng_seq)
+            step_rng = jax.random.split(step_rng, self.num_processes)
+            xtimestep = self.jit_step(self.env_params, xtimestep, action)
+            next_state = xtimestep.timestep.observation
             next_state = next_state.astype(np.float32)
+            rew_raw = xtimestep.timestep.reward
+            done = xtimestep.timestep.last()
             rew_norm = rew_raw
 
             # add extra dimension
@@ -302,12 +296,11 @@ class VAETrainer(BaseTrainer):
                 done=done,
                 task=None,
             )
-            # print(done)
-            # print(self.vae_storage.curr_timestep)
-            # print(self.envs._xtimestep.info["done"])
-            # print(self.envs._xtimestep.info["done_bamdp"])
-            # print(self.envs._xtimestep.timestep.last())
-            # print(self.envs._xtimestep.info["step_count_bamdp"])
+            # print("*" * 20)
+            # print(xtimestep.info["done"])
+            # print(xtimestep.info["done_bamdp"])
+            # print(xtimestep.timestep.last())
+            # print(xtimestep.info["step_count_bamdp"])
             # print("-" * 20)
             self.policy_storage.next_state[step] = next_state.copy()
 
@@ -416,13 +409,13 @@ class VAETrainer(BaseTrainer):
         if not self.config.skip_first_eval:
             eval_metrics = run_rollouts(
                 rng=next(self.rng_seq),
-                num_rollouts=self.config.num_eval_rollouts,
                 env=self.eval_envs,
                 config=self.config,
                 ts_policy=self.ts_policy,
                 ts_vae=self.ts_vae,
                 get_prior=self.get_prior,
-                action_dim=self.vae_action_dim,
+                steps_per_rollout=self.steps_per_rollout,
+                action_dim=self.input_action_dim,
                 wandb_run=self.wandb_run,
             )
 
@@ -508,7 +501,8 @@ class VAETrainer(BaseTrainer):
                         ts_policy=self.ts_policy,
                         ts_vae=self.ts_vae,
                         get_prior=self.get_prior,
-                        action_dim=self.vae_action_dim,
+                        steps_per_rollout=self.steps_per_rollout,
+                        action_dim=self.input_action_dim,
                         wandb_run=self.wandb_run,
                     )
                     if self.wandb_run is not None:

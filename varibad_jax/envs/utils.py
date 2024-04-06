@@ -4,94 +4,50 @@ import jax
 import xminigrid
 from typing import ClassVar, Optional
 
-from brax.envs import Env, State, Wrapper
 from varibad_jax.envs.gridworld_jax import GridNavi
 from varibad_jax.envs.wrappers import BAMDPWrapper
 
+from xminigrid.benchmarks import Benchmark, load_benchmark, load_benchmark_from_path
+from xminigrid.rendering.text_render import print_ruleset
+
 
 def make_envs(
+    env_name: str,
     env_id: str,
     seed: int = 0,
     num_envs: int = 1,
     num_episodes_per_rollout: int = 4,
+    benchmark_path: str = "",
+    ruleset_id: int = 0,
     env_kwargs=dict(),
+    training: bool = True,
+    **kwargs,
 ):
+    if training == False:
+        seed += 1000
+
     # setup environment
-    env = GridNavi(seed=seed, **env_kwargs)
-    env = BAMDPWrapper(env, num_episodes_per_rollout=num_episodes_per_rollout)
-    if num_envs > 1:
-        env = VmapWrapper(env, num_envs=num_envs)
-    env = GymWrapper(env, seed)
-    return env
+    if env_name == "gridworld":
+        env = GridNavi(**env_kwargs)
+        possible_goals = env.possible_goals(env_kwargs["grid_size"])
+        env_params = env.default_params(possible_goals=possible_goals, **env_kwargs)
+    elif env_name == "xland":
+        env, env_params = xminigrid.make(env_id, **env_kwargs)
 
+        # either we define the ruleset manually here OR load from benchmark
+        loaded_benchmark = load_benchmark_from_path(benchmark_path)
+        num_rulesets = loaded_benchmark.num_rulesets()
+        assert ruleset_id < num_rulesets, f"ruleset_id {ruleset_id} not in benchmark"
 
-class VmapWrapper(Wrapper):
-    """Vectorizes JAX env."""
+        ruleset = loaded_benchmark.get_ruleset(ruleset_id=ruleset_id)
+        print_ruleset(ruleset)
+        env_params = env_params.replace(ruleset=ruleset)
 
-    def __init__(self, env: Env, num_envs: Optional[int] = None):
-        super().__init__(env)
-        self.num_envs = num_envs
+    if num_episodes_per_rollout > 1:
+        env = BAMDPWrapper(
+            env,
+            env_params=env_params,
+            num_episodes_per_rollout=num_episodes_per_rollout,
+        )
 
-    def reset(self, rng: jax.Array):
-        if self.num_envs is not None:
-            rng = jax.random.split(rng, self.num_envs)
-        return jax.vmap(self.env.reset)(rng)
-
-    def step(self, state: State, action: jax.Array):
-        return jax.vmap(self.env.step)(state, action)
-
-
-class GymWrapper(gym.Env):
-    """A wrapper that converts JAX Env to one that follows Gym API."""
-
-    # Flag that prevents `gym.register` from misinterpreting the `_step` and
-    # `_reset` as signs of a deprecated gym Env API.
-    _gym_disable_underscore_compat: ClassVar[bool] = True
-
-    def __init__(self, env, seed: int = 0):
-        self._env = env
-        self.metadata = {
-            "render.modes": ["human", "rgb_array"],
-        }
-        self.seed(seed)
-        self._state = None
-        self.observation_space = self._env.observation_space
-        self.action_space = self._env.action_space
-        self.task_dim = self._env.task_dim
-
-        def reset(key):
-            key1, key2 = jax.random.split(key)
-            state = self._env.reset(key2)
-            return state, state.obs, key1
-
-        self._reset = jax.jit(reset)
-
-        def step(state, action):
-            state = self._env.step(state, action)
-            info = {**state.metrics, **state.info}
-            return state, state.obs, state.reward, state.done, info
-
-        self._step = jax.jit(step)
-
-    def reset(self):
-        self._state, obs, self._key = self._reset(self._key)
-        # We return device arrays for pytorch users.
-        return obs
-
-    def step(self, action):
-        self._state, obs, reward, done, info = self._step(self._state, action)
-        # We return device arrays for pytorch users.
-        return obs, reward, done, info
-
-    def seed(self, seed: int = 0):
-        self._key = jax.random.PRNGKey(seed)
-
-    def render(self, mode="human"):
-        self._env.render(mode)
-
-    @property
-    def max_episode_steps(self):
-        return self._env.max_episode_steps
-
-    def close(self):
-        self._env.close()
+    return env, env_params

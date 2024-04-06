@@ -109,8 +109,8 @@ def get_config(config_string: str = None):
     config.tags = ["varibad", "jax"]
     config.keys_to_include = {
         "env": ["env_name"],
-        "policy": ["name"],
-        "vae": ["encoder", "num_vae_updates"],
+        "policy": ["algo", "pass_latent_to_policy"],
+        "vae": ["num_vae_updates"],
     }
 
     config.cpu = 5

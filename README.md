@@ -25,9 +25,13 @@ Also supports using Ray for hyperparameter search and WandB for logging experime
 Meta-RL algorithms supported:
 - [x] VariBAD
 - [ ] RL^2
+- [ ] HyperX
 
 Offline RL:
 - [x] Decision Transformers 
+
+Misc Models:
+- [ ] Genie
 
 Environments supported:
 - [x] Gridworld

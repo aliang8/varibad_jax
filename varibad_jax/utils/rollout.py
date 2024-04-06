@@ -72,7 +72,7 @@ def run_rollouts(
     print(eval_metrics)
 
     # visualize the rollouts
-    if wandb_run is not None:
+    if wandb_run is not None and config.visualize_rollouts:
         # imgs is N x T x H x W x C
         # we want N x T x C x H x W
 

@@ -9,7 +9,7 @@ import haiku as hk
 import gymnasium as gym
 from ml_collections import ConfigDict, FieldReference, FrozenConfigDict, config_flags
 from varibad_jax.trainers.meta_trainer import create_ts
-from varibad_jax.envs.xland import make_envs
+from varibad_jax.envs.xland_utils import make_envs
 from varibad_jax.utils.rollout import eval_rollout
 from varibad_jax.models.varibad.helpers import encode_trajectory, decode, get_prior
 

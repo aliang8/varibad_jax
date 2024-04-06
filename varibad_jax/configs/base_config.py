@@ -14,7 +14,6 @@ def get_config(config_string: str = None):
     config = config_dict.ConfigDict()
 
     env_config = config_dict.ConfigDict()
-    env_config.num_frames = 20_000_000
 
     # define env specific configs
     envs = {
@@ -27,6 +26,7 @@ def get_config(config_string: str = None):
                 num_processes=16,
                 normalize_rews=False,
                 image_obs=False,
+                env_kwargs=dict(grid_size=5, max_episode_steps=15, num_actions=5),
             )
         ),
         "xland": config_dict.ConfigDict(
@@ -37,8 +37,10 @@ def get_config(config_string: str = None):
                 #     height=5,
                 #     width=5,
                 # ),
-                benchmark_path="/scr/aliang80/varibad_jax/varibad_jax/envs/xland_benchmarks/test_ruleset.pkl",
-                ruleset_id=0,
+                env_kwargs=dict(
+                    benchmark_path="/scr/aliang80/varibad_jax/varibad_jax/envs/xland_benchmarks/test_ruleset.pkl",
+                    ruleset_id=0,
+                ),
                 env_id="XLand-MiniGrid-R1-9x9",
                 num_episodes_per_rollout=4,
                 steps_per_rollout=15,
@@ -58,6 +60,7 @@ def get_config(config_string: str = None):
     # =============================================================
     # Experiment stuff
     # =============================================================
+    config.num_frames = 20_000_000
     config.trainer = "vae"
     config.seed = 521
     config.mode = "train"
@@ -78,6 +81,7 @@ def get_config(config_string: str = None):
     config.root_dir = "/scr/aliang80/varibad_jax/varibad_jax/"
     config.exp_dir = "/scr/aliang80/varibad_jax/varibad_jax/"
     config.exp_name = "vb_jax"
+    config.group_name = ""
     config.ray_logdir = "ray_results"
 
     # for rollout visualization

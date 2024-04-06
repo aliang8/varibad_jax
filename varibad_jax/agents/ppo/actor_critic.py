@@ -70,9 +70,7 @@ class ActorCritic(hk.Module):
             **init_kwargs,
         )
 
-        self.action_head = ActionHead(
-            is_continuous, action_dim, w_init, b_init, **init_kwargs
-        )
+        self.action_head = ActionHead(is_continuous, action_dim, **init_kwargs)
 
     def __call__(
         self, state: jnp.ndarray, latent: jnp.ndarray = None, task: jnp.ndarray = None
@@ -97,7 +95,6 @@ class ActorCritic(hk.Module):
         value = self.critic_mlp(policy_input)
 
         h = self.action_pred(policy_input)
-
         policy_output = self.action_head(h)
         policy_output.value = value
         return policy_output

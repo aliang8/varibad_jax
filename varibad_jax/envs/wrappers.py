@@ -1,13 +1,25 @@
-from typing import List, Tuple
+from typing import List, Tuple, ClassVar, Optional
 import jax
 import jax.numpy as jnp
 from jax.random import PRNGKey
-from brax.envs import State, Env, Wrapper
+import chex
+import numpy as np
+import gymnasium as gym
+from xminigrid.types import TimeStep, StepType, EnvCarryT
+from xminigrid.environment import EnvParamsT, EnvParams, Environment
+from xminigrid.wrappers import Wrapper
+
+
+@chex.dataclass
+class TimestepInfo:
+    timestep: TimeStep
+    info: dict
+    init_key: PRNGKey
 
 
 class BAMDPWrapper(Wrapper):
 
-    def __init__(self, env, num_episodes_per_rollout: int):
+    def __init__(self, env, env_params: EnvParamsT, num_episodes_per_rollout: int):
         """Wrapper, creates a multi-episode (BA)MDP around a one-episode MDP.
 
         Automatically deals with - horizons H in the MDP vs horizons H+ in the
@@ -15,54 +27,83 @@ class BAMDPWrapper(Wrapper):
         needed to make states markov)
         """
         super().__init__(env)
+        self.env = env
+        self.env_params = env_params
 
         # calculate horizon length H^+
-        self.num_episodes = num_episodes_per_rollout
-        self.episode_length = self.env._max_episode_steps
-        self.horizon = self.episode_length * self.num_episodes
+        self.bamdp_horizon = env_params.max_episode_steps * num_episodes_per_rollout
 
-    def reset(self, rng: PRNGKey):
-        state = self.env.reset(rng)
+    def reset(self, env_params: EnvParamsT, rng: PRNGKey):
+        timestep = self.env.reset(env_params, rng)
 
-        zeros = jnp.zeros(rng.shape[:-1], dtype=jnp.int32)
-        state.info["done_mdp"] = zeros
-        state.info["step_count"] = zeros
-        state.info["step_count_bamdp"] = zeros
-        state.info["done_bamdp"] = zeros
-        return state
+        xtimestep = TimestepInfo(
+            timestep=timestep,
+            info=dict(
+                step_count=0,
+                step_count_bamdp=0,
+                done_mdp=0,
+                done_bamdp=0,
+                done=0,
+            ),
+            init_key=rng,
+        )
+        return xtimestep
 
-    def step(self, state: State, action: jax.Array):
-        state = self.env.step(state, action)
+    def __auto_reset(self, env_params: EnvParamsT, timestep: TimeStep, key: PRNGKey):
+        # key, _ = jax.random.split(timestep.state.key)
+        # always reset to the same initial state after a trial is complete
+        # TODO: not sure if this is always correct
+        reset_timestep = self._env.reset(env_params, key)
+
+        timestep = timestep.replace(
+            state=reset_timestep.state,
+            observation=reset_timestep.observation,
+        )
+        return timestep
+
+    def step(self, env_params: EnvParamsT, xtimestep: TimestepInfo, action: jax.Array):
+        timestep = self.env.step(env_params, xtimestep.timestep, action)
+
         # ignore environment done
-        one = jnp.ones_like(state.done, dtype=jnp.int32)
-        zero = jnp.zeros_like(state.done, dtype=jnp.int32)
-        state.info["step_count"] = state.info["step_count"] + 1
-        steps = state.info["step_count"]
-        done_mdp = jnp.where(steps >= self.episode_length, one, zero)
-        state.info["done_mdp"] = done_mdp
+        info = xtimestep.info
+        info["step_count"] = info["step_count"] + 1
+        steps = info["step_count"]
+        done_mdp = jnp.where(steps >= env_params.max_episode_steps, 1, 0)
+        info["done_mdp"] = done_mdp
 
-        # when the MDP is done, we reset back to initial state, but keep the same task
-        init_xy = jnp.array(self.init_state)
-        new_obs = jnp.where(done_mdp, init_xy, state.obs)
-        reward = jnp.where(done_mdp, jnp.zeros_like(state.reward) - 0.1, state.reward)
-        state = state.replace(obs=new_obs, reward=reward)
+        # when the MDP is done, we reset back to initial timestep, but keep the same task
+        timestep = jax.lax.cond(
+            done_mdp,
+            lambda: self.__auto_reset(env_params, timestep, xtimestep.init_key),
+            lambda: timestep,
+        )
 
         # also reset step count
-        state.info["step_count"] = jnp.where(
+        info["step_count"] = jnp.where(
             done_mdp,
-            jnp.zeros_like(state.info["step_count"]),
-            state.info["step_count"],
+            jnp.zeros_like(info["step_count"]),
+            info["step_count"],
         )
 
         # check if the entire rollout is complete
-        state.info["step_count_bamdp"] = state.info["step_count_bamdp"] + 1
-        done_bamdp = jnp.where(
-            state.info["step_count_bamdp"] == self.horizon, one, zero
-        )
-        state.info["done_bamdp"] = done_bamdp
-        state = state.replace(done=done_bamdp)
+        info["step_count_bamdp"] = info["step_count_bamdp"] + 1
+        done_bamdp = jnp.where(info["step_count_bamdp"] == self.bamdp_horizon, 1, 0)
+        info["done_bamdp"] = done_bamdp
+        info["done"] = done_bamdp
 
-        state.info["truncation"] = jnp.where(
-            state.info["step_count_bamdp"] >= self.horizon, 1 - state.done, zero
+        # finish the episode
+        timestep = timestep.replace(
+            step_type=jnp.where(done_bamdp, StepType.LAST, StepType.FIRST)
         )
-        return state
+        xtimestep = TimestepInfo(
+            timestep=timestep, info=info, init_key=xtimestep.init_key
+        )
+        return xtimestep
+
+    @property
+    def observation_space(self):
+        return self.env.observation_space(self.env_params)
+
+    @property
+    def action_space(self):
+        return self.env.action_space(self.env_params)

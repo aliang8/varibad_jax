@@ -3,92 +3,115 @@ import numpy as np
 import jax.numpy as jnp
 import itertools
 from typing import List
-from brax.envs import State
 import gymnasium as gym
+from flax import struct
 from gymnasium.utils import seeding
+from xminigrid.types import TimeStep, StepType, EnvCarryT
+from xminigrid.environment import EnvParamsT, EnvParams
+
+
+class GridNaviEnvParams(struct.PyTreeNode):
+    possible_goals: jnp.ndarray
+    grid_size: int = 5
+    max_episode_steps: int = 15
+    num_actions: int = 5
+
+
+class State(struct.PyTreeNode):
+    key: jax.Array
+    step_num: jax.Array
+    goal: jax.Array
 
 
 class GridNavi:
     """Grid navigation environment in BRAX."""
 
-    def __init__(self, seed: int = 0, num_cells: int = 5, episode_length: int = 15):
+    def __init__(self, **kwargs):
         super().__init__()
-        self._max_episode_steps = episode_length
-        self.num_cells = num_cells
-
-        obs_shape = (2,)  # x, y coordinates
-        self.observation_space = gym.spaces.Box(
-            low=0, high=self.num_cells - 1, shape=obs_shape
-        )
-
-        # noop, up, right, down, left
-        self.action_space = gym.spaces.Discrete(5)
         self.task_dim = 2
 
-        # possible starting states
         # always starting at the bottom right
         self.init_state = jnp.array([0, 0])
 
-        # goals can be anywhere except on possible starting states and immediately
-        # around it
-        self.possible_goals = list(itertools.product(range(self.num_cells), repeat=2))
-        self.possible_goals.remove((0, 0))
-        self.possible_goals.remove((0, 1))
-        self.possible_goals.remove((1, 1))
-        self.possible_goals.remove((1, 0))
-        self.possible_goals = jnp.array(self.possible_goals)
+    def action_space(self, params: EnvParamsT):
+        # noop, up, right, down, left
+        action_space = gym.spaces.Discrete(params.num_actions)
+        return action_space
 
-    def reset(self, rng: jax.Array):
+    def observation_space(self, params: EnvParamsT):
+        return gym.spaces.Box(low=0, high=params.grid_size - 1, shape=(2,))
+
+    def num_actions(self, params: EnvParamsT):
+        return params.num_actions
+
+    def observation_shape(self, params: EnvParamsT):
+        return (2,)
+
+    def possible_goals(self, grid_size: int):
+        possible_goals = jnp.dstack(
+            jnp.meshgrid(jnp.arange(grid_size), jnp.arange(grid_size))
+        ).reshape(-1, 2)
+        # remove (0,0), (0,1), (1,0), and (1,1)
+        possible_goals = jnp.delete(possible_goals, jnp.array([0, 1, 5, 6]), axis=0)
+        possible_goals = jnp.array(possible_goals)
+        return possible_goals
+
+    def default_params(self, **kwargs) -> GridNaviEnvParams:
+        default_params = GridNaviEnvParams(possible_goals=None, grid_size=5)
+        return default_params.replace(**kwargs)
+
+    def reset(self, params: EnvParamsT, rng: jax.Array):
         init_xy = jnp.array(self.init_state)
         obs = init_xy
-        reward, done, zero = jnp.zeros(3)
 
         # sample a random goal
-        indx = jax.random.randint(rng, (1,), 0, len(self.possible_goals))[0]
-        goal = self.possible_goals[indx]
+        possible_goals = params.possible_goals
+        indx = jax.random.randint(rng, (1,), 0, len(possible_goals))[0]
+        goal = possible_goals[indx]
 
         # sample a new task from num_cells
-        info = {
-            "goal": goal,
-            "timestep": 0,
-        }
-        metrics = {"reward": reward}
-
-        return State(
-            pipeline_state=None,
-            obs=obs,
-            reward=reward.astype(jnp.float32),
-            done=done,
-            metrics=metrics,
-            info=info,
+        state = State(key=rng, step_num=jnp.array(0), goal=goal)
+        timestep = TimeStep(
+            state=state,
+            step_type=StepType.FIRST,
+            reward=jnp.asarray(0.0),
+            discount=jnp.asarray(1.0),
+            observation=obs,
         )
+        return timestep
 
-    def step(self, state: State, action: jax.Array):
-        curr_obs = state.obs
+    def step(self, params: EnvParamsT, timestep: TimeStep, action: jax.Array):
+        curr_obs = timestep.observation
 
         # Define the possible actions: up, down, left, right
         # 0 = right, 1 = left, 2 = down, 3 = up, 4 = noop
         actions = jnp.array([(0, 1), (0, -1), (-1, 0), (1, 0), (0, 0)])
 
-        new_xy = curr_obs + actions[action[0]]
+        new_xy = curr_obs + actions[action]
         # clip the new state to be within the grid boundaries
         new_xy = jnp.clip(
-            new_xy, jnp.array([0, 0]), jnp.array([self.num_cells, self.num_cells]) - 1
+            new_xy,
+            jnp.array([0, 0]),
+            jnp.array([params.grid_size, params.grid_size]) - 1,
         )
         obs = new_xy
-        reached_goal = jnp.array_equal(state.info["goal"], obs)
+        reached_goal = jnp.array_equal(timestep.state.goal, obs)
         reward = jnp.where(reached_goal, 1.0, -0.1)
 
-        metrics = {"reward": reward, "reached_goal": reached_goal}
-        state.info["timestep"] = state.info["timestep"] + 1
-        done = state.info["timestep"] >= self._max_episode_steps
-        return state.replace(obs=obs, reward=reward, done=done, metrics=metrics)
+        new_state = timestep.state.replace(
+            step_num=timestep.state.step_num + 1,
+        )
+        terminated = False
+        truncated = jnp.equal(new_state.step_num, params.max_episode_steps)
+        step_type = jax.lax.select(terminated | truncated, StepType.LAST, StepType.MID)
+        discount = jax.lax.select(terminated, jnp.asarray(0.0), jnp.asarray(1.0))
 
-    # def xy_to_id(self, xy: jax.Array):
-    #     mat = jnp.arange(0, self.num_cells**2).reshape((self.num_cells, self.num_cells))
-    #     id = mat[xy[0], xy[1]]
-    #     return id
+        timestep = TimeStep(
+            state=new_state,
+            step_type=step_type,
+            reward=reward,
+            discount=discount,
+            observation=obs,
+        )
 
-    @property
-    def max_episode_steps(self):
-        return self._max_episode_steps
+        return timestep

@@ -10,6 +10,7 @@ import pickle
 import time
 import jax
 import flax
+import re
 import collections
 from ml_collections import ConfigDict, FieldReference, FrozenConfigDict, config_flags
 from typing import Any
@@ -17,7 +18,7 @@ import pickle
 from pathlib import Path
 from ray import train, tune
 from ray.train import RunConfig, ScalingConfig
-from varibad_jax.trainers.meta_trainer import VAETrainer
+from varibad_jax.trainers.meta_trainer import MetaRLTrainer
 from varibad_jax.trainers.rl_trainer import RLTrainer
 from varibad_jax.trainers.offline_trainer import OfflineTrainer
 
@@ -31,6 +32,7 @@ psh = {
     "batch_size": "bs",
     "seed": "s",
     "env": {
+        "env_name": "en",
         "env_id": "eid",
         "num_frames": "nf",
         "num_processes": "np",
@@ -50,6 +52,7 @@ psh = {
         "pass_latent_to_policy": "pltp",
         "pass_task_to_policy": "pttp",
         "name": "pn",
+        "algo": "alg",
     },
 }
 
@@ -73,6 +76,9 @@ def train_model_fn(config):
         config["exp_dir"] = Path(trial_dir)
         base_name = Path(trial_dir).name
         config["exp_name"] = base_name
+        # the group name is without seed
+        config["group_name"] = re.sub("_s-\d", "", base_name)
+        logging.info(f"wandb group name: {config['group_name']}")
     else:
         suffix = f"{config['exp_name']}_s-{config['seed']}"
         config["exp_dir"] = Path(config["exp_dir"]) / "results" / suffix
@@ -83,7 +89,7 @@ def train_model_fn(config):
     if config.trainer == "rl":
         trainer_cls = RLTrainer
     elif config.trainer == "vae":
-        trainer_cls = VAETrainer
+        trainer_cls = MetaRLTrainer
     elif config.trainer == "offline":
         trainer_cls = OfflineTrainer
 
@@ -124,8 +130,15 @@ def trial_str_creator(trial):
 
     # also add keys to include
     for k, v in trial.config["keys_to_include"].items():
-        for k2 in v:
-            trial_str += f"{k[0]}-{trial.config[k][k2]}_"
+        if v is None:
+            if k not in param_space:
+                trial_str += f"{psh[k]}-{trial.config[k]}_"
+        else:
+            for k2 in v:
+                if k not in param_space or (
+                    k in param_space and k2 not in param_space[k]
+                ):
+                    trial_str += f"{psh[k][k2]}-{trial.config[k][k2]}_"
 
     trial_str = trial_str[:-1]
     print("trial_str: ", trial_str)
