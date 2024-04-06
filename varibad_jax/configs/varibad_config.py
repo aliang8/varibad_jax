@@ -1,4 +1,5 @@
 from varibad_jax.configs.base_config import get_config as get_base_config
+from varibad_jax.configs.model_configs import transformer_config, image_encoder_config
 from ml_collections import config_dict
 
 
@@ -9,8 +10,6 @@ def get_config(config_string: str = None):
     # VariBAD VAE configuration
     # =============================================================
     vae_config = config_dict.ConfigDict()
-    vae_config.image_obs = config.env.get_ref("image_obs")
-
     vae_config.lr = 1e-3
     vae_config.buffer_size = 100_000
     vae_config.trajs_per_batch = 25
@@ -33,25 +32,22 @@ def get_config(config_string: str = None):
     # Reward prediction
     vae_config.decode_rewards = True
     vae_config.rew_recon_weight = 1.0
+    vae_config.embedding_dim = 16
+
+    transformer_config.encode_separate = False
+    image_encoder_config.embedding_dim = vae_config.get_ref("embedding_dim")
 
     # encoder specific configs
     encoder = {
         "lstm": config_dict.ConfigDict(
-            dict(name="lstm", lstm_hidden_size=64, batch_first=False)
-        ),
-        "transformer": config_dict.ConfigDict(
             dict(
-                name="transformer",
-                hidden_dim=64,
-                num_heads=8,
-                num_layers=3,
-                attn_size=32,
-                widening_factor=4,
-                dropout_rate=0.1,
-                max_timesteps=1000,
-                encode_separate=False,  # encode (s,a,r) as separate tokens
+                name="lstm",
+                lstm_hidden_size=64,
+                batch_first=False,
+                image_encoder_config=image_encoder_config,
             )
         ),
+        "transformer": transformer_config,
     }
 
     for k, v in encoder.items():
@@ -59,7 +55,7 @@ def get_config(config_string: str = None):
             encoder_config = v
             break
 
-    encoder_config.embedding_dim = 8
+    encoder_config.embedding_dim = vae_config.get_ref("embedding_dim")
     encoder_config.image_obs = config.env.get_ref("image_obs")
 
     # decoder specific kwargs
@@ -68,7 +64,8 @@ def get_config(config_string: str = None):
             image_obs=config.env.get_ref("image_obs"),
             input_action=False,
             input_prev_state=False,
-            embedding_dim=encoder_config.get_ref("embedding_dim"),
+            embedding_dim=vae_config.get_ref("embedding_dim"),
+            image_encoder_config=image_encoder_config,
             layer_sizes=[32, 32],
         )
     )
@@ -82,6 +79,7 @@ def get_config(config_string: str = None):
     # Policy configs
     # =============================================================
     policy_config = config_dict.ConfigDict()
+    policy_config.image_encoder_config = image_encoder_config
     policy_config.image_obs = config.env.get_ref("image_obs")
     policy_config.pass_state_to_policy = True
     policy_config.pass_latent_to_policy = True

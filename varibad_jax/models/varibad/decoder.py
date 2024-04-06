@@ -19,6 +19,7 @@ class Decoder(hk.Module):
         input_prev_state: bool = False,
         embedding_dim: int = 8,
         layer_sizes: List[int] = [32, 32],
+        image_encoder_config: dict = None,
         w_init=hk.initializers.VarianceScaling(scale=2.0),
         b_init=hk.initializers.Constant(0.0),
         **kwargs
@@ -47,7 +48,7 @@ class Decoder(hk.Module):
         )
 
         if self.image_obs:
-            self.state_embed = ImageEncoder(self.embedding_dim, **init_kwargs)
+            self.state_embed = ImageEncoder(**image_encoder_config, **init_kwargs)
         else:
             self.state_embed = hk.Linear(
                 self.embedding_dim, name="state_embed", **init_kwargs
@@ -72,12 +73,16 @@ class Decoder(hk.Module):
         prev_states: jnp.ndarray = None,
         next_states: jnp.ndarray = None,
         actions: jnp.ndarray = None,
+        is_training: bool = True,
     ):
         """Forwards the reward decoder network"""
         latent_embed = self.latent_embed(latents)
         latent_embed = nn.gelu(latent_embed)
 
-        next_state_embed = self.state_embed(next_states)
+        if self.image_obs:
+            next_state_embed = self.state_embed(next_states, is_training=is_training)
+        else:
+            next_state_embed = self.state_embed(next_states)
         next_state_embed = nn.gelu(next_state_embed)
         inputs = jnp.concatenate((latent_embed, next_state_embed), axis=-1)
 

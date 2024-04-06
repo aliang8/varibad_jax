@@ -8,7 +8,7 @@ import numpy as np
 from varibad_jax.models.decision_transformer.model import DecisionTransformer
 
 
-@hk.transform
+@hk.transform_with_state
 def dt_fn(config: FrozenConfigDict, is_continuous: bool, action_dim: int, **kwargs):
     model = DecisionTransformer(
         config=config, is_continuous=is_continuous, action_dim=action_dim
@@ -35,7 +35,7 @@ def init_params_dt(
     dummy_rewards = np.zeros((t, bs, 1))
     dummy_mask = np.ones((t, bs))
 
-    dt_params = dt_fn.init(
+    dt_params, state = dt_fn.init(
         rng_key,
         config=config,
         is_continuous=is_continuous,
@@ -45,6 +45,7 @@ def init_params_dt(
             actions=dummy_actions,
             rewards=dummy_rewards,
             mask=dummy_mask,
+            is_training=True,
         )
     )
-    return dt_params
+    return dt_params, state

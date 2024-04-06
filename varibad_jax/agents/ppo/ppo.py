@@ -24,10 +24,11 @@ tfb = tfp.bijectors
 
 def loss_policy(
     params,
+    state: hk.State,
     rng_key: PRNGKey,
     ts: TrainState,
     config: ConfigDict,
-    state: jnp.ndarray,
+    env_state: jnp.ndarray,
     target: jnp.ndarray,
     value_old: jnp.ndarray,
     log_pi_old: jnp.ndarray,
@@ -36,8 +37,14 @@ def loss_policy(
     latent: jnp.ndarray = None,
     task: jnp.ndarray = None,
 ):
-    policy_output = ts.apply_fn(
-        params, rng_key, env_state=state, latent=latent, task=task
+    policy_output, state = ts.apply_fn(
+        params,
+        state,
+        rng_key,
+        env_state=env_state,
+        latent=latent,
+        task=task,
+        is_training=True,
     )
     policy_dist = policy_output.dist
     value_pred = policy_output.value
@@ -80,8 +87,7 @@ def loss_policy(
         + config.value_loss_coeff * value_loss
         - config.entropy_coeff * entropy
     )
-
-    return total_loss, {
+    metrics = {
         "value_loss": value_loss,
         "actor_loss": loss_actor,
         "entropy": entropy,
@@ -90,15 +96,17 @@ def loss_policy(
         "gae_mean": gae.mean(),
         "approx_kl": approx_kl,
     }
+    return (total_loss, (metrics, state))
 
 
 @partial(jax.jit, static_argnames="config")
 def update_jit(
     ts: TrainState,
+    state: hk.State,
     config: ConfigDict,
     rng_key: PRNGKey,
     idxes: np.ndarray,
-    state: np.ndarray,
+    env_state: np.ndarray,
     action: np.ndarray,
     log_pi_old: np.ndarray,
     value: np.ndarray,
@@ -110,12 +118,13 @@ def update_jit(
     logging.info("update jit policy! POLICY!!!")
     for idx in idxes:
         loss_and_grad_fn = jax.value_and_grad(loss_policy, has_aux=True)
-        (_, loss_dict), grads = loss_and_grad_fn(
+        (_, (loss_dict, state)), grads = loss_and_grad_fn(
             ts.params,
+            state,
             rng_key,
             ts=ts,
             config=config,
-            state=state[idx],
+            env_state=env_state[idx],
             target=target[idx],
             value_old=value[idx],
             log_pi_old=log_pi_old[idx],
@@ -128,17 +137,18 @@ def update_jit(
         # loss_dict.update(stats)
         ts = ts.apply_gradients(grads=grads)
 
-    return ts, (_, loss_dict)
+    return ts, (_, (loss_dict, state))
 
 
 def update_policy(
     ts: TrainState,
+    state: hk.State,
     replay_buffer,
     config: ConfigDict,
     rng_key: PRNGKey,
 ):
     _, key1, key2 = jax.random.split(rng_key, 3)
-    replay_buffer.before_update(ts, key1)
+    state = replay_buffer.before_update(ts, state, key1)
     num_steps, num_processes = replay_buffer.rewards_raw.shape[:2]
     size_batch = num_processes * num_steps
     size_minibatch = size_batch // config.num_minibatch
@@ -148,7 +158,7 @@ def update_policy(
 
     # flatten T and B dimension
     flatten = lambda x: einops.rearrange(x, "T B ... -> (T B) ...")
-    state = flatten(replay_buffer.prev_state[:-1])
+    env_state = flatten(replay_buffer.prev_state[:-1])
     action = flatten(replay_buffer.actions)
     value = flatten(replay_buffer.value_preds[:-1])
     log_pi_old = flatten(replay_buffer.action_log_probs)
@@ -176,12 +186,13 @@ def update_policy(
             idxes[start : start + size_minibatch]
             for start in jnp.arange(0, size_batch, size_minibatch)
         ]
-        ts, (_, epoch_metrics) = update_jit(
+        ts, (_, (epoch_metrics, state)) = update_jit(
             ts=ts,
+            state=state,
             config=config,
             rng_key=key2,
             idxes=idxes_list,
-            state=state,
+            env_state=env_state,
             action=action,
             log_pi_old=log_pi_old,
             value=value,
@@ -197,4 +208,4 @@ def update_policy(
     for k, v in metrics.items():
         metrics[k] = v / (config.num_epochs)
 
-    return metrics, ts
+    return metrics, ts, state

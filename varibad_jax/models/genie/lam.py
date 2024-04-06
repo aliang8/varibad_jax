@@ -13,6 +13,7 @@ Quantizer maps z_e -> z_q
 Decoder maps z_q -> x
 """
 
+from absl import logging
 import haiku as hk
 import jax
 import jax.numpy as jnp
@@ -23,7 +24,7 @@ import chex
 import einops
 from ml_collections.config_dict import ConfigDict
 from varibad_jax.models.transformer_encoder import TransformerEncoder
-from varibad_jax.models.common import ImageEncoder, CnnEncoder, CnnDecoder
+from varibad_jax.models.common import ImageEncoder, ImageDecoder, CnnEncoder, CnnDecoder
 
 
 @chex.dataclass
@@ -38,8 +39,10 @@ class LAMOutputs:
 class LatentActionModel(hk.Module):
     def __init__(self, config: ConfigDict):
         super().__init__()
-        # encodes observations and outputs latent embedding
-        self.image_encoder = CnnEncoder(**config.image_encoder_config)
+        # encodes observations and outputs latent embedding of image
+        self.image_encoder = ImageEncoder(**config.image_encoder_config)
+        # encodes sequence of observations
+        # (x1, ..., xT) -> (z_1, ..., z_T)
         self.encoder = TransformerEncoder(**config.transformer_config)
         self.quantizer = QuantizedCodebook(
             num_codes=config.num_codes,
@@ -53,29 +56,32 @@ class LatentActionModel(hk.Module):
         )
         # decoder takes in both the output from codebook and the latent embedding
         # use convtranspose to reconstruct image
-        self.decoder = CnnDecoder(**config.image_decoder_config)
+        self.decoder = ImageDecoder(**config.image_decoder_config)
 
     def __call__(self, obs, is_training=True):
         # obs - [B, T, H, W, C]
 
         # first encode the observations
-        #  we will encode the full obs seq x_1 ... x_t, x_t+1
+        # we will encode the full obs seq x_1 ... x_t, x_t+1
         img_embedding = self.image_encoder(obs, is_training=is_training)
+        logging.info(f"img_embedding shape: {img_embedding.shape}")
         z_e = self.encoder(img_embedding, deterministic=not is_training)
+        logging.info(f"z_e shape: {z_e.shape}")
 
         # quantize the latent embedding
         quantize_output = self.quantizer(z_e)
         z_q = quantize_output["z_q"]
+        logging.info(f"z_q shape: {z_q.shape}")
 
         # decode given z_e and z_q
         # TODO: maybe this is another transformer
         z_qe = jnp.concatenate([z_q, z_e], axis=-1)
         z_qe = self.mid_layer(z_qe)
         z_qe = nn.gelu(z_qe)
-
+        logging.info(f"z_qe shape: {z_qe.shape}")
         # [B, T, D]
 
-        # need to make this [B, T, 1, 1, D]
+        # need to make this [B, T, 1, 1, D] for image decoding
         z_qe = einops.rearrange(z_qe, "B T D -> B T 1 1 D")
 
         # intermediate layer to encode z_q and z_e together

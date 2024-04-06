@@ -29,6 +29,7 @@ _CONFIG = config_flags.DEFINE_config_file("config")
 
 # shorthands for config parameters
 psh = {
+    "trainer": "t",
     "batch_size": "bs",
     "seed": "s",
     "env": {

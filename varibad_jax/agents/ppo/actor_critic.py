@@ -34,7 +34,9 @@ class ActorCritic(hk.Module):
         self.config = config
         self.image_obs = config.image_obs
         if self.config.image_obs:
-            self.state_embed = ImageEncoder(config.embedding_dim, **init_kwargs)
+            self.state_embed = ImageEncoder(
+                **config.image_encoder_config, **init_kwargs
+            )
         else:
             self.state_embed = hk.Linear(
                 self.config.embedding_dim, name="state_embed", **init_kwargs
@@ -73,9 +75,16 @@ class ActorCritic(hk.Module):
         self.action_head = ActionHead(is_continuous, action_dim, **init_kwargs)
 
     def __call__(
-        self, state: jnp.ndarray, latent: jnp.ndarray = None, task: jnp.ndarray = None
+        self,
+        state: jnp.ndarray,
+        latent: jnp.ndarray = None,
+        task: jnp.ndarray = None,
+        is_training: bool = True,
     ):
-        state_embed = self.state_embed(state)
+        if self.config.image_obs:
+            state_embed = self.state_embed(state, is_training=is_training)
+        else:
+            state_embed = self.state_embed(state)
         state_embed = nn.gelu(state_embed)
 
         policy_input = state_embed

@@ -49,18 +49,18 @@ class TransformerLayer(hk.Module):
         self,
         x: jax.Array,
         mask: jax.Array,
-        deterministic: bool = False,
+        is_training: bool = False,
     ) -> jax.Array:
         h_norm = self.ln(x)
         h_attn = self.attn_block(h_norm, h_norm, h_norm, mask=mask)
         # jax.debug.breakpoint()
-        if not deterministic:
+        if is_training:
             h_attn = hk.dropout(hk.next_rng_key(), self.dropout_rate, h_attn)
         h = x + h_attn
 
         h_norm = self.ln(h)
         h_dense = self.dense_block(h_norm)
-        if not deterministic:
+        if is_training:
             h_dense = hk.dropout(hk.next_rng_key(), self.dropout_rate, h_dense)
         h = h + h_dense
         return h
@@ -104,7 +104,7 @@ class TransformerEncoder(hk.Module):
         self,
         embeddings: jax.Array,  # [B, T, D]
         mask: jax.Array = None,  # [B, T]
-        deterministic: bool = False,
+        is_training: bool = True,
     ) -> jax.Array:  # [B, T, D]
         """Transforms input embedding sequences to output embedding sequences."""
         B, seq_len, D = embeddings.shape
@@ -119,7 +119,7 @@ class TransformerEncoder(hk.Module):
 
         h = embeddings
         for layer in self.layers:
-            h = layer(h, mask, deterministic=deterministic)
+            h = layer(h, mask, is_training=is_training)
 
         return self.ln(h)
 
@@ -139,6 +139,7 @@ class SARTransformerEncoder(hk.Module):
         encode_separate: bool = False,
         batch_first: bool = False,
         format: str = "SAR",
+        image_encoder_config: ConfigDict = None,
         w_init=hk.initializers.VarianceScaling(scale=2.0),
         b_init=hk.initializers.Constant(0.0),
         **kwargs
@@ -159,7 +160,7 @@ class SARTransformerEncoder(hk.Module):
         init_kwargs = dict(w_init=w_init, b_init=b_init)
 
         if self.image_obs:
-            self.state_embed = ImageEncoder(embedding_dim, **init_kwargs)
+            self.state_embed = ImageEncoder(**image_encoder_config, **init_kwargs)
         else:
             self.state_embed = hk.Linear(embedding_dim, **init_kwargs)
         self.action_embed = hk.Linear(embedding_dim, **init_kwargs)
@@ -174,7 +175,7 @@ class SARTransformerEncoder(hk.Module):
         actions: jax.Array,  # [T, B, D]
         rewards: jax.Array,  # [T, B, 1]
         mask: jax.Array,  # [T, B]
-        deterministic: bool = False,
+        is_training: bool = True,
         **kwargs
     ) -> jax.Array:
         # make batch first
@@ -189,7 +190,10 @@ class SARTransformerEncoder(hk.Module):
             rewards = einops.rearrange(rewards, "t b ... -> b t ...")
             mask = einops.rearrange(mask, "t b -> b t")
 
-        state_embed = self.state_embed(states)
+        if self.image_obs:
+            state_embed = self.state_embed(states, is_training=is_training)
+        else:
+            state_embed = self.state_embed(states)
         action_embed = self.action_embed(actions)
         reward_embed = self.reward_embed(rewards)
         timestep_embed = self.timestep_embed(jnp.arange(T)[None].repeat(B, axis=0))
@@ -218,7 +222,7 @@ class SARTransformerEncoder(hk.Module):
             embeddings = self.embed(embeddings)
             embeddings = nn.gelu(embeddings)
 
-        embeddings = self.transformer(embeddings, mask, deterministic=deterministic)
+        embeddings = self.transformer(embeddings, mask, is_training=is_training)
 
         if not self.batch_first:
             # this is [B, T, D], need to reshape

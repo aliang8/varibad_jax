@@ -9,9 +9,9 @@ import haiku as hk
 import gymnasium as gym
 from ml_collections import ConfigDict, FieldReference, FrozenConfigDict, config_flags
 from varibad_jax.trainers.meta_trainer import create_ts
-from varibad_jax.envs.xland_utils import make_envs
+from varibad_jax.envs.utils import make_envs
 from varibad_jax.utils.rollout import eval_rollout
-from varibad_jax.models.varibad.helpers import encode_trajectory, decode, get_prior
+from varibad_jax.models.varibad.helpers import get_prior
 
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.01"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
@@ -34,25 +34,18 @@ def main(_):
 
     config_p = FrozenConfigDict(config_p)
 
-    env = make_envs(
-        env_id=config.env.env_id,
-        seed=config.seed,
-        num_envs=config.env.num_processes,
-        num_episodes_per_rollout=config.env.num_episodes_per_rollout,
-        benchmark_path=config.env.benchmark_path,
-        ruleset_id=config.env.ruleset_id,
-        training=True,
-    )
-    action_dim = env.action_space.n
+    env = make_envs(**config.env, training=False)
     continuous_actions = not isinstance(env.action_space, gym.spaces.Discrete)
+
     if continuous_actions:
-        vae_action_dim = action_dim
+        input_action_dim = action_dim = env.action_space.shape[0]
     else:
-        vae_action_dim = 1
+        action_dim = env.action_space.n
+        input_action_dim = 1
 
     # create train states
     ts_vae, ts_policy = create_ts(
-        config, next(rng_seq), env, vae_action_dim, action_dim
+        config, next(rng_seq), env, input_action_dim, action_dim
     )
 
     get_prior_fn = functools.partial(
@@ -67,16 +60,6 @@ def main(_):
     steps_per_rollout = config.env.num_episodes_per_rollout * env.max_episode_steps
 
     rng_keys = jax.random.split(next(rng_seq), config.num_rollouts_collect)
-
-    rollout_env = make_envs(
-        env_id=config.env.env_id,
-        seed=config.seed,
-        num_envs=config.env.num_processes,
-        num_episodes_per_rollout=config.env.num_episodes_per_rollout,
-        benchmark_path=config.env.benchmark_path,
-        ruleset_id=config.env.ruleset_id,
-        training=False,
-    )
 
     logging.info("start data collection")
     stats, transitions = jax.vmap(

@@ -303,7 +303,7 @@ class OnlineStorage:
         """
         return len(self.prev_state) * self.num_processes
 
-    def before_update(self, ts, rng_key):
+    def before_update(self, ts, policy_state, rng_key):
         if self.latent_mean is not None:
             latent = np.concatenate(
                 [self.latent_mean[:-1], self.latent_logvar[:-1]], axis=-1
@@ -313,8 +313,14 @@ class OnlineStorage:
 
         task = self.tasks[:-1]
 
-        policy_output = ts.apply_fn(
-            ts.params, rng_key, env_state=self.prev_state[:-1], latent=latent, task=task
+        policy_output, policy_state = ts.apply_fn(
+            ts.params,
+            policy_state,
+            rng_key,
+            env_state=self.prev_state[:-1],
+            latent=latent,
+            task=task,
+            is_training=True,
         )
         log_probs = policy_output.dist.log_prob(self.actions.astype(np.int32).squeeze())
         self.action_log_probs = log_probs
@@ -322,3 +328,5 @@ class OnlineStorage:
 
         if len(self.action_log_probs.shape) == 2:
             self.action_log_probs = np.expand_dims(self.action_log_probs, axis=-1)
+
+        return policy_state

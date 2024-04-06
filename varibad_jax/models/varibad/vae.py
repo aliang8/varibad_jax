@@ -46,7 +46,7 @@ class VaribadVAE(hk.Module):
         elif self.config.encoder.name == "transformer":
             encoder_cls = SARTransformerEncoder
 
-        self.encoder = encoder_cls(**self.config.encoder)
+        self.encoder = encoder_cls(**self.config.encoder, **init_kwargs)
 
         self.latent_mean = hk.Linear(
             self.config.latent_dim, name="latent_mean", **init_kwargs
@@ -85,7 +85,7 @@ class VaribadVAE(hk.Module):
         rewards: jnp.ndarray,
         hidden_state: jnp.ndarray = None,
         mask: Optional[jnp.ndarray] = None,
-        deterministic: bool = False,
+        is_training: bool = True,
         **kwargs
     ):
         hidden_state = self.encoder(
@@ -94,7 +94,7 @@ class VaribadVAE(hk.Module):
             rewards=rewards,
             hidden_state=hidden_state,
             mask=mask,
-            deterministic=deterministic,
+            is_training=is_training,
         )
 
         # predict distribution for latent variable for each timestep
@@ -127,6 +127,7 @@ class VaribadVAE(hk.Module):
         prev_states: Optional[jnp.ndarray] = None,
         next_states: Optional[jnp.ndarray] = None,
         actions: Optional[jnp.ndarray] = None,
+        is_training: bool = True,
     ):
         """Decode
 
@@ -144,6 +145,7 @@ class VaribadVAE(hk.Module):
             prev_states=prev_states,
             next_states=next_states,
             actions=actions,
+            is_training=is_training,
         )
 
         # Reconstruct state

@@ -1,4 +1,9 @@
 from varibad_jax.configs.base_config import get_config as get_base_config
+from varibad_jax.configs.model_configs import (
+    transformer_config,
+    image_encoder_config,
+    image_decoder_config,
+)
 from ml_collections import config_dict
 
 
@@ -7,49 +12,16 @@ def get_config(config_string: str = None):
 
     config.notes = "Offline RL"
     config.tags = ["offline_rl", "jax"]
-    config.keys_to_include = {"env": ["env_name"], "policy": ["name"]}
+    config.keys_to_include = {"trainer": None, "env": ["env_name"], "policy": ["name"]}
 
     config.data_dir = "datasets"
     config.batch_size = 64
     config.num_epochs = 1000
     config.train_frac = 1.0
 
-    embedding_dim = 64
-
-    transformer_config = config_dict.ConfigDict(
-        dict(
-            embedding_dim=embedding_dim,
-            hidden_dim=64,
-            num_heads=8,
-            num_layers=3,
-            attn_size=32,
-            widening_factor=4,
-            dropout_rate=0.1,
-            max_timesteps=1000,
-            encode_separate=True,  # encode (s,a,r) as separate tokens
-        )
-    )
-    image_encoder_config = config_dict.ConfigDict(
-        dict(
-            # embedding_dim=embedding_dim,
-            # output_channels=[16, 32, 64],
-            # kernel_shapes=[2, 2],
-            # padding="VALID",
-            out_channels=embedding_dim,
-            downscale_level=3,
-            res_layers=2,
-            kernel_size=5,
-        )
-    )
-    image_decoder_config = config_dict.ConfigDict(
-        dict(
-            in_channels=embedding_dim,
-            out_channels=2,  # xland specific
-            upscale_level=3,
-            res_layers=2,
-            kernel_size=5,
-        )
-    )
+    config.embedding_dim = 64
+    transformer_config.embedding_dim = config.get_ref("embedding_dim")
+    image_encoder_config.embedding_dim = config.get_ref("embedding_dim")
 
     policies = {
         "dt": config_dict.ConfigDict(

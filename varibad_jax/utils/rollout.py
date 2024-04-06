@@ -2,10 +2,11 @@ import time
 from absl import logging
 import jax
 import chex
+import haiku as hk
 import jax.numpy as jnp
 from xminigrid.environment import Environment, EnvParamsT
 from flax.training.train_state import TrainState
-from typing import Callable
+from typing import Callable, Union, Tuple
 import numpy as np
 import wandb
 import einops
@@ -24,6 +25,7 @@ class RolloutStats:
 
 def run_rollouts(
     rng: jax.random.PRNGKey,
+    state: Union[hk.State, Tuple[hk.State, hk.State]],
     config: ConfigDict,
     env: Environment,
     ts_policy: TrainState,
@@ -57,7 +59,7 @@ def run_rollouts(
         rollout_kwargs = dict()
         return {}
 
-    rollout_kwargs.update(dict(env=env, config=config))
+    rollout_kwargs.update(dict(env=env, config=config, state=state))
 
     # render function doesn't work with vmap
     eval_metrics, (transitions, actions) = jax.vmap(
@@ -98,6 +100,7 @@ def run_rollouts(
 
 def eval_rollout_dt(
     rng: jax.Array,
+    state: hk.State,
     env: Environment,
     config: dict,
     ts_policy: TrainState,
@@ -211,6 +214,7 @@ def eval_rollout_dt(
 
 def eval_rollout(
     rng: jax.Array,
+    state: hk.State,
     env: Environment,
     config: dict,
     ts_policy: TrainState,
@@ -291,6 +295,7 @@ def eval_rollout(
 
 def eval_rollout_with_belief_model(
     rng: jax.Array,
+    state: hk.State,
     env: Environment,
     config: dict,
     ts_policy: TrainState,
@@ -301,6 +306,7 @@ def eval_rollout_with_belief_model(
 ) -> RolloutStats:
 
     stats = RolloutStats(episode_return=0, length=0)
+    vae_state, policy_state = state
 
     rng, reset_rng, prior_rng = jax.random.split(rng, 3)
     xtimestep = env.reset(env.env_params, reset_rng)
@@ -318,6 +324,8 @@ def eval_rollout_with_belief_model(
         (
             rng,
             stats,
+            vae_state,
+            policy_state,
             xtimestep,
             prev_action,
             prev_reward,
@@ -331,11 +339,13 @@ def eval_rollout_with_belief_model(
         observation = observation.astype(jnp.float32)
         observation = observation[jnp.newaxis]
 
-        policy_output = ts_policy.apply_fn(
+        policy_output, policy_state = ts_policy.apply_fn(
             ts_policy.params,
+            policy_state,
             policy_rng,
             env_state=observation,
             latent=latent,
+            is_training=False,
         )
         action = policy_output.action
         xtimestep = env.step(env.env_params, xtimestep, action.squeeze())
@@ -351,13 +361,15 @@ def eval_rollout_with_belief_model(
         reward = reward.reshape(1, 1)
 
         # update hidden state
-        encode_outputs = ts_vae.apply_fn(
+        encode_outputs, vae_state = ts_vae.apply_fn(
             ts_vae.params,
+            vae_state,
             encoder_rng,
             states=next_obs,
             actions=action,
             rewards=reward,
             hidden_state=hidden_state,
+            is_training=False,
         )
 
         hidden_state = encode_outputs.hidden_state
@@ -373,6 +385,8 @@ def eval_rollout_with_belief_model(
         return (
             rng,
             stats,
+            vae_state,
+            policy_state,
             xtimestep,
             action,
             reward,
@@ -384,6 +398,8 @@ def eval_rollout_with_belief_model(
     init_carry = (
         rng,
         stats,
+        vae_state,
+        policy_state,
         xtimestep,
         prev_action,
         prev_reward,

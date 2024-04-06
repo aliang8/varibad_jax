@@ -25,6 +25,7 @@ tfb = tfp.bijectors
 def loss_vae(
     params,
     ts: TrainState,
+    state: hk.State,
     rng_key: PRNGKey,
     batch: Batch,
     config: FrozenConfigDict,
@@ -45,8 +46,9 @@ def loss_vae(
     prior_samples = jnp.expand_dims(prior_output.latent_sample, axis=0)
 
     # encode the full trajectory and get latent posteriors
-    encode_outputs = ts.apply_fn(
+    encode_outputs, state = ts.apply_fn(
         params,
+        state,
         encode_key,
         states=batch.next_obs,
         actions=batch.actions,
@@ -92,8 +94,9 @@ def loss_vae(
     logging.info(f"next_obs: {dec_next_obs.shape}, embedding: {dec_embedding.shape}")
 
     # decode trajectory
-    decode_outputs = decode_fn(
+    decode_outputs, state = decode_fn(
         params,
+        state,
         decode_key,
         latent_samples=dec_embedding,
         prev_states=dec_prev_obs,
@@ -144,11 +147,43 @@ def loss_vae(
         "total_loss": total_loss,
     }
 
-    return total_loss, loss_dict
+    return total_loss, (loss_dict, state)
+
+
+@partial(jax.jit, static_argnames=("config", "decode_fn", "get_prior_fn"))
+def update_jit(
+    ts: TrainState,
+    state: hk.State,
+    config: FrozenConfigDict,
+    rng_key: PRNGKey,
+    batch: Batch,
+    decode_fn: Callable,
+    get_prior_fn: Callable,
+):
+    logging.info("update jit vae!!!!! VAEE")
+    loss_and_grad_fn = jax.value_and_grad(loss_vae, has_aux=True)
+
+    (vae_loss, (metrics, state)), grads = loss_and_grad_fn(
+        ts.params,
+        ts=ts,
+        state=state,
+        config=config,
+        rng_key=rng_key,
+        batch=batch,
+        decode_fn=decode_fn,
+        get_prior_fn=get_prior_fn,
+    )
+
+    # compute norm of grads for each set of parameters
+    # _, stats = gutl.compute_all_grad_norm(grad_norm_type="2", grads=grads)
+    # metrics.update(stats)
+    ts = ts.apply_gradients(grads=grads)
+    return ts, (vae_loss, metrics, state)
 
 
 def update_vae(
     ts: TrainState,
+    state: hk.State,
     config: FrozenConfigDict,
     batch,
     rng_key: PRNGKey,
@@ -165,41 +200,13 @@ def update_vae(
     # import ipdb
 
     # ipdb.set_trace()
-    ts, (total_loss, loss_dict) = update_jit(
+    ts, (total_loss, loss_dict, state) = update_jit(
         ts=ts,
+        state=state,
         batch=batch,
         config=config,
         rng_key=rng_key,
         decode_fn=decode_fn,
         get_prior_fn=get_prior_fn,
     )
-    return ts, (total_loss, loss_dict)
-
-
-@partial(jax.jit, static_argnames=("config", "decode_fn", "get_prior_fn"))
-def update_jit(
-    ts: TrainState,
-    config: FrozenConfigDict,
-    rng_key: PRNGKey,
-    batch: Batch,
-    decode_fn: Callable,
-    get_prior_fn: Callable,
-):
-    logging.info("update jit vae!!!!! VAEE")
-    loss_and_grad_fn = jax.value_and_grad(loss_vae, has_aux=True)
-
-    (vae_loss, metrics), grads = loss_and_grad_fn(
-        ts.params,
-        ts=ts,
-        config=config,
-        rng_key=rng_key,
-        batch=batch,
-        decode_fn=decode_fn,
-        get_prior_fn=get_prior_fn,
-    )
-
-    # compute norm of grads for each set of parameters
-    # _, stats = gutl.compute_all_grad_norm(grad_norm_type="2", grads=grads)
-    # metrics.update(stats)
-    ts = ts.apply_gradients(grads=grads)
-    return ts, (vae_loss, metrics)
+    return ts, (total_loss, loss_dict, state)

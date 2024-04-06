@@ -29,13 +29,18 @@ from varibad_jax.models.genie.loss import loss_fn as lam_loss_fn
 
 
 def create_ts(
-    config: ConfigDict, rng, envs, continuous_actions, input_action_dim, action_dim
+    config: ConfigDict,
+    rng,
+    observation_shape,
+    continuous_actions,
+    input_action_dim,
+    action_dim,
 ):
     if config.policy.name == "dt":
         params = init_params_dt(
             config.policy,
             rng,
-            envs.observation_space,
+            observation_shape,
             continuous_actions,
             input_action_dim,
             action_dim,
@@ -54,7 +59,7 @@ def create_ts(
         params, state = init_params_lam(
             config.policy,
             rng,
-            envs.observation_space,
+            observation_shape,
         )
         policy_apply = functools.partial(
             jax.jit(
@@ -83,15 +88,6 @@ class OfflineTrainer(BaseTrainer):
     def __init__(self, config: ConfigDict):
         super().__init__(config)
 
-        self.ts_policy, self.state = create_ts(
-            config,
-            next(self.rng_seq),
-            self.envs,
-            self.continuous_actions,
-            self.input_action_dim,
-            self.action_dim,
-        )
-
         rng = npr.RandomState(config.seed)
 
         steps_per_rollout = (
@@ -112,7 +108,9 @@ class OfflineTrainer(BaseTrainer):
         def get_ts(i):
             return jtu.tree_map(lambda y: y[i], timesteps)
 
-        observations = jnp.array([get_ts(i).observation for i in range(dataset_size)])
+        # get full grid
+        observations = jnp.array([get_ts(i).state.grid for i in range(dataset_size)])
+        # observations = jnp.array([get_ts(i).observation for i in range(dataset_size)])
         rewards = jnp.array([get_ts(i).reward for i in range(dataset_size)])
 
         logging.info(
@@ -166,6 +164,15 @@ class OfflineTrainer(BaseTrainer):
         )
         logging.info(
             f"len eval dataset: {len(eval_observations)}, num eval batches: {self.num_eval_batches}"
+        )
+
+        self.ts_policy, self.state = create_ts(
+            config,
+            next(self.rng_seq),
+            observations.shape[2:],
+            self.continuous_actions,
+            self.input_action_dim,
+            self.action_dim,
         )
 
         if self.config.policy.name == "dt":

@@ -25,6 +25,7 @@ class LSTMTrajectoryEncoder(hk.Module):
         lstm_hidden_size: int = 64,
         batch_first: bool = False,
         image_obs: bool = False,
+        image_encoder_config: dict = None,
         w_init=hk.initializers.VarianceScaling(scale=2.0),
         b_init=hk.initializers.Constant(0.0),
         **kwargs
@@ -39,7 +40,7 @@ class LSTMTrajectoryEncoder(hk.Module):
         self.batch_first = batch_first
 
         if self.image_obs:
-            self.state_embed = ImageEncoder(self.embedding_dim, **init_kwargs)
+            self.state_embed = ImageEncoder(**image_encoder_config, **init_kwargs)
         else:
             self.state_embed = hk.Linear(
                 self.embedding_dim, name="state_embed", **init_kwargs
@@ -59,6 +60,7 @@ class LSTMTrajectoryEncoder(hk.Module):
         actions: jnp.ndarray,
         rewards: jnp.ndarray,
         hidden_state: jnp.ndarray = None,
+        is_training: bool = True,
         **kwargs
     ):
         """Call.
@@ -71,7 +73,11 @@ class LSTMTrajectoryEncoder(hk.Module):
 
         Returns:
         """
-        state_embeds = self.state_embed(states)
+        if self.image_obs:
+            state_embeds = self.state_embed(states, is_training=is_training)
+        else:
+            state_embeds = self.state_embed(states)
+
         state_embeds = nn.gelu(state_embeds)
         action_embeds = self.action_embed(actions)
         action_embeds = nn.gelu(action_embeds)

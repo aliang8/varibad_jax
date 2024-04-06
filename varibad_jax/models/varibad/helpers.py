@@ -16,7 +16,7 @@ class Batch:
     next_obs: jnp.ndarray
 
 
-@hk.transform
+@hk.transform_with_state
 def encode_trajectory(config: FrozenConfigDict, **kwargs):
     model = VaribadVAE(config=config)
     return model.encode(**kwargs)
@@ -28,7 +28,7 @@ def get_prior(config: FrozenConfigDict, **kwargs):
     return model.get_prior(**kwargs)
 
 
-@hk.transform
+@hk.transform_with_state
 def decode(config: FrozenConfigDict, **kwargs):
     model = VaribadVAE(config=config)
     return model.decode(**kwargs)
@@ -54,7 +54,7 @@ def init_params(
 
     encoder_key, decoder_key = jax.random.split(rng_key)
 
-    encoder_params = encode_trajectory.init(
+    encoder_params, encoder_state = encode_trajectory.init(
         encoder_key,
         config=config,
         **dict(
@@ -63,9 +63,10 @@ def init_params(
             rewards=dummy_rewards,
             hidden_state=dummy_hs,
             mask=dummy_mask,
+            is_training=True,
         )
     )
-    decoder_params = decode.init(
+    decoder_params, decoder_state = decode.init(
         decoder_key,
         config=config,
         **dict(
@@ -73,7 +74,9 @@ def init_params(
             prev_states=dummy_states,
             next_states=dummy_states,
             actions=dummy_actions,
+            is_training=True,
         )
     )
     encoder_params.update(decoder_params)
-    return encoder_params
+    encoder_state.update(decoder_state)
+    return encoder_params, encoder_state

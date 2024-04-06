@@ -1,3 +1,4 @@
+from absl import logging
 import chex
 import haiku as hk
 import jax
@@ -17,10 +18,11 @@ def lam_apply_fn(config: FrozenConfigDict, obs: jnp.ndarray, **kwargs):
 def init_params_lam(
     config: FrozenConfigDict,
     rng: PRNGKey,
-    observation_space: tuple,
+    observation_shape: tuple,
 ):
     # [B, T, D]
-    dummy_obs = jnp.zeros((1, 1, *observation_space.shape))
+    dummy_obs = jnp.zeros((1, 1, *observation_shape))
+    logging.info(f"dummy obs shape: {dummy_obs.shape}")
     params, state = lam_apply_fn.init(
         rng,
         config=config,

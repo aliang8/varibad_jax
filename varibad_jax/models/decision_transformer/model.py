@@ -28,6 +28,7 @@ class DecisionTransformer(hk.Module):
 
         self.transformer = SARTransformerEncoder(
             **transformer_config,
+            image_encoder_config=config.image_encoder_config,
             image_obs=config.image_obs,
             batch_first=batch_first,
             w_init=w_init,
@@ -41,12 +42,12 @@ class DecisionTransformer(hk.Module):
         actions: jax.Array,  # [B, T, D]
         rewards: jax.Array,  # [B, T, 1]
         mask: jax.Array,  # [B, T]
-        deterministic: bool = False,
+        is_training: bool = True,
         **kwargs
     ) -> jax.Array:
         # [B, T*3, D]
         embeddings = self.transformer(
-            states, actions, rewards, mask, deterministic=deterministic
+            states, actions, rewards, mask, is_training=is_training
         )
 
         # reshape embeddings to [B, T, 3, D]

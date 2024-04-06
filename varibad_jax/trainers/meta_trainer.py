@@ -52,13 +52,13 @@ def create_ts(config, rng, envs, input_action_dim, action_dim):
             policy_params = ckpt["ts_policy"]
     else:
         rng_vae, rng_policy = jax.random.split(rng, 2)
-        vae_params = init_params_vae(
+        vae_params, vae_state = init_params_vae(
             config=config.vae,
             rng_key=rng_vae,
             observation_space=envs.observation_space,
             action_dim=input_action_dim,
         )
-        policy_params = init_params_policy(
+        policy_params, policy_state = init_params_policy(
             config=config.policy,
             rng_key=rng_policy,
             observation_space=envs.observation_space,
@@ -89,7 +89,7 @@ def create_ts(config, rng, envs, input_action_dim, action_dim):
     encode_apply = partial(
         jax.jit(
             encode_trajectory.apply,
-            static_argnames=("config", "deterministic"),
+            static_argnames=("config", "is_training"),
         ),
         config=FrozenConfigDict(config.vae),
     )
@@ -99,7 +99,7 @@ def create_ts(config, rng, envs, input_action_dim, action_dim):
     policy_apply = partial(
         jax.jit(
             policy_fn.apply,
-            static_argnames=("config", "is_continuous", "action_dim"),
+            static_argnames=("config", "is_continuous", "action_dim", "is_training"),
         ),
         config=FrozenConfigDict(config.policy),
         is_continuous=continuous_actions,
@@ -110,7 +110,7 @@ def create_ts(config, rng, envs, input_action_dim, action_dim):
         params=policy_params,
         tx=tx_policy,
     )
-    return ts_vae, ts_policy
+    return ts_vae, ts_policy, vae_state, policy_state
 
 
 class MetaRLTrainer(BaseTrainer):
@@ -128,7 +128,7 @@ class MetaRLTrainer(BaseTrainer):
             f"input action dim = {self.input_action_dim}, action_dim = {self.action_dim}"
         )
 
-        self.ts_vae, self.ts_policy = create_ts(
+        self.ts_vae, self.ts_policy, self.vae_state, self.policy_state = create_ts(
             config=config,
             rng=next(self.rng_seq),
             envs=self.envs,
@@ -138,7 +138,7 @@ class MetaRLTrainer(BaseTrainer):
         self.decode_apply = partial(
             jax.jit(
                 decode.apply,
-                static_argnames=("config"),
+                static_argnames=("config", "is_training"),
             ),
             config=FrozenConfigDict(config.vae),
         )
@@ -223,11 +223,13 @@ class MetaRLTrainer(BaseTrainer):
 
         for step in range(self.steps_per_rollout):
             # sample random action from policy
-            policy_output = self.ts_policy.apply_fn(
+            policy_output, self.policy_state = self.ts_policy.apply_fn(
                 self.ts_policy.params,
+                self.policy_state,
                 next(self.rng_seq),
                 env_state=state,
                 latent=latent,
+                is_training=True,
             )
 
             # take a step in the environment
@@ -257,13 +259,15 @@ class MetaRLTrainer(BaseTrainer):
             # after seeing the next observation and getting more
             # information, we can update the belief over the task variable
             if self.config.vae.encoder.name == "lstm":
-                encode_outputs = self.ts_vae.apply_fn(
+                encode_outputs, self.vae_state = self.ts_vae.apply_fn(
                     self.ts_vae.params,
+                    self.vae_state,
                     next(self.rng_seq),
                     states=next_state,
                     actions=action,
                     rewards=reward,
                     hidden_state=hidden_state,
+                    is_training=True,
                 )
             elif self.config.vae.encoder.name == "transformer":
                 states[step] = next_state
@@ -272,14 +276,15 @@ class MetaRLTrainer(BaseTrainer):
                 masks[step] = 1.0 - done.flatten()
 
                 # we want to embed the full sequence cause jax
-                encode_outputs = self.ts_vae.apply_fn(
+                encode_outputs, self.vae_state = self.ts_vae.apply_fn(
                     self.ts_vae.params,
+                    self.vae_state,
                     next(self.rng_seq),
                     states=states,
                     actions=actions,
                     rewards=rewards,
                     mask=masks,
-                    deterministic=True,
+                    is_training=True,
                 )
 
                 # take the last timestep for every item
@@ -338,11 +343,13 @@ class MetaRLTrainer(BaseTrainer):
         # ipdb.set_trace()
 
         # compute next value for bootstrapping
-        policy_output = self.ts_policy.apply_fn(
+        policy_output, self.policy_state = self.ts_policy.apply_fn(
             self.ts_policy.params,
+            self.policy_state,
             next(self.rng_seq),
             env_state=state,
             latent=latent,
+            is_training=True,
         )
         next_value = policy_output.value
 
@@ -370,8 +377,9 @@ class MetaRLTrainer(BaseTrainer):
         # import ipdb
 
         # ipdb.set_trace()
-        policy_metrics, self.ts_policy = update_policy(
+        policy_metrics, self.ts_policy, self.policy_state = update_policy(
             ts=self.ts_policy,
+            state=self.policy_state,
             replay_buffer=self.policy_storage,
             config=FrozenConfigDict(self.config.policy),
             rng_key=next(self.rng_seq),
@@ -384,8 +392,9 @@ class MetaRLTrainer(BaseTrainer):
         # update vae
         update_start = time.time()
         for _ in range(self.config.vae.num_vae_updates):
-            self.ts_vae, (_, vae_metrics) = update_vae(
+            self.ts_vae, (_, vae_metrics, self.vae_state) = update_vae(
                 ts=self.ts_vae,
+                state=self.vae_state,
                 rng_key=next(self.rng_seq),
                 config=FrozenConfigDict(self.config),
                 batch=self.vae_storage.get_batch(self.config.vae.trajs_per_batch),
@@ -409,6 +418,7 @@ class MetaRLTrainer(BaseTrainer):
         if not self.config.skip_first_eval:
             eval_metrics = run_rollouts(
                 rng=next(self.rng_seq),
+                state=[self.vae_state, self.policy_state],
                 env=self.eval_envs,
                 config=self.config,
                 ts_policy=self.ts_policy,
@@ -496,6 +506,7 @@ class MetaRLTrainer(BaseTrainer):
                 if (self.iter_idx + 1) % self.config.eval_interval == 0:
                     eval_metrics = run_rollouts(
                         rng=next(self.rng_seq),
+                        state=[self.vae_state, self.policy_state],
                         env=self.eval_envs,
                         config=self.config,
                         ts_policy=self.ts_policy,
@@ -528,6 +539,8 @@ class MetaRLTrainer(BaseTrainer):
                                 "config": self.config.to_dict(),
                                 "ts_policy": self.ts_policy.params,
                                 "ts_vae": self.ts_vae.params,
+                                "vae_state": self.vae_state,
+                                "policy_state": self.policy_state,
                             },
                             f,
                         )

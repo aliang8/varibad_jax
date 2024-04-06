@@ -10,7 +10,7 @@ from varibad_jax.agents.ppo.actor_critic import ActorCritic
 import gymnasium as gym
 
 
-@hk.transform
+@hk.transform_with_state
 def policy_fn(
     config: ConfigDict,
     is_continuous,
@@ -18,9 +18,12 @@ def policy_fn(
     env_state,
     latent: jnp.ndarray = None,
     task: jnp.ndarray = None,
+    is_training: bool = True,
 ):
     policy = ActorCritic(config, is_continuous, action_dim)
-    policy_output = policy(state=env_state, latent=latent, task=task)
+    policy_output = policy(
+        state=env_state, latent=latent, task=task, is_training=is_training
+    )
     return policy_output
 
 
@@ -50,7 +53,7 @@ def init_params(
     else:
         action_dim = action_space.shape[0]
 
-    params = policy_fn.init(
+    params, state = policy_fn.init(
         rng=rng_key,
         config=config,
         is_continuous=not isinstance(action_space, gym.spaces.Discrete),
@@ -58,5 +61,6 @@ def init_params(
         env_state=dummy_states,
         latent=dummy_latents,
         task=dummy_tasks,
+        is_training=True,
     )
-    return params
+    return params, state
