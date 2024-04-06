@@ -18,7 +18,7 @@ from xminigrid.core.constants import NUM_COLORS, TILES_REGISTRY, Tiles
 
 @chex.dataclass
 class RolloutStats:
-    reward: jnp.ndarray
+    episode_return: jnp.ndarray
     length: jnp.ndarray
 
 
@@ -65,7 +65,7 @@ def run_rollouts(
     fps = (config.num_eval_rollouts * steps_per_rollout) / rollout_time
 
     eval_metrics = {
-        "return": jnp.sum(eval_metrics["reward"]),
+        "episode_return": jnp.mean(eval_metrics["episode_return"]),
         "avg_length": jnp.mean(eval_metrics["length"]),
         "fps": fps,
     }
@@ -102,7 +102,7 @@ def eval_rollout_dt(
     steps_per_rollout: int,
 ) -> RolloutStats:
 
-    stats = RolloutStats(reward=0, length=0)
+    stats = RolloutStats(episode_return=0, length=0)
 
     rng, reset_rng = jax.random.split(rng, 2)
     xtimestep = env.reset(env.env_params, reset_rng)
@@ -170,7 +170,7 @@ def eval_rollout_dt(
         rewards = rewards.at[0, stats.length].set(rtg)
 
         stats = stats.replace(
-            reward=stats.reward + timestep.reward,
+            episode_return=stats.episode_return + timestep.reward,
             length=stats.length + 1,
         )
 
@@ -215,7 +215,7 @@ def eval_rollout(
     steps_per_rollout: int,
 ) -> RolloutStats:
 
-    stats = RolloutStats(reward=0, length=0)
+    stats = RolloutStats(episode_return=0, length=0)
 
     rng, reset_rng = jax.random.split(rng, 2)
     xtimestep = env.reset(env.env_params, reset_rng)
@@ -256,7 +256,7 @@ def eval_rollout(
         reward = reward.reshape(1, 1)
 
         stats = stats.replace(
-            reward=stats.reward + timestep.reward,
+            episode_return=stats.episode_return + timestep.reward,
             length=stats.length + 1,
         )
 
@@ -297,7 +297,7 @@ def eval_rollout_with_belief_model(
     steps_per_rollout: int,
 ) -> RolloutStats:
 
-    stats = RolloutStats(reward=0, length=0)
+    stats = RolloutStats(episode_return=0, length=0)
 
     rng, reset_rng, prior_rng = jax.random.split(rng, 3)
     xtimestep = env.reset(env.env_params, reset_rng)
@@ -363,7 +363,7 @@ def eval_rollout_with_belief_model(
         latent = jnp.concatenate([latent_mean, latent_logvar], axis=-1)
 
         stats = stats.replace(
-            reward=stats.reward + timestep.reward,
+            episode_return=stats.episode_return + timestep.reward,
             length=stats.length + 1,
         )
 

@@ -32,15 +32,9 @@ def get_config(config_string: str = None):
         "xland": config_dict.ConfigDict(
             dict(
                 env_name="xland",
-                # env_kwargs=dict(
-                #     view_size=5,
-                #     height=5,
-                #     width=5,
-                # ),
-                env_kwargs=dict(
-                    benchmark_path="/scr/aliang80/varibad_jax/varibad_jax/envs/xland_benchmarks/test_ruleset.pkl",
-                    ruleset_id=0,
-                ),
+                env_kwargs=dict(view_size=7, height=9, width=9),
+                benchmark_path="/scr/aliang80/varibad_jax/varibad_jax/envs/xland_benchmarks/test_ruleset.pkl",
+                ruleset_id=0,
                 env_id="XLand-MiniGrid-R1-9x9",
                 num_episodes_per_rollout=4,
                 steps_per_rollout=15,
@@ -89,7 +83,7 @@ def get_config(config_string: str = None):
     config.num_eval_rollouts = 10
 
     # number of eval rollout videos to save
-    config.visualize_rollouts = False
+    config.visualize_rollouts = True
     config.num_eval_rollouts_save = 3
     config.skip_first_eval = False
 

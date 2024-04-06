@@ -17,6 +17,7 @@ def make_envs(
     seed: int = 0,
     num_envs: int = 1,
     num_episodes_per_rollout: int = 4,
+    steps_per_rollout: int = 15,
     benchmark_path: str = "",
     ruleset_id: int = 0,
     env_kwargs=dict(),
@@ -47,6 +48,7 @@ def make_envs(
         env = BAMDPWrapper(
             env,
             env_params=env_params,
+            steps_per_rollout=steps_per_rollout,
             num_episodes_per_rollout=num_episodes_per_rollout,
         )
 

@@ -76,7 +76,7 @@ class BaseTrainer:
 
         # this is for the case with fixed length sessions
         self.steps_per_rollout = (
-            config.env.num_episodes_per_rollout * self.env_params.max_episode_steps
+            config.env.num_episodes_per_rollout * self.envs.max_episode_steps
         )
 
         if self.config.log_level == "info":

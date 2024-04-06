@@ -19,7 +19,13 @@ class TimestepInfo:
 
 class BAMDPWrapper(Wrapper):
 
-    def __init__(self, env, env_params: EnvParamsT, num_episodes_per_rollout: int):
+    def __init__(
+        self,
+        env,
+        env_params: EnvParamsT,
+        steps_per_rollout: int = 15,
+        num_episodes_per_rollout: int = 4,
+    ):
         """Wrapper, creates a multi-episode (BA)MDP around a one-episode MDP.
 
         Automatically deals with - horizons H in the MDP vs horizons H+ in the
@@ -29,9 +35,13 @@ class BAMDPWrapper(Wrapper):
         super().__init__(env)
         self.env = env
         self.env_params = env_params
+        self.steps_per_rollout = steps_per_rollout
 
         # calculate horizon length H^+
-        self.bamdp_horizon = env_params.max_episode_steps * num_episodes_per_rollout
+        try:
+            self.bamdp_horizon = env_params.max_episode_steps * num_episodes_per_rollout
+        except:
+            self.bamdp_horizon = steps_per_rollout * num_episodes_per_rollout
 
     def reset(self, env_params: EnvParamsT, rng: PRNGKey):
         timestep = self.env.reset(env_params, rng)
@@ -68,7 +78,7 @@ class BAMDPWrapper(Wrapper):
         info = xtimestep.info
         info["step_count"] = info["step_count"] + 1
         steps = info["step_count"]
-        done_mdp = jnp.where(steps >= env_params.max_episode_steps, 1, 0)
+        done_mdp = jnp.where(steps >= self.max_episode_steps, 1, 0)
         info["done_mdp"] = done_mdp
 
         # when the MDP is done, we reset back to initial timestep, but keep the same task
@@ -102,8 +112,23 @@ class BAMDPWrapper(Wrapper):
 
     @property
     def observation_space(self):
-        return self.env.observation_space(self.env_params)
+        try:
+            return self.env.observation_space(self.env_params)
+        except:
+            return gym.spaces.Box(
+                shape=self.env.observation_shape(self.env_params), low=0, high=1
+            )
 
     @property
     def action_space(self):
-        return self.env.action_space(self.env_params)
+        try:
+            return self.env.action_space(self.env_params)
+        except:
+            return gym.spaces.Discrete(self.env.num_actions(self.env_params))
+
+    @property
+    def max_episode_steps(self):
+        try:
+            return self.env_params.max_episode_steps
+        except:
+            return self.steps_per_rollout
