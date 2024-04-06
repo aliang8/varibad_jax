@@ -17,9 +17,13 @@ import haiku as hk
 import jax
 import jax.numpy as jnp
 import numpy as np
-from typing import Optional
+from typing import Optional, Dict
 import flax.linen as nn
 import chex
+import einops
+from ml_collections.config_dict import ConfigDict
+from varibad_jax.models.transformer_encoder import TransformerEncoder
+from varibad_jax.models.common import ImageEncoder, CnnEncoder, CnnDecoder
 
 
 @chex.dataclass
@@ -28,72 +32,76 @@ class LAMOutputs:
     z_q: jnp.ndarray
     obs_pred: jnp.ndarray
     codebook_loss: jnp.ndarray
-
-
-def latent_action_model(config, obs):
-    """
-    Args:
-        config: dict
-        obs: jnp.ndarray, shape [B, T, H, W, C]
-    """
-    model = LatentActionModel(config)
-    # we will encode the full obs seq x_1 ... x_t, x_t+1
-    z_e = model.encode(obs)
-    quantize_output = model.quantize(z_e)
-    z_q = quantize_output["quantize"]  # maybe this is our latent action
-    # are the latent actions the encoding indices from the quantizer?
-    # latent_actions = quantize_output["encoding_indices"]
-    codebook_loss = quantize_output["codebook_loss"]
-    obs_pred = model.decode(z_q)
-    return LAMOutputs(
-        z_e=z_e,
-        z_q=z_q,
-        obs_pred=obs_pred,
-        codebook_loss=codebook_loss,
-    )
+    encoding_indices: jnp.ndarray
 
 
 class LatentActionModel(hk.Module):
-    def __init__(self, config):
+    def __init__(self, config: ConfigDict):
         super().__init__()
-        self.encoder = Encoder(config)
+        # encodes observations and outputs latent embedding
+        self.image_encoder = CnnEncoder(**config.image_encoder_config)
+        self.encoder = TransformerEncoder(**config.transformer_config)
         self.quantizer = QuantizedCodebook(
-            num_codes=config["num_codes"],
-            code_dim=config["code_dim"],
-            commitment_loss=config["commitment_loss"],
+            num_codes=config.num_codes,
+            code_dim=config.code_dim,
+            beta=config.beta,
         )
-        self.decoder = Decoder(config)
+        self.mid_layer = hk.Linear(
+            config.code_dim,
+            w_init=hk.initializers.VarianceScaling(2.0),
+            b_init=hk.initializers.Constant(0.0),
+        )
+        # decoder takes in both the output from codebook and the latent embedding
+        # use convtranspose to reconstruct image
+        self.decoder = CnnDecoder(**config.image_decoder_config)
 
-    def encode(self, obs):
-        return self.encoder(obs)
+    def __call__(self, obs, is_training=True):
+        # obs - [B, T, H, W, C]
 
-    def quantize(self, z_e):
-        return self.quantizer(z_e)["quantize"]
+        # first encode the observations
+        #  we will encode the full obs seq x_1 ... x_t, x_t+1
+        img_embedding = self.image_encoder(obs, is_training=is_training)
+        z_e = self.encoder(img_embedding, deterministic=not is_training)
 
-    def decode(self, z_q):
-        return self.decoder(z_q)
+        # quantize the latent embedding
+        quantize_output = self.quantizer(z_e)
+        z_q = quantize_output["z_q"]
+
+        # decode given z_e and z_q
+        # TODO: maybe this is another transformer
+        z_qe = jnp.concatenate([z_q, z_e], axis=-1)
+        z_qe = self.mid_layer(z_qe)
+        z_qe = nn.gelu(z_qe)
+
+        # [B, T, D]
+
+        # need to make this [B, T, 1, 1, D]
+        z_qe = einops.rearrange(z_qe, "B T D -> B T 1 1 D")
+
+        # intermediate layer to encode z_q and z_e together
+        obs_pred = self.decoder(z_qe, is_training=True)
+        return LAMOutputs(z_e=z_e, obs_pred=obs_pred, **quantize_output)
 
 
 class QuantizedCodebook(hk.Module):
     def __init__(
         self,
-        embed_size_K: int,
-        embed_dim_D: int,
-        commitment_loss: float,
-        name: Optional[str] = None,
+        num_codes: int,
+        code_dim: int,
+        beta: float,
     ):
-        super().__init__(name)
-        self.K = embed_size_K
-        self.D = embed_dim_D
-        self.beta = commitment_loss
+        super().__init__()
+        self.K = num_codes
+        self.D = code_dim
+        self.beta = beta
 
         initializer = hk.initializers.VarianceScaling(distribution="uniform")
         self.codebook = hk.get_parameter("codebook", (self.K, self.D), init=initializer)
 
-    def __call__(self, inputs) -> dict[str, jnp.ndarray]:
-        """ """
+    def __call__(self, inputs: jnp.ndarray) -> Dict[str, jnp.ndarray]:
         # input shape A1 x ... x An x D
         # shape N x D, N = A1 * ... * An
+        # flatten the first N dimensions except for the last
         flattened = jnp.reshape(inputs, (-1, self.D))
 
         # shape N x 1
@@ -124,7 +132,7 @@ class QuantizedCodebook(hk.Module):
 
         return {
             "codebook_loss": loss,
-            "quantize": quantize,
+            "z_q": quantize,
             "encoding_indices": encoding_indices,
         }
 

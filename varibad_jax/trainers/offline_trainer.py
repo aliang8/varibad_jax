@@ -12,17 +12,20 @@ import optax
 import functools
 import gymnasium as gym
 import tqdm
+import numpy as np
 from collections import defaultdict as dd
 from flax.training.train_state import TrainState
 from ml_collections.config_dict import ConfigDict, FrozenConfigDict
 from varibad_jax.utils.rollout import run_rollouts
-
+from typing import NamedTuple
 
 from varibad_jax.trainers.base_trainer import BaseTrainer
 import varibad_jax.utils.general_utils as gutl
 from varibad_jax.models.decision_transformer.helpers import init_params_dt, dt_fn
+from varibad_jax.models.decision_transformer.loss import loss_fn as dt_loss_fn
 
-from xminigrid.types import TimeStep
+from varibad_jax.models.genie.helpers import init_params_lam, lam_apply_fn
+from varibad_jax.models.genie.loss import loss_fn as lam_loss_fn
 
 
 def create_ts(
@@ -37,7 +40,29 @@ def create_ts(
             input_action_dim,
             action_dim,
         )
-        policy_fn = dt_fn
+        policy_apply = functools.partial(
+            jax.jit(
+                dt_fn.apply,
+                static_argnames=("config", "action_dim", "is_continuous"),
+            ),
+            config=FrozenConfigDict(config.policy),
+            action_dim=action_dim,
+            is_continuous=continuous_actions,
+        )
+        state = None
+    elif config.policy.name == "lam":
+        params, state = init_params_lam(
+            config.policy,
+            rng,
+            envs.observation_space,
+        )
+        policy_apply = functools.partial(
+            jax.jit(
+                lam_apply_fn.apply,
+                static_argnames=("config"),
+            ),
+            config=FrozenConfigDict(config.policy),
+        )
 
     num_params = sum(p.size for p in jax.tree_util.tree_leaves(params))
     logging.info(f"num params = {num_params}")
@@ -46,28 +71,19 @@ def create_ts(
         # optax.clip(config.vae.max_grad_norm),
         optax.adam(config.lr, eps=config.eps),
     )
-    policy_apply = functools.partial(
-        jax.jit(
-            policy_fn.apply,
-            static_argnames=("config", "action_dim", "is_continuous"),
-        ),
-        config=FrozenConfigDict(config.policy),
-        action_dim=action_dim,
-        is_continuous=continuous_actions,
-    )
     ts = TrainState.create(
         apply_fn=policy_apply,
         params=params,
         tx=tx,
     )
-    return ts
+    return ts, state
 
 
 class OfflineTrainer(BaseTrainer):
     def __init__(self, config: ConfigDict):
         super().__init__(config)
 
-        self.ts_policy = create_ts(
+        self.ts_policy, self.state = create_ts(
             config,
             next(self.rng_seq),
             self.envs,
@@ -152,55 +168,21 @@ class OfflineTrainer(BaseTrainer):
             f"len eval dataset: {len(eval_observations)}, num eval batches: {self.num_eval_batches}"
         )
 
-        def loss_fn(params, ts, batch, rng):
-            # trajectory level
-            # observations: [B, T, *_]
-            observations, actions, rewards = batch
-
-            # [B, T, 1]
-            if len(actions.shape) == 2:
-                actions = jnp.expand_dims(actions, axis=-1)
-
-            # [B, T]
-            mask = jnp.ones_like(rewards)
-
-            # [B, T, 1]
-            if len(rewards.shape) == 2:
-                rewards = jnp.expand_dims(rewards, axis=-1)
-
-            policy_output = ts.apply_fn(
-                params,
-                rng,
-                states=observations.astype(jnp.float32),
-                actions=actions,
-                rewards=rewards,
-                mask=mask,
+        if self.config.policy.name == "dt":
+            loss_fn = functools.partial(
+                dt_loss_fn,
+                continuous_actions=self.continuous_actions,
             )
-            action_preds = policy_output.logits
+        elif self.config.policy.name == "lam":
+            loss_fn = lam_loss_fn
 
-            if self.continuous_actions:
-                # compute MSE loss
-                loss = optax.squared_error(action_preds, actions.squeeze(axis=-1))
-            else:
-                # compute cross entropy with logits
-                loss = optax.softmax_cross_entropy_with_integer_labels(
-                    action_preds, actions.squeeze(axis=-1).astype(jnp.int32)
-                )
-
-            loss = jnp.mean(loss)
-
-            metrics = {
-                "bc_loss": loss,
-            }
-
-            return loss, metrics
-
-        def update_step(ts, batch, rng):
-            (loss, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(
-                ts.params, ts, batch, rng
+        def update_step(ts, state, batch, rng):
+            (loss, (metrics, state)), grads = jax.value_and_grad(loss_fn, has_aux=True)(
+                ts.params, ts, state, batch, rng
             )
+
             ts = ts.apply_gradients(grads=grads)
-            return ts, metrics
+            return ts, metrics, state
 
         self.jit_update_step = jax.jit(update_step)
 
@@ -218,8 +200,9 @@ class OfflineTrainer(BaseTrainer):
             start_time = time.time()
             epoch_metrics = dd(list)
             for _ in range(self.num_train_batches):
-                self.ts_policy, metrics = self.jit_update_step(
-                    self.ts_policy, next(self.train_dataloader), next(self.rng_seq)
+                batch = next(self.train_dataloader)
+                self.ts_policy, metrics, self.state = self.jit_update_step(
+                    self.ts_policy, self.state, batch, next(self.rng_seq)
                 )
                 for k, v in metrics.items():
                     epoch_metrics[k].append(v)

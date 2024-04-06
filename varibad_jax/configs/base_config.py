@@ -32,7 +32,7 @@ def get_config(config_string: str = None):
         "xland": config_dict.ConfigDict(
             dict(
                 env_name="xland",
-                env_kwargs=dict(view_size=7, height=9, width=9),
+                env_kwargs=dict(view_size=5, height=9, width=9),
                 benchmark_path="/scr/aliang80/varibad_jax/varibad_jax/envs/xland_benchmarks/test_ruleset.pkl",
                 ruleset_id=0,
                 env_id="XLand-MiniGrid-R1-9x9",

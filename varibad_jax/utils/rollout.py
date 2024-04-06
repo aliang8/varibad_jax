@@ -53,6 +53,9 @@ def run_rollouts(
             action_dim=action_dim,
             steps_per_rollout=steps_per_rollout,
         )
+    else:
+        rollout_kwargs = dict()
+        return {}
 
     rollout_kwargs.update(dict(env=env, config=config))
 

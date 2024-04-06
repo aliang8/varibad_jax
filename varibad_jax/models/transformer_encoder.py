@@ -75,6 +75,7 @@ class TransformerEncoder(hk.Module):
         attn_size: int,
         dropout_rate: float,
         widening_factor: int = 4,
+        **kwargs
     ):
         super().__init__()
         self.num_heads = num_heads
@@ -102,11 +103,14 @@ class TransformerEncoder(hk.Module):
     def __call__(
         self,
         embeddings: jax.Array,  # [B, T, D]
-        mask: jax.Array,  # [B, T]
+        mask: jax.Array = None,  # [B, T]
         deterministic: bool = False,
     ) -> jax.Array:  # [B, T, D]
         """Transforms input embedding sequences to output embedding sequences."""
-        _, seq_len, D = embeddings.shape
+        B, seq_len, D = embeddings.shape
+
+        if mask is None:
+            mask = jnp.ones((B, seq_len))
 
         # Compute causal mask for autoregressive sequence modelling.
         mask = mask[:, None, None, :]  # [B, H=1, T'=1, T]
