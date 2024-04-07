@@ -103,7 +103,7 @@ class BAMDPWrapper(Wrapper):
 
         # finish the episode
         timestep = timestep.replace(
-            step_type=jnp.where(done_bamdp, StepType.LAST, StepType.FIRST)
+            step_type=jnp.where(done_bamdp, StepType.LAST, StepType.MID)
         )
         xtimestep = TimestepInfo(
             timestep=timestep, info=info, init_key=xtimestep.init_key

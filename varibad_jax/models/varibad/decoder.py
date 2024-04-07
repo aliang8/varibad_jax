@@ -83,6 +83,7 @@ class Decoder(hk.Module):
             next_state_embed = self.state_embed(next_states, is_training=is_training)
         else:
             next_state_embed = self.state_embed(next_states)
+
         next_state_embed = nn.gelu(next_state_embed)
         inputs = jnp.concatenate((latent_embed, next_state_embed), axis=-1)
 

@@ -49,7 +49,7 @@ class TransformerLayer(hk.Module):
         self,
         x: jax.Array,
         mask: jax.Array,
-        is_training: bool = False,
+        is_training: bool = True,
     ) -> jax.Array:
         h_norm = self.ln(x)
         h_attn = self.attn_block(h_norm, h_norm, h_norm, mask=mask)
@@ -209,11 +209,11 @@ class SARTransformerEncoder(hk.Module):
             embeddings = jnp.stack([reward_embed, state_embed, action_embed], axis=1)
 
             # make one long sequence
-            embeddings = einops.rearrange(embeddings, "b c t d -> b (c t) d")
+            embeddings = einops.rearrange(embeddings, "b c t d -> b (t c) d")
 
             # make mask
             mask = mask[:, None, :].repeat(3, axis=1)
-            mask = einops.rearrange(mask, "b c t -> b (c t)")
+            mask = einops.rearrange(mask, "b c t -> b (t c)")
         else:
             embeddings = jnp.concatenate(
                 [state_embed, action_embed, reward_embed], axis=-1

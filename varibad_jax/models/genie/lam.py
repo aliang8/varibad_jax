@@ -24,7 +24,7 @@ import chex
 import einops
 from ml_collections.config_dict import ConfigDict
 from varibad_jax.models.transformer_encoder import TransformerEncoder
-from varibad_jax.models.common import ImageEncoder, ImageDecoder, CnnEncoder, CnnDecoder
+from varibad_jax.models.common import ImageEncoder, ImageDecoder
 
 
 @chex.dataclass

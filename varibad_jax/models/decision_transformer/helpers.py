@@ -19,7 +19,7 @@ def dt_fn(config: FrozenConfigDict, is_continuous: bool, action_dim: int, **kwar
 def init_params_dt(
     config: FrozenConfigDict,
     rng_key: PRNGKey,
-    observation_space: tuple,
+    observation_shape: tuple,
     is_continuous: bool,
     input_action_dim: int,
     action_dim: int,
@@ -30,7 +30,7 @@ def init_params_dt(
     # import ipdb
 
     # ipdb.set_trace()
-    dummy_states = np.zeros((t, bs, *observation_space.shape), dtype=np.float32)
+    dummy_states = np.zeros((t, bs, *observation_shape), dtype=np.float32)
     dummy_actions = np.zeros((t, bs, input_action_dim))
     dummy_rewards = np.zeros((t, bs, 1))
     dummy_mask = np.ones((t, bs))

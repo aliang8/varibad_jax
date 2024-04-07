@@ -38,11 +38,14 @@ class ActionHead(hk.Module):
             self.mean = hk.Linear(action_dim, name="mean", **init_kwargs)
             self.logvar = hk.Linear(action_dim, name="logvar", **init_kwargs)
 
-    def __call__(self, h: jnp.ndarray) -> PolicyOutput:
+    def __call__(self, h: jnp.ndarray, is_training: bool = True) -> PolicyOutput:
         if not self.is_continuous:
             logits = self.logits(h)
             action_dist = tfd.Categorical(logits=logits)
-            action = action_dist.sample(seed=hk.next_rng_key())
+            if is_training:
+                action = action_dist.sample(seed=hk.next_rng_key())
+            else:
+                action = action_dist.mode()
         else:
             mean = self.mean(h)
             logvar = self.logvar(h)

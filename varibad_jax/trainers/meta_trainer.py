@@ -39,7 +39,7 @@ import varibad_jax.utils.general_utils as gutl
 from varibad_jax.utils.rollout import run_rollouts
 
 
-def create_ts(config, rng, envs, input_action_dim, action_dim):
+def create_ts(config, rng, envs, input_action_dim, action_dim, num_update_steps: int):
     continuous_actions = not isinstance(envs.action_space, gym.spaces.Discrete)
 
     if config.load_from_ckpt:
@@ -50,6 +50,8 @@ def create_ts(config, rng, envs, input_action_dim, action_dim):
             ckpt = pickle.load(f)
             vae_params = ckpt["ts_vae"]
             policy_params = ckpt["ts_policy"]
+            vae_state = ckpt["vae_state"]
+            policy_state = ckpt["policy_state"]
     else:
         rng_vae, rng_policy = jax.random.split(rng, 2)
         vae_params, vae_state = init_params_vae(
@@ -81,11 +83,31 @@ def create_ts(config, rng, envs, input_action_dim, action_dim):
     num_policy_params = sum(p.size for p in jax.tree_util.tree_leaves(policy_params))
     logging.info(f"num policy params = {num_policy_params}")
 
-    tx_policy = optax.chain(
-        # optax.clip_by_global_norm(config.policy.max_grad_norm),
-        optax.adam(config.policy.lr, eps=config.policy.eps),
-    )
+    if config.policy.anneal_lr:
+        if config.lr_anneal_method == "cosine":
+            lr = optax.cosine_decay_schedule(
+                config.policy.lr, decay_steps=num_update_steps, alpha=0.95
+            )
+        elif config.lr_anneal_method == "warmup_exp_decay":
+            lr = optax.warmup_exponential_decay_schedule(
+                init_value=1e-5,
+                peak_value=config.policy.lr,
+                warmup_steps=int(num_update_steps * 0.1),
+                decay_rate=0.8,
+                transition_steps=int(num_update_steps * 0.1),
+                end_value=1e-5,
+            )
+    else:
+        lr = config.policy.lr
 
+    @optax.inject_hyperparams
+    def optimizer(lr):
+        return optax.chain(
+            # optax.clip_by_global_norm(config.policy.max_grad_norm),
+            optax.adam(lr, eps=config.policy.eps),
+        )
+
+    tx_policy = optimizer(lr)
     encode_apply = partial(
         jax.jit(
             encode_trajectory.apply,
@@ -134,6 +156,7 @@ class MetaRLTrainer(BaseTrainer):
             envs=self.envs,
             input_action_dim=self.input_action_dim,
             action_dim=self.action_dim,
+            num_update_steps=self.num_updates,
         )
         self.decode_apply = partial(
             jax.jit(
@@ -234,9 +257,6 @@ class MetaRLTrainer(BaseTrainer):
 
             # take a step in the environment
             action = policy_output.action
-
-            step_rng = next(self.rng_seq)
-            step_rng = jax.random.split(step_rng, self.num_processes)
             xtimestep = self.jit_step(self.env_params, xtimestep, action)
             next_state = xtimestep.timestep.observation
             next_state = next_state.astype(np.float32)
@@ -302,6 +322,8 @@ class MetaRLTrainer(BaseTrainer):
                 task=None,
             )
             # print("*" * 20)
+            # print(step, next_state)
+            # print(xtimestep.timestep.state.goal)
             # print(xtimestep.info["done"])
             # print(xtimestep.info["done_bamdp"])
             # print(xtimestep.timestep.last())
@@ -337,10 +359,6 @@ class MetaRLTrainer(BaseTrainer):
             latent = jnp.concatenate([latent_mean, latent_logvar], axis=-1)
             hidden_state = encode_outputs.hidden_state
             self.total_steps += self.num_processes
-
-        # import ipdb
-
-        # ipdb.set_trace()
 
         # compute next value for bootstrapping
         policy_output, self.policy_state = self.ts_policy.apply_fn(
@@ -416,7 +434,10 @@ class MetaRLTrainer(BaseTrainer):
 
         # first eval
         if not self.config.skip_first_eval:
-            eval_metrics = run_rollouts(
+            (
+                eval_metrics,
+                *_,
+            ) = run_rollouts(
                 rng=next(self.rng_seq),
                 state=[self.vae_state, self.policy_state],
                 env=self.eval_envs,
@@ -497,6 +518,7 @@ class MetaRLTrainer(BaseTrainer):
                         **train_metrics,
                         **env_stats,
                         **encoder_stats,
+                        "misc/lr": self.ts_policy.opt_state.hyperparams["lr"],
                         "time/rollout_time": rollout_time,
                         "time/fps": self.total_steps / (time.time() - start_time),
                     }
@@ -504,7 +526,7 @@ class MetaRLTrainer(BaseTrainer):
                         self.wandb_run.log(metrics, step=self.iter_idx)
 
                 if (self.iter_idx + 1) % self.config.eval_interval == 0:
-                    eval_metrics = run_rollouts(
+                    eval_metrics, *_ = run_rollouts(
                         rng=next(self.rng_seq),
                         state=[self.vae_state, self.policy_state],
                         env=self.eval_envs,
@@ -521,15 +543,6 @@ class MetaRLTrainer(BaseTrainer):
                         self.wandb_run.log(eval_metrics, step=self.iter_idx)
 
                 if (self.iter_idx + 1) % self.config.save_interval == 0:
-                    # # Bundle everything together.
-                    # self.saver.save(
-                    #     iter_idx=self.iter_idx + 1,
-                    #     ckpt={
-                    #         "config": self.config.to_dict(),
-                    #         "ts_policy": self.ts_policy,
-                    #         "ts_vae": self.ts_vae,
-                    #     },
-                    # )
                     # save to pickle
                     ckpt_file = Path(self.ckpt_dir) / f"ckpt_{self.iter_idx + 1}.pkl"
                     logging.debug(f"saving checkpoint to {ckpt_file}")

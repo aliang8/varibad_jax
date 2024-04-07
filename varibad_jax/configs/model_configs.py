@@ -14,16 +14,28 @@ transformer_config = config_dict.ConfigDict(
         encode_separate=True,  # encode (s,a,r) as separate tokens
     )
 )
-image_encoder_config = config_dict.ConfigDict(
-    # assumes a 9x9x2 observation
-    dict(
-        name="image_encoder",
-        output_channels=[16, 32, 32],
-        kernel_shapes=[3, 2, 2],
-        strides=[2, 2, 1],
-        padding=["VALID", "VALID", "VALID"],
-    )
-)
+image_encoder_configs = {
+    "9x9": config_dict.ConfigDict(
+        # assumes a 9x9x2 observation
+        dict(
+            name="image_encoder",
+            output_channels=[16, 32, 32],
+            kernel_shapes=[3, 2, 2],
+            strides=[2, 2, 1],
+            padding=["VALID", "VALID", "VALID"],
+        )
+    ),
+    "5x5": config_dict.ConfigDict(
+        # assumes a 5x5x2 observation
+        dict(
+            name="image_encoder",
+            output_channels=[16, 32, 32],
+            kernel_shapes=[2, 2, 2],
+            strides=[1, 1, 1],
+            padding=["VALID", "VALID", "VALID"],
+        )
+    ),
+}
 image_decoder_config = config_dict.ConfigDict(
     dict(
         name="image_decoder",

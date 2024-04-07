@@ -37,7 +37,7 @@ def create_ts(
     action_dim,
 ):
     if config.policy.name == "dt":
-        params = init_params_dt(
+        params, state = init_params_dt(
             config.policy,
             rng,
             observation_shape,
@@ -48,13 +48,17 @@ def create_ts(
         policy_apply = functools.partial(
             jax.jit(
                 dt_fn.apply,
-                static_argnames=("config", "action_dim", "is_continuous"),
+                static_argnames=(
+                    "config",
+                    "action_dim",
+                    "is_continuous",
+                    "is_training",
+                ),
             ),
             config=FrozenConfigDict(config.policy),
             action_dim=action_dim,
             is_continuous=continuous_actions,
         )
-        state = None
     elif config.policy.name == "lam":
         params, state = init_params_lam(
             config.policy,
@@ -97,8 +101,10 @@ class OfflineTrainer(BaseTrainer):
         data_file = f"eid-{config.env.env_id}_n-{config.num_rollouts_collect}_steps-{steps_per_rollout}.pkl"
         data_path = Path(self.config.root_dir) / self.config.data_dir / data_file
         with open(data_path, "rb") as f:
-            timesteps, actions = pickle.load(f)
+            data = pickle.load(f)
 
+        timesteps = data["transitions"]
+        actions = data["actions"]
         dataset_size = actions.shape[0]
         num_train = int(dataset_size * self.config.train_frac)
         num_eval = dataset_size - num_train
@@ -109,8 +115,8 @@ class OfflineTrainer(BaseTrainer):
             return jtu.tree_map(lambda y: y[i], timesteps)
 
         # get full grid
-        observations = jnp.array([get_ts(i).state.grid for i in range(dataset_size)])
-        # observations = jnp.array([get_ts(i).observation for i in range(dataset_size)])
+        # observations = jnp.array([get_ts(i).state.grid for i in range(dataset_size)])
+        observations = jnp.array([get_ts(i).observation for i in range(dataset_size)])
         rewards = jnp.array([get_ts(i).reward for i in range(dataset_size)])
 
         logging.info(
@@ -185,7 +191,7 @@ class OfflineTrainer(BaseTrainer):
 
         def update_step(ts, state, batch, rng):
             (loss, (metrics, state)), grads = jax.value_and_grad(loss_fn, has_aux=True)(
-                ts.params, ts, state, batch, rng
+                ts.params, state, ts, batch, rng
             )
 
             ts = ts.apply_gradients(grads=grads)
@@ -236,8 +242,9 @@ class OfflineTrainer(BaseTrainer):
 
         # run on eval batches
         for _ in range(self.num_eval_batches):
-            loss, metrics = jax.jit(self.loss_fn)(
+            loss, (metrics, _) = jax.jit(self.loss_fn)(
                 self.ts.params,
+                self.state,
                 self.ts_policy,
                 next(self.eval_dataloader),
                 next(self.rng_seq),
@@ -249,8 +256,9 @@ class OfflineTrainer(BaseTrainer):
             eval_metrics[k] = jnp.mean(jnp.array(v))
 
         # run rollouts
-        rollout_metrics = run_rollouts(
+        rollout_metrics, *_ = run_rollouts(
             rng=next(self.rng_seq),
+            state=self.state,
             num_rollouts=self.config.num_eval_rollouts,
             env=self.eval_envs,
             config=self.config,

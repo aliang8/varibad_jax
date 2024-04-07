@@ -1,5 +1,5 @@
 from varibad_jax.configs.base_config import get_config as get_base_config
-from varibad_jax.configs.model_configs import transformer_config, image_encoder_config
+from varibad_jax.configs.model_configs import transformer_config, image_encoder_configs
 from ml_collections import config_dict
 
 
@@ -32,10 +32,20 @@ def get_config(config_string: str = None):
     # Reward prediction
     vae_config.decode_rewards = True
     vae_config.rew_recon_weight = 1.0
-    vae_config.embedding_dim = 16
+    vae_config.embedding_dim = 8
 
     transformer_config.encode_separate = False
-    image_encoder_config.embedding_dim = vae_config.get_ref("embedding_dim")
+
+    if "xland" in config_string:
+        image_encoder_config = None
+        for k, v in image_encoder_configs.items():
+            if k in config_string:
+                image_encoder_config = v
+                break
+
+        image_encoder_config.embedding_dim = vae_config.get_ref("embedding_dim")
+    else:
+        image_encoder_config = None
 
     # encoder specific configs
     encoder = {
@@ -50,6 +60,7 @@ def get_config(config_string: str = None):
         "transformer": transformer_config,
     }
 
+    encoder_config = None
     for k, v in encoder.items():
         if k in config_string:
             encoder_config = v
@@ -101,14 +112,16 @@ def get_config(config_string: str = None):
     policy_config.tau = 0.95
     policy_config.max_grad_norm = 0.5
     policy_config.embedding_dim = 16
+    policy_config.anneal_lr = True
     config.policy = policy_config
 
     config.notes = "VariBAD JAX"
     config.tags = ["varibad", "jax"]
     config.keys_to_include = {
+        "trainer": None,
         "env": ["env_name"],
         "policy": ["algo", "pass_latent_to_policy"],
-        "vae": ["num_vae_updates"],
+        "vae": ["num_vae_updates", "embedding_dim"],
     }
 
     config.cpu = 5

@@ -49,12 +49,13 @@ class DecisionTransformer(hk.Module):
         embeddings = self.transformer(
             states, actions, rewards, mask, is_training=is_training
         )
+        # jax.debug.breakpoint()
 
         # reshape embeddings to [B, T, 3, D]
-        embeddings = einops.rearrange(embeddings, "b (t c) d -> b t c d", c=3)
+        embeddings = einops.rearrange(embeddings, "b (t c) d -> b c t d", c=3)
 
         # predict actions from the state embedding
-        state_embed = embeddings[:, :, 1]
+        state_embed = embeddings[:, 1]
 
-        action_pred = self.action_head(state_embed)
-        return action_pred
+        policy_output = self.action_head(state_embed, is_training=is_training)
+        return policy_output

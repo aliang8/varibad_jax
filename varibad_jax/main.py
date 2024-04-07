@@ -48,6 +48,7 @@ psh = {
         "num_heads": "nh",
         "dropout_rate": "do",
         "num_vae_updates": "nvu",
+        "embedding_dim": "ed",
     },
     "policy": {
         "pass_latent_to_policy": "pltp",
@@ -58,15 +59,8 @@ psh = {
 }
 
 # run with ray tune
-
-# params for varibad vae exps
 param_space = {
-    "seed": tune.grid_search([0]),
-}
-
-# params for offline RL DT exps
-param_space = {
-    "seed": tune.grid_search([0]),
+    "seed": tune.grid_search([1]),
 }
 
 

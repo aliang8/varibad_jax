@@ -106,15 +106,6 @@ class LSTMTrajectoryEncoder(hk.Module):
             initial_state = hidden_state
 
         # [T, B, D]
-        # hidden_state, _ = hk.dynamic_unroll(
-        #     core=self.recurrent,
-        #     input_sequence=encoder_input,
-        #     initial_state=initial_state,
-        #     time_major=not self.batch_first,
-        #     reverse=False,
-        #     return_all_states=False,
-        #     unroll=1,
-        # )
         hidden_state, final_hidden_state = hk.static_unroll(
             core=self.recurrent,
             input_sequence=encoder_input,

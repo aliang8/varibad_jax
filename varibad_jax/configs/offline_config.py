@@ -1,7 +1,7 @@
 from varibad_jax.configs.base_config import get_config as get_base_config
 from varibad_jax.configs.model_configs import (
     transformer_config,
-    image_encoder_config,
+    image_encoder_configs,
     image_decoder_config,
 )
 from ml_collections import config_dict
@@ -10,18 +10,30 @@ from ml_collections import config_dict
 def get_config(config_string: str = None):
     config = get_base_config(config_string)
 
+    config.trainer = "offline"
     config.notes = "Offline RL"
     config.tags = ["offline_rl", "jax"]
     config.keys_to_include = {"trainer": None, "env": ["env_name"], "policy": ["name"]}
 
     config.data_dir = "datasets"
-    config.batch_size = 64
+    config.batch_size = 128
     config.num_epochs = 1000
     config.train_frac = 1.0
+    config.eval_interval = 50
 
     config.embedding_dim = 64
     transformer_config.embedding_dim = config.get_ref("embedding_dim")
-    image_encoder_config.embedding_dim = config.get_ref("embedding_dim")
+
+    if "xland" in config_string:
+        image_encoder_config = None
+        for k, v in image_encoder_configs.items():
+            if k in config_string:
+                image_encoder_config = v
+                break
+
+        image_encoder_config.embedding_dim = config.get_ref("embedding_dim")
+    else:
+        image_encoder_config = None
 
     policies = {
         "dt": config_dict.ConfigDict(
@@ -29,6 +41,7 @@ def get_config(config_string: str = None):
                 name="dt",
                 transformer_config=transformer_config,
                 image_obs=config.env.get_ref("image_obs"),
+                image_encoder_config=image_encoder_config,
             )
         ),
         "lam": config_dict.ConfigDict(
@@ -40,12 +53,13 @@ def get_config(config_string: str = None):
                 image_decoder_config=image_decoder_config,
                 # vq_vae
                 num_codes=8,
-                code_dim=embedding_dim,
+                code_dim=config.get_ref("embedding_dim"),
                 beta=0.25,
             )
         ),
     }
 
+    policy_config = None
     for k, v in policies.items():
         if k in config_string:
             policy_config = v
@@ -57,7 +71,7 @@ def get_config(config_string: str = None):
     # =============================================================
     # Data collection stuff
     # =============================================================
-    config.num_rollouts_collect = 1000
+    config.num_rollouts_collect = 10_000
 
     config.cpu = 5
     config.gpu = 1.0  # needs more gpu here

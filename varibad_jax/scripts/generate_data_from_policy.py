@@ -1,3 +1,8 @@
+"""
+script for collecting offline dataset from trained policy
+currently supports only LSTM varibad policy
+"""
+
 from absl import app, logging
 import os
 from pathlib import Path
@@ -10,7 +15,7 @@ import gymnasium as gym
 from ml_collections import ConfigDict, FieldReference, FrozenConfigDict, config_flags
 from varibad_jax.trainers.meta_trainer import create_ts
 from varibad_jax.envs.utils import make_envs
-from varibad_jax.utils.rollout import eval_rollout
+from varibad_jax.utils.rollout import run_rollouts
 from varibad_jax.models.varibad.helpers import get_prior
 
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.01"
@@ -32,20 +37,24 @@ def main(_):
         ckpt = pickle.load(f)
         config_p = ckpt["config"]
 
-    config_p = FrozenConfigDict(config_p)
+    config_p = ConfigDict(config_p)
+    config_p.load_from_ckpt = True
+    config_p.checkpoint_step = config.checkpoint_step
+    config_p.model_ckpt_dir = config.model_ckpt_dir
+    print(config_p)
 
-    env = make_envs(**config.env, training=False)
-    continuous_actions = not isinstance(env.action_space, gym.spaces.Discrete)
+    envs, env_params = make_envs(**config.env, training=False)
+    continuous_actions = not isinstance(envs.action_space, gym.spaces.Discrete)
 
     if continuous_actions:
-        input_action_dim = action_dim = env.action_space.shape[0]
+        input_action_dim = action_dim = envs.action_space.shape[0]
     else:
-        action_dim = env.action_space.n
+        action_dim = envs.action_space.n
         input_action_dim = 1
 
     # create train states
-    ts_vae, ts_policy = create_ts(
-        config, next(rng_seq), env, input_action_dim, action_dim
+    ts_vae, ts_policy, vae_state, policy_state = create_ts(
+        config_p, next(rng_seq), envs, input_action_dim, action_dim, num_update_steps=0
     )
 
     get_prior_fn = functools.partial(
@@ -53,34 +62,27 @@ def main(_):
             get_prior.apply,
             static_argnames=("config", "batch_size"),
         ),
-        config=FrozenConfigDict(config.vae),
+        config=FrozenConfigDict(config_p.vae),
     )
 
     # collect some rollouts
-    steps_per_rollout = config.env.num_episodes_per_rollout * env.max_episode_steps
-
-    rng_keys = jax.random.split(next(rng_seq), config.num_rollouts_collect)
+    steps_per_rollout = config.env.num_episodes_per_rollout * envs.max_episode_steps
 
     logging.info("start data collection")
-    stats, transitions = jax.vmap(
-        eval_rollout,
-        in_axes=(0, None, None, None, None, None, None, None),
-    )(
-        rng_keys,
-        rollout_env,
-        config,
-        ts_policy,
-        ts_vae,
-        get_prior_fn,
-        vae_action_dim,
-        steps_per_rollout,
+    config_p.num_eval_rollouts = config.num_rollouts_collect
+    eval_metrics, transitions, actions = run_rollouts(
+        rng=next(rng_seq),
+        state=[vae_state, policy_state],
+        env=envs,
+        config=config_p,
+        ts_policy=ts_policy,
+        ts_vae=ts_vae,
+        get_prior=get_prior_fn,
+        steps_per_rollout=steps_per_rollout,
+        action_dim=input_action_dim,
     )
 
-    metrics = {
-        "return": jnp.mean(stats["reward"]),
-        "avg_length": jnp.mean(stats["length"]),
-    }
-    logging.info(f"eval metrics: {metrics}")
+    logging.info(f"eval metrics: {eval_metrics}")
 
     # save transitions to a dataset format
     data_dir = Path(config.root_dir) / "datasets"
@@ -89,8 +91,14 @@ def main(_):
         data_dir
         / f"eid-{config.env.env_id}_n-{config.num_rollouts_collect}_steps-{steps_per_rollout}.pkl"
     )
+    data = {
+        "config": config_p.to_dict(),
+        "ckpt_file": ckpt_file,
+        "transitions": transitions,
+        "actions": actions,
+    }
     with open(data_file, "wb") as f:
-        pickle.dump(transitions, f)
+        pickle.dump(data, f)
 
 
 if __name__ == "__main__":

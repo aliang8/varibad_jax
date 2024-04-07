@@ -33,7 +33,7 @@ class ActorCritic(hk.Module):
 
         self.config = config
         self.image_obs = config.image_obs
-        if self.config.image_obs:
+        if self.image_obs:
             self.state_embed = ImageEncoder(
                 **config.image_encoder_config, **init_kwargs
             )
@@ -81,7 +81,7 @@ class ActorCritic(hk.Module):
         task: jnp.ndarray = None,
         is_training: bool = True,
     ):
-        if self.config.image_obs:
+        if self.image_obs:
             state_embed = self.state_embed(state, is_training=is_training)
         else:
             state_embed = self.state_embed(state)

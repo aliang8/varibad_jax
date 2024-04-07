@@ -45,9 +45,13 @@ def init_params(
     dummy_states = np.zeros((t, bs, *observation_space.shape), dtype=np.float32)
     dummy_actions = np.zeros((t, bs, action_dim))
     dummy_rewards = np.zeros((t, bs, 1))
-    dummy_hs = np.zeros((bs, config.encoder.lstm_hidden_size))
+    if config.encoder.name == "lstm":
+        dummy_hs = np.zeros((bs, config.encoder.lstm_hidden_size))
+    else:
+        dummy_hs = None
+
     dummy_latents = np.zeros((t, bs, config.latent_dim))
-    if config.encoder == "transformer":
+    if config.encoder.name == "transformer":
         dummy_mask = np.ones((t, bs))
     else:
         dummy_mask = None

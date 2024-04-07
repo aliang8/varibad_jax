@@ -37,7 +37,7 @@ def get_config(config_string: str = None):
                 ruleset_id=0,
                 env_id="XLand-MiniGrid-R1-9x9",
                 num_episodes_per_rollout=4,
-                steps_per_rollout=15,
+                steps_per_rollout=20,
                 num_processes=16,
                 normalize_rews=False,
                 image_obs=True,
@@ -59,6 +59,7 @@ def get_config(config_string: str = None):
     config.seed = 521
     config.mode = "train"
     config.use_wb = False
+    config.lr_anneal_method = "warmup_exp_decay"
 
     # number of updates
     config.log_level = "info"
@@ -94,4 +95,8 @@ def get_config(config_string: str = None):
     config.load_from_ckpt = False
     config.checkpoint_step = config_dict.placeholder(int)
     config.model_ckpt_dir = ""
+
+    # ray
+    config.cpu = 5
+    config.gpu = 0.1
     return config

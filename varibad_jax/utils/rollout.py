@@ -55,6 +55,13 @@ def run_rollouts(
             action_dim=action_dim,
             steps_per_rollout=steps_per_rollout,
         )
+    elif config.trainer == "rl":
+        rollout_fn = eval_rollout
+        rollout_kwargs = dict(
+            ts_policy=ts_policy,
+            action_dim=action_dim,
+            steps_per_rollout=steps_per_rollout,
+        )
     else:
         rollout_kwargs = dict()
         return {}
@@ -95,7 +102,7 @@ def run_rollouts(
         videos = einops.rearrange(videos, "n t h w c -> n t c h w")
         wandb_run.log({"eval_rollouts": wandb.Video(np.array(videos), fps=5)})
 
-    return eval_metrics
+    return eval_metrics, transitions, actions
 
 
 def eval_rollout_dt(
@@ -124,13 +131,14 @@ def eval_rollout_dt(
 
     # first return-to-go is the desired return value
     # this is probably environment / task specific
-    rtg = 40.0
+    rtg = 60.0
     rewards = rewards.at[0, 0].set(rtg)
 
     def _step_fn(carry, _):
         (
             rng,
             stats,
+            state,
             xtimestep,
             observations,
             actions,
@@ -146,13 +154,15 @@ def eval_rollout_dt(
         observations = observations.at[0, stats.length].set(observation)
         mask = mask.at[0, stats.length].set(1.0)
 
-        policy_output = ts_policy.apply_fn(
+        policy_output, state = ts_policy.apply_fn(
             ts_policy.params,
+            state,
             policy_rng,
             states=observations,
             actions=actions,
             rewards=rewards,
             mask=mask,
+            is_training=False,
         )
 
         # [B, T]
@@ -183,6 +193,7 @@ def eval_rollout_dt(
         return (
             rng,
             stats,
+            state,
             xtimestep,
             observations,
             actions,
@@ -195,6 +206,7 @@ def eval_rollout_dt(
     init_carry = (
         rng,
         stats,
+        state,
         xtimestep,
         observations,
         actions,
@@ -226,6 +238,10 @@ def eval_rollout(
 
     rng, reset_rng = jax.random.split(rng, 2)
     xtimestep = env.reset(env.env_params, reset_rng)
+    task = xtimestep.timestep.state.goal
+    if len(task.shape) == 1:
+        task = task[jnp.newaxis]
+
     prev_action = jnp.zeros((1, action_dim))
     prev_reward = jnp.zeros((1, 1))
     done = False
@@ -234,6 +250,7 @@ def eval_rollout(
         (
             rng,
             stats,
+            state,
             xtimestep,
             prev_action,
             prev_reward,
@@ -245,9 +262,13 @@ def eval_rollout(
         observation = observation.astype(jnp.float32)
         observation = observation[jnp.newaxis]
 
-        policy_output = ts_policy.apply_fn(
+        policy_output, state = ts_policy.apply_fn(
             ts_policy.params,
+            state,
             policy_rng,
+            env_state=observation,
+            task=task,
+            is_training=False,
         )
         action = policy_output.action
         xtimestep = env.step(env.env_params, xtimestep, action.squeeze())
@@ -270,6 +291,7 @@ def eval_rollout(
         return (
             rng,
             stats,
+            state,
             xtimestep,
             action,
             reward,
@@ -279,6 +301,7 @@ def eval_rollout(
     init_carry = (
         rng,
         stats,
+        state,
         xtimestep,
         prev_action,
         prev_reward,
@@ -310,9 +333,17 @@ def eval_rollout_with_belief_model(
 
     rng, reset_rng, prior_rng = jax.random.split(rng, 3)
     xtimestep = env.reset(env.env_params, reset_rng)
+    observation = xtimestep.timestep.observation
     prev_action = jnp.zeros((1, action_dim))
     prev_reward = jnp.zeros((1, 1))
     done = False
+
+    # if using a transformer, we need to keep track of the full history
+    if config.vae.encoder.name == "transformer":
+        prev_states = np.zeros((steps_per_rollout, 1, *observation.shape))
+        prev_action = np.zeros((steps_per_rollout, 1, action_dim))
+        prev_reward = np.zeros((steps_per_rollout, 1, 1))
+        masks = np.zeros((steps_per_rollout, 1))
 
     prior_outputs = get_prior(ts_vae.params, prior_rng, batch_size=1)
     latent_mean = prior_outputs.latent_mean
@@ -360,17 +391,41 @@ def eval_rollout_with_belief_model(
         action = action.reshape(1, 1).astype(jnp.float32)
         reward = reward.reshape(1, 1)
 
-        # update hidden state
-        encode_outputs, vae_state = ts_vae.apply_fn(
-            ts_vae.params,
-            vae_state,
-            encoder_rng,
-            states=next_obs,
-            actions=action,
-            rewards=reward,
-            hidden_state=hidden_state,
-            is_training=False,
-        )
+        if config.vae.encoder.name == "lstm":
+            # update hidden state
+            encode_outputs, vae_state = ts_vae.apply_fn(
+                ts_vae.params,
+                vae_state,
+                encoder_rng,
+                states=next_obs,
+                actions=action,
+                rewards=reward,
+                hidden_state=hidden_state,
+                is_training=False,
+            )
+        elif config.vae.encoder.name == "transformer":
+            pass
+            # states[step] = next_state
+            # actions[step] = action
+            # rewards[step] = reward
+            # masks[step] = 1.0 - done.flatten()
+
+            # # we want to embed the full sequence cause jax
+            # encode_outputs, self.vae_state = self.ts_vae.apply_fn(
+            #     self.ts_vae.params,
+            #     self.vae_state,
+            #     next(self.rng_seq),
+            #     states=states,
+            #     actions=actions,
+            #     rewards=rewards,
+            #     mask=masks,
+            #     is_training=True,
+            # )
+
+            # # take the last timestep for every item
+            # encode_outputs.latent_mean = encode_outputs.latent_mean[step]
+            # encode_outputs.latent_logvar = encode_outputs.latent_logvar[step]
+            # encode_outputs.latent_sample = encode_outputs.latent_sample[step]
 
         hidden_state = encode_outputs.hidden_state
         latent_mean = encode_outputs.latent_mean

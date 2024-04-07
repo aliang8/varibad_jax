@@ -2,7 +2,7 @@ import optax
 import jax.numpy as jnp
 
 
-def loss_fn(params, ts, batch, rng, continuous_actions=False):
+def loss_fn(params, state, ts, batch, rng, continuous_actions=False):
     # trajectory level
     # observations: [B, T, *_]
     observations, actions, rewards = batch
@@ -18,14 +18,20 @@ def loss_fn(params, ts, batch, rng, continuous_actions=False):
     if len(rewards.shape) == 2:
         rewards = jnp.expand_dims(rewards, axis=-1)
 
-    policy_output = ts.apply_fn(
+    policy_output, new_state = ts.apply_fn(
         params,
+        state,
         rng,
         states=observations.astype(jnp.float32),
         actions=actions,
         rewards=rewards,
         mask=mask,
+        is_training=True,
     )
+
+    entropy = policy_output.entropy
+    entropy = jnp.mean(entropy)
+
     action_preds = policy_output.logits
 
     if continuous_actions:
@@ -38,9 +44,6 @@ def loss_fn(params, ts, batch, rng, continuous_actions=False):
         )
 
     loss = jnp.mean(loss)
+    metrics = {"bc_loss": loss, "entropy": entropy}
 
-    metrics = {
-        "bc_loss": loss,
-    }
-
-    return loss, metrics
+    return loss, (metrics, new_state)

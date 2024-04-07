@@ -15,6 +15,7 @@ class GridNaviEnvParams(struct.PyTreeNode):
     grid_size: int = 5
     max_episode_steps: int = 15
     num_actions: int = 5
+    task_dim: int = 2
 
 
 class State(struct.PyTreeNode):
@@ -28,7 +29,6 @@ class GridNavi:
 
     def __init__(self, **kwargs):
         super().__init__()
-        self.task_dim = 2
 
         # always starting at the bottom right
         self.init_state = jnp.array([0, 0])
@@ -87,15 +87,14 @@ class GridNavi:
         # 0 = right, 1 = left, 2 = down, 3 = up, 4 = noop
         actions = jnp.array([(0, 1), (0, -1), (-1, 0), (1, 0), (0, 0)])
 
-        new_xy = curr_obs + actions[action]
+        new_obs = curr_obs + actions[action]
         # clip the new state to be within the grid boundaries
-        new_xy = jnp.clip(
-            new_xy,
+        new_obs = jnp.clip(
+            new_obs,
             jnp.array([0, 0]),
             jnp.array([params.grid_size, params.grid_size]) - 1,
         )
-        obs = new_xy
-        reached_goal = jnp.array_equal(timestep.state.goal, obs)
+        reached_goal = jnp.array_equal(timestep.state.goal, new_obs)
         reward = jnp.where(reached_goal, 1.0, -0.1)
 
         new_state = timestep.state.replace(
@@ -111,7 +110,7 @@ class GridNavi:
             step_type=step_type,
             reward=reward,
             discount=discount,
-            observation=obs,
+            observation=new_obs,
         )
 
         return timestep
