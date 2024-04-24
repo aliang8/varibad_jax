@@ -97,6 +97,13 @@ class OnlineStorage:
         # rewards and end of episodes
         self.rewards_raw = np.zeros((num_steps, num_processes, 1))
         self.rewards_normalised = np.zeros((num_steps, num_processes, 1))
+        if self.args.policy.use_hyperx_bonuses:
+            self.hyperx_bonuses = np.zeros((num_steps, num_processes, 1))
+            self.vae_recon_bonuses = np.zeros((num_steps, num_processes, 1))
+        else:
+            self.hyperx_bonuses = None
+            self.vae_recon_bonuses = None
+            
         self.done = np.zeros((num_steps + 1, num_processes, 1))
         self.masks = np.ones((num_steps + 1, num_processes, 1))
         # masks that indicate whether it's a true terminal state (false) or time limit end state (true)
@@ -132,6 +139,8 @@ class OnlineStorage:
         actions: np.ndarray,
         rewards_raw: np.ndarray,
         rewards_normalised: np.ndarray,
+        hyperx_bonuses: np.ndarray,
+        vae_recon_bonuses: np.ndarray,
         value_preds: np.ndarray,
         masks: np.ndarray,
         bad_masks: np.ndarray,
@@ -176,6 +185,10 @@ class OnlineStorage:
         self.actions[self.step] = actions.copy()
         self.rewards_raw[self.step] = rewards_raw
         self.rewards_normalised[self.step] = rewards_normalised
+        if self.args.policy.use_hyperx_bonuses:
+            self.hyperx_bonuses[self.step] = hyperx_bonuses
+            self.vae_recon_bonuses[self.step] = vae_recon_bonuses
+
         if isinstance(value_preds, list):
             self.value_preds[self.step] = value_preds[0]
         else:
@@ -199,6 +212,7 @@ class OnlineStorage:
             self.latent_mean = []
             self.latent_logvar = []
             # self.hidden_states[0] = self.hidden_states[-1]
+        
         self.done[0] = self.done[-1]
         self.masks[0] = self.masks[-1]
         self.bad_masks[0] = self.bad_masks[-1]
@@ -229,6 +243,10 @@ class OnlineStorage:
             if self.normalise_rewards
             else self.rewards_raw.copy()
         )
+
+        if self.args.policy.use_hyperx_bonuses:
+            rewards += self.hyperx_bonuses
+            rewards += self.vae_recon_bonuses
 
         self._compute_returns(
             next_value=next_value,

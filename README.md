@@ -4,7 +4,7 @@ This repository provides clean reimplementations of existing Meta-RL and Offline
 
 ### Getting started:
 ```
-conda env create --name jax_metarl python==3.11.8
+conda create --name jax_metarl python==3.11.8
 pip3 install -e . # should install this repo and dependencies
 ```
 
@@ -12,9 +12,9 @@ pip3 install -e . # should install this repo and dependencies
 Run VariBAD on XLand using LSTM encoder
 ```
 python3 main.py \
-    --config=configs/varibad_config.py:lstm-xland \
+    --config=configs/varibad_config.py:lstm-xland-5x5 \
     --config.smoke_test=True \
-    --config.use_wb=True
+    --config.use_wb=False
 ```
 
 Also supports using Ray for hyperparameter search and WandB for logging experiment metrics. Use `smoke_test` to toggle Ray tune. 

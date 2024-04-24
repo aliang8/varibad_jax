@@ -21,6 +21,7 @@ from xminigrid.benchmarks import Benchmark, load_benchmark, load_benchmark_from_
 from xminigrid.core.rules import EmptyRule
 from xminigrid.core.grid import pad_along_axis
 from xminigrid.benchmarks import save_bz2_pickle
+from pathlib import Path
 
 
 def encode(ruleset):
@@ -56,7 +57,7 @@ def make_benchmark(
         }
     )
     max_rules = 1000
-    max_tiles = 1000
+    max_tiles = 5
 
     concat_rulesets = {
         # "generation_config": vars(args),
@@ -73,4 +74,9 @@ def make_benchmark(
         "num_rules": jnp.vstack([r["num_rules"] for r in rulesets]),
     }
     print(f"Saving benchmark to {benchmark_path}")
+
+    Path(benchmark_path).parent.mkdir(parents=True, exist_ok=True)
     save_bz2_pickle(concat_rulesets, benchmark_path, protocol=-1)
+
+if __name__ == "__main__":
+    make_benchmark("/home/anthony/varibad_jax/varibad_jax/envs/xland_benchmarks/test_ruleset.pkl")

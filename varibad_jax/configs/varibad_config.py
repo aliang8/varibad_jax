@@ -42,7 +42,9 @@ def get_config(config_string: str = None):
             if k in config_string:
                 image_encoder_config = v
                 break
-
+        if image_encoder_config is None:
+            raise ValueError("No image encoder config found for the given config string")
+            
         image_encoder_config.embedding_dim = vae_config.get_ref("embedding_dim")
     else:
         image_encoder_config = None
@@ -96,6 +98,7 @@ def get_config(config_string: str = None):
     policy_config.pass_latent_to_policy = True
     policy_config.pass_belief_to_policy = False
     policy_config.pass_task_to_policy = False
+    policy_config.use_hyperx_bonuses = True
     policy_config.mlp_layers = [32, 32]
     policy_config.actor_activation_function = "tanh"
     policy_config.algo = "ppo"
@@ -127,4 +130,22 @@ def get_config(config_string: str = None):
     config.cpu = 5
     config.gpu = 0.2
 
+    # =============================================================
+    # HyperX configs
+    # =============================================================
+    config.hyperx = config_dict.ConfigDict(
+        dict(
+            lr=1e-3,
+            eps=1e-8,
+            rnd_weight=1.0,
+            vae_recon_weight=1.0,
+            latent_dim=vae_config.get_ref("latent_dim"),
+            rnd=dict(
+                image_obs=config.env.get_ref("image_obs"),
+                embedding_dim=vae_config.get_ref("embedding_dim"),
+                rnd_output_dim=32,
+                layer_sizes=[32, 32],
+            )
+        )
+    )
     return config

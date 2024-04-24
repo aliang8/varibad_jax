@@ -33,11 +33,21 @@ from varibad_jax.agents.ppo.ppo import update_policy
 from varibad_jax.agents.ppo.helpers import init_params as init_params_policy
 from varibad_jax.agents.ppo.helpers import policy_fn
 
+from varibad_jax.models.hyperx.helpers import init_params_hyperx, hyperx_apply_fn, compute_hyperx_bonus
+from varibad_jax.models.hyperx.update import update_hyperx
+
+
 from varibad_jax.utils.replay_buffer import OnlineStorage
 from varibad_jax.utils.replay_vae import RolloutStorageVAE
 import varibad_jax.utils.general_utils as gutl
 from varibad_jax.utils.rollout import run_rollouts
 
+@optax.inject_hyperparams
+def optimizer(lr, eps):
+    return optax.chain(
+        # optax.clip_by_global_norm(config.policy.max_grad_norm),
+        optax.adam(lr, eps=eps),
+    )
 
 def create_ts(config, rng, envs, input_action_dim, action_dim, num_update_steps: int):
     continuous_actions = not isinstance(envs.action_space, gym.spaces.Discrete)
@@ -72,11 +82,8 @@ def create_ts(config, rng, envs, input_action_dim, action_dim, num_update_steps:
     num_vae_params = sum(p.size for p in jax.tree_util.tree_leaves(vae_params))
     logging.info(f"num vae params = {num_vae_params}")
 
-    tx_vae = optax.chain(
-        # optax.clip(config.vae.max_grad_norm),
-        optax.adam(config.vae.lr, eps=config.vae.eps),
-    )
-
+    tx_vae = optimizer(config.vae.lr, config.vae.eps) 
+    
     # import ipdb
 
     # ipdb.set_trace()
@@ -100,14 +107,7 @@ def create_ts(config, rng, envs, input_action_dim, action_dim, num_update_steps:
     else:
         lr = config.policy.lr
 
-    @optax.inject_hyperparams
-    def optimizer(lr):
-        return optax.chain(
-            # optax.clip_by_global_norm(config.policy.max_grad_norm),
-            optax.adam(lr, eps=config.policy.eps),
-        )
-
-    tx_policy = optimizer(lr)
+    tx_policy = optimizer(lr, config.policy.eps)
     encode_apply = partial(
         jax.jit(
             encode_trajectory.apply,
@@ -134,6 +134,32 @@ def create_ts(config, rng, envs, input_action_dim, action_dim, num_update_steps:
     )
     return ts_vae, ts_policy, vae_state, policy_state
 
+def create_hyperx_ts(config, rng, envs):
+    hyperx_params, hyperx_state = init_params_hyperx(
+        config=config.hyperx,
+        rng=rng,
+        observation_space=envs.observation_space,
+    )
+    num_hyperx_params = sum(p.size for p in jax.tree_util.tree_leaves(hyperx_params))
+    logging.info(f"num rnd params = {num_hyperx_params}")
+
+    tx_hyperx = optimizer(config.hyperx.lr, config.hyperx.eps)
+
+    hyperx_apply = partial(
+        jax.jit(
+            hyperx_apply_fn.apply,
+            static_argnames=("config"),
+        ),
+        config=FrozenConfigDict(config.hyperx.rnd),
+    )
+
+    ts_hyperx = TrainState.create(
+        apply_fn=hyperx_apply,
+        params=hyperx_params,
+        tx=tx_hyperx,
+    )
+
+    return ts_hyperx, hyperx_state
 
 class MetaRLTrainer(BaseTrainer):
     def __init__(self, config: ConfigDict):
@@ -173,6 +199,20 @@ class MetaRLTrainer(BaseTrainer):
             ),
             config=FrozenConfigDict(config.vae),
         )
+
+        if self.config.policy.use_hyperx_bonuses:
+            # create ts for hyperx bonus
+            # prior network is randomly initialized and not updated
+            self.ts_hyperx_prior, self.hyperx_state = create_hyperx_ts(
+                config=config,
+                rng=next(self.rng_seq),
+                envs=self.envs,
+            )
+            self.ts_hyperx_predictor, _ = create_hyperx_ts(
+                config=config,
+                rng=next(self.rng_seq),
+                envs=self.envs,
+            )
 
         self.policy_storage, self.vae_storage = self.setup_replay_buffers()
 
@@ -312,6 +352,23 @@ class MetaRLTrainer(BaseTrainer):
                 encode_outputs.latent_logvar = encode_outputs.latent_logvar[step]
                 encode_outputs.latent_sample = encode_outputs.latent_sample[step]
 
+            # compute reward bonuses with RND / HyperX
+            if self.config.policy.use_hyperx_bonuses: 
+                # hyper-state bonus
+                rew_rnd, _ = compute_hyperx_bonus(
+                    self.ts_hyperx_predictor.params, self.ts_hyperx_prior, self.ts_hyperx_predictor, next(self.rng_seq), obs=next_state, latent=latent)
+                rew_rnd = rew_rnd[:, np.newaxis]
+                
+                # vae reconstruction bonus 
+                decode_outputs, _ = self.decode_apply(self.ts_vae.params, self.vae_state, next(self.rng_seq), latent_samples=encode_outputs.latent_sample, prev_states=state, next_states=next_state, actions=action)
+                rew_recon_err = optax.squared_error(decode_outputs.rew_pred, reward)
+
+                # import ipdb; ipdb.set_trace()
+                rew_rnd *= self.config.hyperx.rnd_weight
+                rew_recon_err *= self.config.hyperx.vae_recon_weight
+            else:
+                rew_rnd = None
+
             # add transition to vae buffer
             self.vae_storage.insert(
                 prev_state=state,
@@ -342,6 +399,8 @@ class MetaRLTrainer(BaseTrainer):
                 actions=action,
                 rewards_raw=reward,
                 rewards_normalised=reward_norm,
+                hyperx_bonuses=rew_rnd,
+                vae_recon_bonuses=rew_recon_err,
                 masks=masks_done,
                 bad_masks=masks_done,  # TODO: fix this?
                 value_preds=value,
@@ -426,6 +485,20 @@ class MetaRLTrainer(BaseTrainer):
         metrics["time/policy_update_time"] = policy_update_time
 
         logging.debug("done updating vae")
+
+        # update hyperx bonus models
+        if self.config.policy.use_hyperx_bonuses:
+            self.ts_hyperx_predictor, (hyperx_loss, _) = update_hyperx(
+                ts_predictor=self.ts_hyperx_predictor,
+                ts_prior=self.ts_hyperx_prior,
+                ts_vae=self.ts_vae,
+                state=self.hyperx_state,
+                vae_state=self.vae_state,
+                config=FrozenConfigDict(self.config),
+                batch=self.vae_storage.get_batch(self.config.vae.trajs_per_batch),
+                rng_key=next(self.rng_seq),
+                get_prior_fn=self.get_prior,
+            )
         return metrics
 
     def train(self):

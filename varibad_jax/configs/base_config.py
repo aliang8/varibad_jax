@@ -33,7 +33,7 @@ def get_config(config_string: str = None):
             dict(
                 env_name="xland",
                 env_kwargs=dict(view_size=5, height=9, width=9),
-                benchmark_path="/scr/aliang80/varibad_jax/varibad_jax/envs/xland_benchmarks/test_ruleset.pkl",
+                benchmark_path="/home/anthony/varibad_jax/varibad_jax/envs/xland_benchmarks/test_ruleset.pkl",
                 ruleset_id=0,
                 env_id="XLand-MiniGrid-R1-9x9",
                 num_episodes_per_rollout=4,
@@ -73,8 +73,8 @@ def get_config(config_string: str = None):
     # number of warmup steps before training
     config.warmup_steps = 10000
     # where to save experiment artifacts (videos, checkpoints, etc)
-    config.root_dir = "/scr/aliang80/varibad_jax/varibad_jax/"
-    config.exp_dir = "/scr/aliang80/varibad_jax/varibad_jax/"
+    config.root_dir = "/home/anthony/varibad_jax/varibad_jax/"
+    config.exp_dir = "/home/anthony/varibad_jax/varibad_jax/"
     config.exp_name = "vb_jax"
     config.group_name = ""
     config.ray_logdir = "ray_results"

@@ -10,3 +10,6 @@ pip install torch
 # install jax
 # set cuda correctly in LD_LIBRARY_PATH, might conflict with the torch version
 pip install --upgrade "jax[cuda12_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+
+# create xland benchmark
+python3 envs/xland_utils.py 
