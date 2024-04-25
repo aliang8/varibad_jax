@@ -11,8 +11,30 @@ pip3 install -e . # should install this repo and dependencies
 ### Example command 
 Run VariBAD on XLand using LSTM encoder
 ```
+# gridworld 
+python3 main.py \
+    --config=configs/varibad_config.py:lstm-gridworld \
+    --config.smoke_test=True \
+    --config.use_wb=False
+
+# XLand
 python3 main.py \
     --config=configs/varibad_config.py:lstm-xland-5x5 \
+    --config.smoke_test=True \
+    --config.use_wb=False
+```
+
+Collect offline dataset with trained model
+```
+python3 scripts/generate_data_from_policy.py \
+    --config=configs/offline_config.py:gridworld \
+    --config.model_ckpt_dir=results/en-gridworld_alg-ppo_pltp-True_t-vae_nvu-3_ed-8 \
+```
+
+Run offline RL experiments with Decision Transformer
+```
+CUDA_VISIBLE_DEVICES=2 python3 main.py \
+    --config=configs/offline_config.py:dt-gridworld \
     --config.smoke_test=True \
     --config.use_wb=False
 ```
@@ -25,10 +47,11 @@ Also supports using Ray for hyperparameter search and WandB for logging experime
 Meta-RL algorithms supported:
 - [x] VariBAD
 - [ ] RL^2
-- [ ] HyperX
+- [x] HyperX, not working yet
 
 Offline RL:
 - [x] Decision Transformers 
+- [ ] LAPO
 
 Misc Models:
 - [ ] Genie
@@ -37,4 +60,5 @@ Environments supported:
 - [x] Gridworld
 - [x] Xland-Minigrid 
 - [ ] DM-Alchemy
+- [ ] ProcGen
 

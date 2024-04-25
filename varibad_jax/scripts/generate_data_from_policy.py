@@ -8,11 +8,14 @@ import os
 from pathlib import Path
 import pickle
 import jax
+import json
 import jax.numpy as jnp
 import functools
 import haiku as hk
 import gymnasium as gym
+import jax.tree_util as jtu
 from ml_collections import ConfigDict, FieldReference, FrozenConfigDict, config_flags
+
 from varibad_jax.trainers.meta_trainer import create_ts
 from varibad_jax.envs.utils import make_envs
 from varibad_jax.utils.rollout import run_rollouts
@@ -29,17 +32,19 @@ def main(_):
     # first load models from checkpoint
     rng_seq = hk.PRNGSequence(config.seed)
 
-    model_ckpt_dir = Path(config.root_dir) / config.model_ckpt_dir
-    ckpt_file = model_ckpt_dir / f"ckpt_{config.checkpoint_step}.pkl"
+    model_ckpt_dir = Path(config.root_dir) / config.model_ckpt_dir / "model_ckpts"
+    ckpt_data = model_ckpt_dir / "best.txt"
+    with open(ckpt_data, "r") as f:
+        ckpt_data = f.read()
+        print(ckpt_data)
 
-    logging.info(f"loading models from {ckpt_file}")
-    with open(ckpt_file, "rb") as f:
-        ckpt = pickle.load(f)
-        config_p = ckpt["config"]
+    ckpt_config_file = Path(config.root_dir) / config.model_ckpt_dir / "config.json"
+    with open(ckpt_config_file, "r") as f:
+        config_p = json.load(f)
 
     config_p = ConfigDict(config_p)
     config_p.load_from_ckpt = True
-    config_p.checkpoint_step = config.checkpoint_step
+    config_p.ckpt_step = config.ckpt_step
     config_p.model_ckpt_dir = config.model_ckpt_dir
     print(config_p)
 
@@ -85,20 +90,41 @@ def main(_):
     logging.info(f"eval metrics: {eval_metrics}")
 
     # save transitions to a dataset format
-    data_dir = Path(config.root_dir) / "datasets"
+    data_dir = Path(config.root_dir) / "datasets" / f"eid-{config.env.env_id}_n-{config.num_rollouts_collect}_steps-{steps_per_rollout}"
     data_dir.mkdir(exist_ok=True, parents=True)
-    data_file = (
-        data_dir
-        / f"eid-{config.env.env_id}_n-{config.num_rollouts_collect}_steps-{steps_per_rollout}.pkl"
+    data_file = data_dir / "dataset.pkl"
+    metadata_file = data_dir / "metadata.json"
+
+    # make into list of pytrees
+    @jax.jit
+    def get_ts(i):
+        return jtu.tree_map(lambda y: y[i], transitions)
+
+    dataset_size = actions.shape[0]
+    observations = jnp.array([get_ts(i).observation for i in range(dataset_size)])
+    rewards = jnp.array([get_ts(i).reward for i in range(dataset_size)])
+    dones = jnp.array([get_ts(i).last() for i in range(dataset_size)])
+
+    # actions - [T, B, 1]
+    # observations - [T, B, ...]
+    data = dict(
+        observations=observations,
+        actions=actions,
+        rewards=rewards,
+        dones=dones,
     )
-    data = {
-        "config": config_p.to_dict(),
-        "ckpt_file": ckpt_file,
-        "transitions": transitions,
-        "actions": actions,
+
+    metadata = {
+        "pretrained_model_config": config_p.to_dict(),
+        "ckpt_data": ckpt_data,
+        "ckpt_dir": str(model_ckpt_dir),
+        "avg_ep_return": float(eval_metrics["episode_return"])
     }
     with open(data_file, "wb") as f:
         pickle.dump(data, f)
+
+    with open(metadata_file, "w") as f:
+        json.dump(metadata, f)
 
 
 if __name__ == "__main__":

@@ -65,7 +65,12 @@ def get_config(config_string: str = None):
     config.log_level = "info"
     config.enable_jit = True
     config.log_interval = 10
+
+    # saving checkpoints
     config.save_interval = 100
+    config.save_key = "episode_return"
+    config.best_metric = "max"
+
     config.eval_interval = 100
     config.disable_tqdm = True
     config.smoke_test = True
@@ -84,7 +89,7 @@ def get_config(config_string: str = None):
     config.num_eval_rollouts = 10
 
     # number of eval rollout videos to save
-    config.visualize_rollouts = True
+    config.visualize_rollouts = False
     config.num_eval_rollouts_save = 3
     config.skip_first_eval = False
 
@@ -93,7 +98,7 @@ def get_config(config_string: str = None):
 
     # resume training / evaluation
     config.load_from_ckpt = False
-    config.checkpoint_step = config_dict.placeholder(int)
+    config.ckpt_step = -1
     config.model_ckpt_dir = ""
 
     # ray

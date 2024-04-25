@@ -98,7 +98,7 @@ def get_config(config_string: str = None):
     policy_config.pass_latent_to_policy = True
     policy_config.pass_belief_to_policy = False
     policy_config.pass_task_to_policy = False
-    policy_config.use_hyperx_bonuses = True
+    policy_config.use_hyperx_bonuses = False
     policy_config.mlp_layers = [32, 32]
     policy_config.actor_activation_function = "tanh"
     policy_config.algo = "ppo"
@@ -115,7 +115,7 @@ def get_config(config_string: str = None):
     policy_config.tau = 0.95
     policy_config.max_grad_norm = 0.5
     policy_config.embedding_dim = 16
-    policy_config.anneal_lr = True
+    policy_config.anneal_lr = False
     config.policy = policy_config
 
     config.notes = "VariBAD JAX"

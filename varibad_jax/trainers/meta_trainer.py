@@ -53,8 +53,11 @@ def create_ts(config, rng, envs, input_action_dim, action_dim, num_update_steps:
     continuous_actions = not isinstance(envs.action_space, gym.spaces.Discrete)
 
     if config.load_from_ckpt:
-        model_ckpt_dir = Path(config.root_dir) / config.model_ckpt_dir
-        ckpt_file = model_ckpt_dir / f"ckpt_{config.checkpoint_step}.pkl"
+        model_ckpt_dir = Path(config.root_dir) / config.model_ckpt_dir / "model_ckpts"
+        if config.ckpt_step != -1:
+            ckpt_file = model_ckpt_dir / f"ckpt_{config.checkpoint_step}.pkl"
+        else:
+            ckpt_file = model_ckpt_dir / "best.pkl"
 
         with open(ckpt_file, "rb") as f:
             ckpt = pickle.load(f)
@@ -368,6 +371,7 @@ class MetaRLTrainer(BaseTrainer):
                 rew_recon_err *= self.config.hyperx.vae_recon_weight
             else:
                 rew_rnd = None
+                rew_recon_err = None
 
             # add transition to vae buffer
             self.vae_storage.insert(
@@ -611,25 +615,19 @@ class MetaRLTrainer(BaseTrainer):
                         action_dim=self.input_action_dim,
                         wandb_run=self.wandb_run,
                     )
+
+                    ckpt_dict = {
+                        "ts_policy": self.ts_policy.params,
+                        "ts_vae": self.ts_vae.params,
+                        "vae_state": self.vae_state,
+                        "policy_state": self.policy_state,
+                    }
+
+                    self.save_model(ckpt_dict, eval_metrics, iter_idx=self.iter_idx)
+
                     if self.wandb_run is not None:
                         eval_metrics = gutl.prefix_dict_keys(eval_metrics, "eval/")
                         self.wandb_run.log(eval_metrics, step=self.iter_idx)
-
-                if (self.iter_idx + 1) % self.config.save_interval == 0:
-                    # save to pickle
-                    ckpt_file = Path(self.ckpt_dir) / f"ckpt_{self.iter_idx + 1}.pkl"
-                    logging.debug(f"saving checkpoint to {ckpt_file}")
-                    with open(ckpt_file, "wb") as f:
-                        pickle.dump(
-                            {
-                                "config": self.config.to_dict(),
-                                "ts_policy": self.ts_policy.params,
-                                "ts_vae": self.ts_vae.params,
-                                "vae_state": self.vae_state,
-                                "policy_state": self.policy_state,
-                            },
-                            f,
-                        )
 
             # Clean up after update
             self.policy_storage.after_update()

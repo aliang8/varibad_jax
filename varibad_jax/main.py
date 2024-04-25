@@ -68,15 +68,16 @@ def train_model_fn(config):
     trial_dir = train.get_context().get_trial_dir()
     if trial_dir:
         print("Trial dir: ", trial_dir)
-        config["exp_dir"] = Path(trial_dir)
+        config["exp_dir"] = trial_dir
         base_name = Path(trial_dir).name
         config["exp_name"] = base_name
         # the group name is without seed
         config["group_name"] = re.sub("_s-\d", "", base_name)
         logging.info(f"wandb group name: {config['group_name']}")
     else:
-        suffix = f"{config['exp_name']}_s-{config['seed']}"
-        config["exp_dir"] = Path(config["exp_dir"]) / "results" / suffix
+        exp_name = create_exp_name({}, config)
+        config["exp_dir"] = str(Path(config["exp_dir"]) / "results" / exp_name)
+        config["exp_name"] = exp_name
 
     # wrap config in ConfigDict
     config = ConfigDict(config)
@@ -110,34 +111,36 @@ def update(source, overrides):
             source[key] = overrides[key]
     return source
 
-
-def trial_str_creator(trial):
+def create_exp_name(param_space, config):
     trial_str = ""
 
     for k, override in param_space.items():
-        if k in trial.config:
+        if k in config:
             if isinstance(override, dict) and "grid_search" not in override:
                 for k2 in override.keys():
-                    if k2 in trial.config[k]:
-                        trial_str += f"{psh[k][k2]}-{trial.config[k][k2]}_"
+                    if k2 in config[k]:
+                        trial_str += f"{psh[k][k2]}-{config[k][k2]}_"
             else:
-                trial_str += f"{psh[k]}-{trial.config[k]}_"
+                trial_str += f"{psh[k]}-{config[k]}_"
 
     # also add keys to include
-    for k, v in trial.config["keys_to_include"].items():
+    for k, v in config["keys_to_include"].items():
         if v is None:
             if k not in param_space:
-                trial_str += f"{psh[k]}-{trial.config[k]}_"
+                trial_str += f"{psh[k]}-{config[k]}_"
         else:
             for k2 in v:
                 if k not in param_space or (
                     k in param_space and k2 not in param_space[k]
                 ):
-                    trial_str += f"{psh[k][k2]}-{trial.config[k][k2]}_"
+                    trial_str += f"{psh[k][k2]}-{config[k][k2]}_"
 
     trial_str = trial_str[:-1]
     print("trial_str: ", trial_str)
     return trial_str
+
+def trial_str_creator(trial):
+    return create_exp_name(param_space, trial.config)
 
 
 def main(_):

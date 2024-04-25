@@ -98,26 +98,21 @@ class OfflineTrainer(BaseTrainer):
             config.env.num_episodes_per_rollout * self.envs.max_episode_steps
         )
         self.steps_per_rollout = steps_per_rollout
-        data_file = f"eid-{config.env.env_id}_n-{config.num_rollouts_collect}_steps-{steps_per_rollout}.pkl"
-        data_path = Path(self.config.root_dir) / self.config.data_dir / data_file
+        
+        # load dataset
+        dataset_name = f"eid-{config.env.env_id}_n-{config.num_rollouts_collect}_steps-{steps_per_rollout}"
+        data_path = Path(self.config.root_dir) / self.config.data_dir / dataset_name / "dataset.pkl"
+        logging.info(f"loading data from {data_path}")
         with open(data_path, "rb") as f:
             data = pickle.load(f)
-
-        timesteps = data["transitions"]
+        
+        observations = data["observations"]
         actions = data["actions"]
-        dataset_size = actions.shape[0]
+        rewards = data["rewards"]
+
+        dataset_size = observations.shape[0]
         num_train = int(dataset_size * self.config.train_frac)
         num_eval = dataset_size - num_train
-
-        # make into list of pytrees
-        @jax.jit
-        def get_ts(i):
-            return jtu.tree_map(lambda y: y[i], timesteps)
-
-        # get full grid
-        # observations = jnp.array([get_ts(i).state.grid for i in range(dataset_size)])
-        observations = jnp.array([get_ts(i).observation for i in range(dataset_size)])
-        rewards = jnp.array([get_ts(i).reward for i in range(dataset_size)])
 
         logging.info(
             f"observations shape: {observations.shape}, rewards shape: {rewards.shape}, actions shape: {actions.shape}"
@@ -202,7 +197,8 @@ class OfflineTrainer(BaseTrainer):
     def train(self):
         # first eval
         if not self.config.skip_first_eval:
-            eval_metrics = self.eval()
+            eval_metrics = self.eval(0)
+
             if self.wandb_run is not None:
                 metrics = gutl.prefix_dict_keys(eval_metrics, prefix="eval/")
                 self.wandb_run.log(metrics)
@@ -232,12 +228,13 @@ class OfflineTrainer(BaseTrainer):
                 self.wandb_run.log(metrics)
 
             if (epoch + 1) % self.config.eval_interval == 0:
-                eval_metrics = self.eval()
+                eval_metrics = self.eval(epoch + 1)
+
                 if self.wandb_run is not None:
                     eval_metrics = gutl.prefix_dict_keys(eval_metrics, prefix="eval/")
                     self.wandb_run.log(eval_metrics)
 
-    def eval(self):
+    def eval(self, epoch: int):
         eval_metrics = dd(list)
 
         # run on eval batches
@@ -268,4 +265,11 @@ class OfflineTrainer(BaseTrainer):
             wandb_run=self.wandb_run,
         )
         eval_metrics.update(rollout_metrics)
+
+        # save model 
+        save_dict = dict(
+            ts_policy=self.ts_policy,
+            state=self.state,
+        )
+        self.save_model(save_dict, eval_metrics, epoch)
         return eval_metrics

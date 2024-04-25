@@ -10,6 +10,7 @@ import time
 import wandb
 import optax
 import einops
+import json
 import jax.tree_util as jtu
 from ml_collections import FrozenConfigDict
 from pathlib import Path
@@ -42,7 +43,7 @@ class BaseTrainer:
                 notes=self.config.notes,
                 tags=self.config.tags,
                 # track hyperparameters and run metadata
-                config=self.config,
+                config=self.config.to_dict(),
                 group=self.config.group_name,
             )
         else:
@@ -56,6 +57,10 @@ class BaseTrainer:
         self.ckpt_dir.mkdir(parents=True, exist_ok=True)
         self.video_dir = self.exp_dir / "videos"
         self.video_dir.mkdir(parents=True, exist_ok=True)
+
+        # save config to json file readable
+        with open(self.exp_dir / "config.json", "w") as f:
+            json.dump(self.config.to_dict(), f, indent=4)
 
         # create env
         self.envs, self.env_params = make_envs(**self.config.env)
@@ -90,6 +95,13 @@ class BaseTrainer:
         logging.info(f"obs_shape: {self.obs_shape}, action_dim: {self.action_dim}")
         logging.info(f"env params: {self.env_params}")
 
+        if config.best_metric == "max":
+            self.best_metric = float("-inf")
+        else:
+            self.best_metric = float("inf")
+
+
+
     def create_ts(self):
         raise NotImplementedError
 
@@ -101,3 +113,33 @@ class BaseTrainer:
 
     def train(self):
         raise NotImplementedError
+
+    def save_model(self, save_dict, metrics, iter_idx: int=None):
+        if self.config.save_key and self.config.save_key in metrics:
+            # import ipdb; ipdb.set_trace()
+            key = self.config.save_key
+            if (
+                self.config.best_metric == "max"
+                and metrics[key] > self.best_metric
+            ) or (
+                self.config.best_metric == "min"
+                and metrics[key] < self.best_metric
+            ):
+                self.best_metric = metrics[key]
+                ckpt_file = self.ckpt_dir / f"best.pkl"
+                logging.info(
+                    f"new best value: {metrics[key]}, saving best model at epoch {self.iter_idx + 1} to {ckpt_file}"
+                )
+                with open(ckpt_file, "wb") as f:
+                    pickle.dump(ckpt_dict, f)
+
+                # create a file with the best metric in the name, use a placeholder
+                best_ckpt_file = self.ckpt_dir / "best.txt"
+                with open(best_ckpt_file, "w") as f:
+                    f.write(f"{iter_idx + 1}, {metrics[key]}")
+        
+        # also save model to ckpt everytime we run evaluation
+        ckpt_file = Path(self.ckpt_dir) / f"ckpt_{iter_idx + 1}.pkl"
+        logging.debug(f"saving checkpoint to {ckpt_file}")
+        with open(ckpt_file, "wb") as f:
+            pickle.dump(ckpt_dict, f)
