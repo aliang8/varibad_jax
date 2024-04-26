@@ -103,7 +103,7 @@ class OnlineStorage:
         else:
             self.hyperx_bonuses = None
             self.vae_recon_bonuses = None
-            
+
         self.done = np.zeros((num_steps + 1, num_processes, 1))
         self.masks = np.ones((num_steps + 1, num_processes, 1))
         # masks that indicate whether it's a true terminal state (false) or time limit end state (true)
@@ -212,7 +212,7 @@ class OnlineStorage:
             self.latent_mean = []
             self.latent_logvar = []
             # self.hidden_states[0] = self.hidden_states[-1]
-        
+
         self.done[0] = self.done[-1]
         self.masks[0] = self.masks[-1]
         self.bad_masks[0] = self.bad_masks[-1]
@@ -321,7 +321,7 @@ class OnlineStorage:
         """
         return len(self.prev_state) * self.num_processes
 
-    def before_update(self, ts, policy_state, rng_key):
+    def before_update(self, agent, rng_key):
         if self.latent_mean is not None:
             latent = np.concatenate(
                 [self.latent_mean[:-1], self.latent_logvar[:-1]], axis=-1
@@ -331,9 +331,7 @@ class OnlineStorage:
 
         task = self.tasks[:-1]
 
-        policy_output, policy_state = ts.apply_fn(
-            ts.params,
-            policy_state,
+        policy_output, policy_state = agent.get_action(
             rng_key,
             env_state=self.prev_state[:-1],
             latent=latent,

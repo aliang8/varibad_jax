@@ -15,90 +15,99 @@ from jax.random import PRNGKey
 from ml_collections.config_dict import FrozenConfigDict
 import numpy as np
 from tensorflow_probability.substrates import jax as tfp
-import varibad_jax.utils.general_utils as gutl
 
-from varibad_jax.models.varibad.helpers import Batch, encode_trajectory, decode
-from varibad_jax.models.hyperx.helpers import compute_hyperx_bonus
+from varibad_jax.models.hyperx.rnd import RND
+from varibad_jax.models.base import BaseModel
 
 tfd = tfp.distributions
 tfb = tfp.bijectors
 
-@partial(jax.jit, static_argnames=("config", "get_prior_fn"))
-def compute_hyperx_loss(
-    predictor_params,
-    ts_predictor: TrainState,
-    ts_prior: TrainState,
-    ts_vae: TrainState,
-    state: hk.State,
-    vae_state: hk.State,
-    config: FrozenConfigDict,
-    batch: Batch,
-    rng_key: PRNGKey,
-    get_prior_fn: Callable
-):
-    logging.debug("inside compute_hyperx_loss")
-    T, B, *_ = batch.next_obs.shape
 
-    encode_key, prior_key, hyperx_key = jax.random.split(rng_key, 3)
-
-    # encode the first state to get prior
-    prior_output = get_prior_fn(ts_vae.params, prior_key, batch_size=B)
-    hidden_state = prior_output.hidden_state
-
-    # encode the full trajectory and get latent posteriors
-    encode_outputs, state = ts_vae.apply_fn(
-        ts_vae.params,
-        vae_state,
-        encode_key,
-        states=batch.next_obs,
-        actions=batch.actions,
-        rewards=batch.rewards,
-        hidden_state=hidden_state,
-        mask=jnp.ones((T, B)) if config.vae.encoder == "transformer" else None,
+def compute_hyperx_bonus(predictor_params, ts_prior, ts_predictor, rng, obs, latent):
+    prior_key, predictor_key = jax.random.split(rng)
+    prior_output, _ = ts_prior.apply_fn(
+        ts_prior.params, None, prior_key, obs=obs, latent=latent
+    )
+    predictor_output, state = ts_predictor.apply_fn(
+        predictor_params, None, predictor_key, obs=obs, latent=latent
     )
 
-    latent_mean = encode_outputs.latent_mean
-    latent_logvar = encode_outputs.latent_logvar
-    latent_belief = jnp.concatenate([latent_mean, latent_logvar], axis=-1)  
+    hyperstate_bonus = optax.squared_error(prior_output, predictor_output)
 
-    hyperstate_bonus, state = compute_hyperx_bonus(predictor_params, ts_prior, ts_predictor, rng=hyperx_key, obs=batch.next_obs, latent=latent_belief)
+    if obs.ndim == 3:
+        hyperstate_bonus = einops.reduce(hyperstate_bonus, "b t d -> b t", "mean")
+    elif obs.ndim == 2:
+        hyperstate_bonus = einops.reduce(hyperstate_bonus, "b d -> b", "mean")
 
-    loss = jnp.mean(hyperstate_bonus)
-    return loss, state
+    return hyperstate_bonus, state
 
-def update_hyperx(
-    ts_predictor: TrainState,
-    ts_prior: TrainState,
-    ts_vae: TrainState,
-    state: hk.State,
-    vae_state: hk.State,
-    config: FrozenConfigDict,
-    batch: Batch,
-    rng_key: PRNGKey,
-    get_prior_fn: Callable,
-):
-    prev_obs, next_obs, actions, rewards, tasks, trajectory_lens = batch
-    batch = Batch(
-        prev_obs=prev_obs,
-        next_obs=next_obs,
-        actions=actions,
-        rewards=rewards,
-    )
 
-    loss_and_grad_fn = jax.value_and_grad(compute_hyperx_loss, has_aux=True)
+class HyperXBonuses(BaseModel):
 
-    (total_loss, state), grads = loss_and_grad_fn(
-        ts_predictor.params,
-        ts_predictor=ts_predictor,
-        ts_prior=ts_prior,
-        ts_vae=ts_vae,
-        state=state,
-        vae_state=vae_state,
-        batch=batch,
-        config=config,
-        rng_key=rng_key,
-        get_prior_fn=get_prior_fn,
-    )
-    # update the predictor model and not the prior model
-    ts_predictor = ts_predictor.apply_gradients(grads=grads)
-    return ts_predictor, (total_loss, state)
+    @hk.transform_with_state
+    def model(self, **kwargs):
+        model = RND(config=self.config)
+        return model(**kwargs)
+
+    def _init_model(self):
+        # [B, T, D]
+        dummy_obs = jnp.zeros((1, 1, *self.observation_shape))
+        dummy_latent = jnp.zeros((1, 1, self.config.latent_dim * 2))
+
+        logging.info(f"dummy obs shape: {dummy_obs.shape}")
+        logging.info(f"dummy latent shape: {dummy_latent.shape}")
+
+        self._params, self._state = self.model.init(
+            self._key,
+            obs=dummy_obs,
+            latent=dummy_latent,
+        )
+
+    def loss_fn(
+        self,
+        predictor_params,
+        ts_predictor: TrainState,
+        ts_prior: TrainState,
+        ts_vae: TrainState,
+        state: hk.State,
+        vae_state: hk.State,
+        config: FrozenConfigDict,
+        batch,
+        rng_key: PRNGKey,
+    ):
+        logging.debug("inside compute_hyperx_loss")
+        T, B, *_ = batch.next_obs.shape
+
+        encode_key, prior_key, hyperx_key = jax.random.split(rng_key, 3)
+
+        # encode the first state to get prior
+        prior_output = get_prior_fn(ts_vae.params, prior_key, batch_size=B)
+        hidden_state = prior_output.hidden_state
+
+        # encode the full trajectory and get latent posteriors
+        encode_outputs, state = ts_vae.apply_fn(
+            ts_vae.params,
+            vae_state,
+            encode_key,
+            states=batch.next_obs,
+            actions=batch.actions,
+            rewards=batch.rewards,
+            hidden_state=hidden_state,
+            mask=jnp.ones((T, B)) if config.vae.encoder == "transformer" else None,
+        )
+
+        latent_mean = encode_outputs.latent_mean
+        latent_logvar = encode_outputs.latent_logvar
+        latent_belief = jnp.concatenate([latent_mean, latent_logvar], axis=-1)
+
+        hyperstate_bonus, state = compute_hyperx_bonus(
+            predictor_params,
+            ts_prior,
+            ts_predictor,
+            rng=hyperx_key,
+            obs=batch.next_obs,
+            latent=latent_belief,
+        )
+
+        loss = jnp.mean(hyperstate_bonus)
+        return loss, state

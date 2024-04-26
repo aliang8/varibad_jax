@@ -57,6 +57,25 @@ def get_config(config_string: str = None):
                 beta=0.25,
             )
         ),
+        "lapo": config_dict.ConfigDict(
+            dict(
+                name="lapo",
+                idm=dict(
+                    image_obs=config.env.get_ref("image_obs"),
+                    image_encoder_config=image_encoder_config,
+                    # vq_vae
+                    num_codes=8,
+                    code_dim=config.get_ref("embedding_dim"),
+                    beta=0.25,
+                    ema_decay=0.99,
+                ),
+                fdm=dict(
+                    image_obs=config.env.get_ref("image_obs"),
+                    image_encoder_config=image_encoder_config,
+                    image_decoder_config=image_decoder_config,
+                ),
+            )
+        ),
     }
 
     policy_config = None
@@ -65,8 +84,9 @@ def get_config(config_string: str = None):
             policy_config = v
 
     config.policy = policy_config
-    config.lr = 3e-4
-    config.eps = 1e-8
+    config.policy.anneal_lr = False
+    config.policy.lr = 3e-4
+    config.policy.eps = 1e-8
 
     # =============================================================
     # Data collection stuff

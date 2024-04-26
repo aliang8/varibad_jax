@@ -22,9 +22,11 @@ import haiku as hk
 from pathlib import Path
 import gymnasium as gym
 from varibad_jax.trainers.base_trainer import BaseTrainer
-from varibad_jax.agents.ppo.ppo import update_policy
-from varibad_jax.agents.ppo.helpers import init_params as init_params_policy
-from varibad_jax.agents.ppo.helpers import policy_fn
+
+# from varibad_jax.agents.ppo.ppo import update_policy
+
+# from varibad_jax.agents.ppo.helpers import init_params as init_params_policy
+# from varibad_jax.agents.ppo.helpers import policy_fn
 from varibad_jax.utils.rollout import run_rollouts
 
 from varibad_jax.utils.replay_buffer import OnlineStorage

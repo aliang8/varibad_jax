@@ -14,78 +14,13 @@ import gymnasium as gym
 import tqdm
 import numpy as np
 from collections import defaultdict as dd
-from flax.training.train_state import TrainState
-from ml_collections.config_dict import ConfigDict, FrozenConfigDict
 from varibad_jax.utils.rollout import run_rollouts
-from typing import NamedTuple
 
 from varibad_jax.trainers.base_trainer import BaseTrainer
 import varibad_jax.utils.general_utils as gutl
-from varibad_jax.models.decision_transformer.helpers import init_params_dt, dt_fn
-from varibad_jax.models.decision_transformer.loss import loss_fn as dt_loss_fn
 
-from varibad_jax.models.genie.helpers import init_params_lam, lam_apply_fn
-from varibad_jax.models.genie.loss import loss_fn as lam_loss_fn
-
-
-def create_ts(
-    config: ConfigDict,
-    rng,
-    observation_shape,
-    continuous_actions,
-    input_action_dim,
-    action_dim,
-):
-    if config.policy.name == "dt":
-        params, state = init_params_dt(
-            config.policy,
-            rng,
-            observation_shape,
-            continuous_actions,
-            input_action_dim,
-            action_dim,
-        )
-        policy_apply = functools.partial(
-            jax.jit(
-                dt_fn.apply,
-                static_argnames=(
-                    "config",
-                    "action_dim",
-                    "is_continuous",
-                    "is_training",
-                ),
-            ),
-            config=FrozenConfigDict(config.policy),
-            action_dim=action_dim,
-            is_continuous=continuous_actions,
-        )
-    elif config.policy.name == "lam":
-        params, state = init_params_lam(
-            config.policy,
-            rng,
-            observation_shape,
-        )
-        policy_apply = functools.partial(
-            jax.jit(
-                lam_apply_fn.apply,
-                static_argnames=("config"),
-            ),
-            config=FrozenConfigDict(config.policy),
-        )
-
-    num_params = sum(p.size for p in jax.tree_util.tree_leaves(params))
-    logging.info(f"num params = {num_params}")
-
-    tx = optax.chain(
-        # optax.clip(config.vae.max_grad_norm),
-        optax.adam(config.lr, eps=config.eps),
-    )
-    ts = TrainState.create(
-        apply_fn=policy_apply,
-        params=params,
-        tx=tx,
-    )
-    return ts, state
+from varibad_jax.models.decision_transformer.dt import DecisionTransformerAgent
+from varibad_jax.models.lapo.lapo import LAPOAgent
 
 
 class OfflineTrainer(BaseTrainer):
@@ -98,14 +33,19 @@ class OfflineTrainer(BaseTrainer):
             config.env.num_episodes_per_rollout * self.envs.max_episode_steps
         )
         self.steps_per_rollout = steps_per_rollout
-        
+
         # load dataset
         dataset_name = f"eid-{config.env.env_id}_n-{config.num_rollouts_collect}_steps-{steps_per_rollout}"
-        data_path = Path(self.config.root_dir) / self.config.data_dir / dataset_name / "dataset.pkl"
+        data_path = (
+            Path(self.config.root_dir)
+            / self.config.data_dir
+            / dataset_name
+            / "dataset.pkl"
+        )
         logging.info(f"loading data from {data_path}")
         with open(data_path, "rb") as f:
             data = pickle.load(f)
-        
+
         observations = data["observations"]
         actions = data["actions"]
         rewards = data["rewards"]
@@ -167,37 +107,24 @@ class OfflineTrainer(BaseTrainer):
             f"len eval dataset: {len(eval_observations)}, num eval batches: {self.num_eval_batches}"
         )
 
-        self.ts_policy, self.state = create_ts(
-            config,
-            next(self.rng_seq),
-            observations.shape[2:],
-            self.continuous_actions,
-            self.input_action_dim,
-            self.action_dim,
-        )
-
         if self.config.policy.name == "dt":
-            loss_fn = functools.partial(
-                dt_loss_fn,
-                continuous_actions=self.continuous_actions,
-            )
-        elif self.config.policy.name == "lam":
-            loss_fn = lam_loss_fn
+            agent_cls = DecisionTransformerAgent
+        elif self.config.policy.name == "lapo":
+            agent_cls = LAPOAgent
 
-        def update_step(ts, state, batch, rng):
-            (loss, (metrics, state)), grads = jax.value_and_grad(loss_fn, has_aux=True)(
-                ts.params, state, ts, batch, rng
-            )
-
-            ts = ts.apply_gradients(grads=grads)
-            return ts, metrics, state
-
-        self.jit_update_step = jax.jit(update_step)
+        self.agent = agent_cls(
+            config=config,
+            observation_shape=observations.shape[2:],
+            action_dim=self.action_dim,
+            input_action_dim=self.input_action_dim,
+            continuous_actions=self.continuous_actions,
+            key=next(self.rng_seq),
+        )
 
     def train(self):
         # first eval
         if not self.config.skip_first_eval:
-            eval_metrics = self.eval(0)
+            eval_metrics = self.eval(epoch=0)
 
             if self.wandb_run is not None:
                 metrics = gutl.prefix_dict_keys(eval_metrics, prefix="eval/")
@@ -210,9 +137,7 @@ class OfflineTrainer(BaseTrainer):
             epoch_metrics = dd(list)
             for _ in range(self.num_train_batches):
                 batch = next(self.train_dataloader)
-                self.ts_policy, metrics, self.state = self.jit_update_step(
-                    self.ts_policy, self.state, batch, next(self.rng_seq)
-                )
+                metrics = self.agent.update(batch, next(self.rng_seq))
                 for k, v in metrics.items():
                     epoch_metrics[k].append(v)
 
@@ -239,12 +164,8 @@ class OfflineTrainer(BaseTrainer):
 
         # run on eval batches
         for _ in range(self.num_eval_batches):
-            loss, (metrics, _) = jax.jit(self.loss_fn)(
-                self.ts.params,
-                self.state,
-                self.ts_policy,
-                next(self.eval_dataloader),
-                next(self.rng_seq),
+            metrics = self.agent.update(
+                next(self.eval_dataloader), next(self.rng_seq), update_model=False
             )
             for k, v in metrics.items():
                 eval_metrics[k].append(v)
@@ -255,21 +176,15 @@ class OfflineTrainer(BaseTrainer):
         # run rollouts
         rollout_metrics, *_ = run_rollouts(
             rng=next(self.rng_seq),
-            state=self.state,
-            num_rollouts=self.config.num_eval_rollouts,
+            agent=self.agent,
             env=self.eval_envs,
             config=self.config,
-            ts_policy=self.ts_policy,
             action_dim=self.input_action_dim,
             steps_per_rollout=self.steps_per_rollout,
             wandb_run=self.wandb_run,
         )
         eval_metrics.update(rollout_metrics)
 
-        # save model 
-        save_dict = dict(
-            ts_policy=self.ts_policy,
-            state=self.state,
-        )
-        self.save_model(save_dict, eval_metrics, epoch)
+        # save model
+        self.save_model(self.agent.save_dict, eval_metrics, epoch)
         return eval_metrics

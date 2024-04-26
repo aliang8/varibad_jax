@@ -25,10 +25,9 @@ class RolloutStats:
 
 def run_rollouts(
     rng: jax.random.PRNGKey,
-    state: Union[hk.State, Tuple[hk.State, hk.State]],
+    agent,
     config: ConfigDict,
     env: Environment,
-    ts_policy: TrainState,
     steps_per_rollout: int,
     action_dim: int,
     wandb_run=None,
@@ -40,33 +39,21 @@ def run_rollouts(
 
     start = time.time()
 
+    rollout_kwargs = dict(
+        agent=agent,
+        action_dim=action_dim,
+        steps_per_rollout=steps_per_rollout,
+        env=env,
+        config=config,
+        **kwargs
+    )
+
     if config.trainer == "vae":
         rollout_fn = eval_rollout_with_belief_model
-        rollout_kwargs = dict(
-            ts_policy=ts_policy,
-            action_dim=action_dim,
-            steps_per_rollout=steps_per_rollout,
-            **kwargs
-        )
     elif config.trainer == "offline" and config.policy.name == "dt":
         rollout_fn = eval_rollout_dt
-        rollout_kwargs = dict(
-            ts_policy=ts_policy,
-            action_dim=action_dim,
-            steps_per_rollout=steps_per_rollout,
-        )
     elif config.trainer == "rl":
-        rollout_fn = eval_rollout
-        rollout_kwargs = dict(
-            ts_policy=ts_policy,
-            action_dim=action_dim,
-            steps_per_rollout=steps_per_rollout,
-        )
-    else:
-        rollout_kwargs = dict()
         return {}
-
-    rollout_kwargs.update(dict(env=env, config=config, state=state))
 
     # render function doesn't work with vmap
     eval_metrics, (transitions, actions) = jax.vmap(
@@ -107,10 +94,9 @@ def run_rollouts(
 
 def eval_rollout_dt(
     rng: jax.Array,
-    state: hk.State,
+    agent,
     env: Environment,
     config: dict,
-    ts_policy: TrainState,
     action_dim: int,
     steps_per_rollout: int,
 ) -> RolloutStats:
@@ -138,7 +124,6 @@ def eval_rollout_dt(
         (
             rng,
             stats,
-            state,
             xtimestep,
             observations,
             actions,
@@ -154,9 +139,7 @@ def eval_rollout_dt(
         observations = observations.at[0, stats.length].set(observation)
         mask = mask.at[0, stats.length].set(1.0)
 
-        policy_output, state = ts_policy.apply_fn(
-            ts_policy.params,
-            state,
+        policy_output = agent.get_action(
             policy_rng,
             states=observations,
             actions=actions,
@@ -193,7 +176,6 @@ def eval_rollout_dt(
         return (
             rng,
             stats,
-            state,
             xtimestep,
             observations,
             actions,
@@ -206,7 +188,6 @@ def eval_rollout_dt(
     init_carry = (
         rng,
         stats,
-        state,
         xtimestep,
         observations,
         actions,
@@ -318,18 +299,15 @@ def eval_rollout(
 
 def eval_rollout_with_belief_model(
     rng: jax.Array,
-    state: hk.State,
+    agent,
+    belief_model,
     env: Environment,
     config: dict,
-    ts_policy: TrainState,
-    ts_vae: TrainState,
-    get_prior: Callable,
     action_dim: int,
     steps_per_rollout: int,
 ) -> RolloutStats:
 
     stats = RolloutStats(episode_return=0, length=0)
-    vae_state, policy_state = state
 
     rng, reset_rng, prior_rng = jax.random.split(rng, 3)
     xtimestep = env.reset(env.env_params, reset_rng)
@@ -345,7 +323,7 @@ def eval_rollout_with_belief_model(
         prev_reward = np.zeros((steps_per_rollout, 1, 1))
         masks = np.zeros((steps_per_rollout, 1))
 
-    prior_outputs = get_prior(ts_vae.params, prior_rng, batch_size=1)
+    prior_outputs = belief_model.get_prior(prior_rng, batch_size=1)
     latent_mean = prior_outputs.latent_mean
     latent_logvar = prior_outputs.latent_logvar
     latent = jnp.concatenate([latent_mean, latent_logvar], axis=-1)
@@ -355,8 +333,6 @@ def eval_rollout_with_belief_model(
         (
             rng,
             stats,
-            vae_state,
-            policy_state,
             xtimestep,
             prev_action,
             prev_reward,
@@ -370,9 +346,7 @@ def eval_rollout_with_belief_model(
         observation = observation.astype(jnp.float32)
         observation = observation[jnp.newaxis]
 
-        policy_output, policy_state = ts_policy.apply_fn(
-            ts_policy.params,
-            policy_state,
+        policy_output, policy_state = agent.get_action(
             policy_rng,
             env_state=observation,
             latent=latent,
@@ -393,9 +367,7 @@ def eval_rollout_with_belief_model(
 
         if config.vae.encoder.name == "lstm":
             # update hidden state
-            encode_outputs, vae_state = ts_vae.apply_fn(
-                ts_vae.params,
-                vae_state,
+            encode_outputs, _ = belief_model.encode_trajectory(
                 encoder_rng,
                 states=next_obs,
                 actions=action,
@@ -440,8 +412,6 @@ def eval_rollout_with_belief_model(
         return (
             rng,
             stats,
-            vae_state,
-            policy_state,
             xtimestep,
             action,
             reward,
@@ -453,8 +423,6 @@ def eval_rollout_with_belief_model(
     init_carry = (
         rng,
         stats,
-        vae_state,
-        policy_state,
         xtimestep,
         prev_action,
         prev_reward,

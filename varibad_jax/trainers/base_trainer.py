@@ -114,7 +114,7 @@ class BaseTrainer:
     def train(self):
         raise NotImplementedError
 
-    def save_model(self, save_dict, metrics, iter_idx: int=None):
+    def save_model(self, ckpt_dict, metrics, iter_idx: int=None):
         if self.config.save_key and self.config.save_key in metrics:
             # import ipdb; ipdb.set_trace()
             key = self.config.save_key
@@ -128,7 +128,7 @@ class BaseTrainer:
                 self.best_metric = metrics[key]
                 ckpt_file = self.ckpt_dir / f"best.pkl"
                 logging.info(
-                    f"new best value: {metrics[key]}, saving best model at epoch {self.iter_idx + 1} to {ckpt_file}"
+                    f"new best value: {metrics[key]}, saving best model at epoch {iter_idx + 1} to {ckpt_file}"
                 )
                 with open(ckpt_file, "wb") as f:
                     pickle.dump(ckpt_dict, f)

@@ -29,6 +29,10 @@ Collect offline dataset with trained model
 python3 scripts/generate_data_from_policy.py \
     --config=configs/offline_config.py:gridworld \
     --config.model_ckpt_dir=results/en-gridworld_alg-ppo_pltp-True_t-vae_nvu-3_ed-8 \
+
+python3 scripts/generate_data_from_policy.py \
+    --config=configs/offline_config.py:dt-xland-5x5 \
+    --config.model_ckpt_dir=results/ \
 ```
 
 Run offline RL experiments with Decision Transformer

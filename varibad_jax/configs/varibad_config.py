@@ -9,31 +9,28 @@ def get_config(config_string: str = None):
     # =============================================================
     # VariBAD VAE configuration
     # =============================================================
-    vae_config = config_dict.ConfigDict()
-    vae_config.lr = 1e-3
-    vae_config.buffer_size = 100_000
-    vae_config.trajs_per_batch = 25
-    vae_config.pretrain_len = 100_000  # number of environment steps to pretrain VAE
-
-    # number of VAE updates per policy update
-    vae_config.num_vae_updates = 3
-
-    vae_config.kl_weight = 1e-2
-    vae_config.use_kl_scheduler = False
-    vae_config.max_grad_norm = 2.0
-    vae_config.eps = 1e-8
-
-    vae_config.kl_to_fixed_prior = False
-    vae_config.subsample_elbos = 0
-    vae_config.subsample_decode_timesteps = 0
-
-    vae_config.latent_dim = 5
-
-    # Reward prediction
-    vae_config.decode_rewards = True
-    vae_config.rew_recon_weight = 1.0
-    vae_config.embedding_dim = 8
-
+    vae_config = config_dict.ConfigDict(
+        dict(
+            name="vae",
+            lr=1e-3,
+            buffer_size=100_000,
+            trajs_per_batch=25,
+            pretrain_len=100_000,  # number of environment steps to pretrain VAE
+            num_vae_updates=3,  # number of VAE updates per policy update
+            anneal_lr=False,
+            kl_weight=1e-2,
+            use_kl_scheduler=False,
+            max_grad_norm=2.0,
+            eps=1e-8,
+            kl_to_fixed_prior=False,
+            subsample_elbos=0,
+            subsample_decode_timesteps=0,
+            latent_dim=5,
+            decode_rewards=True,
+            rew_recon_weight=1.0,
+            embedding_dim=8,
+        )
+    )
     transformer_config.encode_separate = False
 
     if "xland" in config_string:
@@ -43,8 +40,10 @@ def get_config(config_string: str = None):
                 image_encoder_config = v
                 break
         if image_encoder_config is None:
-            raise ValueError("No image encoder config found for the given config string")
-            
+            raise ValueError(
+                "No image encoder config found for the given config string"
+            )
+
         image_encoder_config.embedding_dim = vae_config.get_ref("embedding_dim")
     else:
         image_encoder_config = None
@@ -91,31 +90,36 @@ def get_config(config_string: str = None):
     # =============================================================
     # Policy configs
     # =============================================================
-    policy_config = config_dict.ConfigDict()
-    policy_config.image_encoder_config = image_encoder_config
-    policy_config.image_obs = config.env.get_ref("image_obs")
-    policy_config.pass_state_to_policy = True
-    policy_config.pass_latent_to_policy = True
-    policy_config.pass_belief_to_policy = False
-    policy_config.pass_task_to_policy = False
-    policy_config.use_hyperx_bonuses = False
-    policy_config.mlp_layers = [32, 32]
-    policy_config.actor_activation_function = "tanh"
-    policy_config.algo = "ppo"
-    policy_config.optimizer = "adam"
-    policy_config.num_epochs = 2
-    policy_config.num_minibatch = 4
-    policy_config.clip_eps = 0.05
-    policy_config.lr = 7e-4
-    policy_config.eps = 1e-8
-    policy_config.value_loss_coeff = 0.5
-    policy_config.entropy_coeff = 0.01
-    policy_config.gamma = 0.95
-    policy_config.use_gae = True
-    policy_config.tau = 0.95
-    policy_config.max_grad_norm = 0.5
-    policy_config.embedding_dim = 16
-    policy_config.anneal_lr = False
+    policy_config = config_dict.ConfigDict(
+        dict(
+            image_encoder_config=image_encoder_config,
+            image_obs=config.env.get_ref("image_obs"),
+            latent_dim=vae_config.get_ref("latent_dim"),
+            pass_state_to_policy=True,
+            pass_latent_to_policy=True,
+            pass_belief_to_policy=False,
+            pass_task_to_policy=False,
+            use_hyperx_bonuses=False,
+            mlp_layers=[32, 32],
+            actor_activation_function="tanh",
+            algo="ppo",
+            name="ppo",
+            optimizer="adam",
+            num_epochs=2,
+            num_minibatch=4,
+            clip_eps=0.05,
+            lr=7e-4,
+            eps=1e-8,
+            value_loss_coeff=0.5,
+            entropy_coeff=0.01,
+            gamma=0.95,
+            use_gae=True,
+            tau=0.95,
+            max_grad_norm=0.5,
+            embedding_dim=16,
+            anneal_lr=False,
+        )
+    )
     config.policy = policy_config
 
     config.notes = "VariBAD JAX"
@@ -145,7 +149,7 @@ def get_config(config_string: str = None):
                 embedding_dim=vae_config.get_ref("embedding_dim"),
                 rnd_output_dim=32,
                 layer_sizes=[32, 32],
-            )
+            ),
         )
     )
     return config

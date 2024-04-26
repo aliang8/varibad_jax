@@ -4,9 +4,11 @@ from typing import Any, Callable, List, NamedTuple, Optional, Tuple
 import flax.linen as nn
 import haiku as hk
 import jax
+import optax
 import jax.numpy as jnp
 from varibad_jax.models.common import ImageEncoder
 from ml_collections.config_dict import ConfigDict
+
 
 @dataclasses.dataclass
 class RND(hk.Module):
@@ -28,7 +30,7 @@ class RND(hk.Module):
 
         self.image_obs = config.image_obs
         self.embedding_dim = config.embedding_dim
-        self.rnd_output_dim = config.rnd_output_dim 
+        self.rnd_output_dim = config.rnd_output_dim
         self.layer_sizes = config.layer_sizes
 
         self.latent_embed = hk.Linear(
@@ -36,7 +38,9 @@ class RND(hk.Module):
         )
 
         if self.image_obs:
-            self.state_embed = ImageEncoder(**image_encoder_config, **init_kwargs)
+            self.state_embed = ImageEncoder(
+                **config.image_encoder_config, **init_kwargs
+            )
         else:
             self.state_embed = hk.Linear(
                 self.embedding_dim, name="state_embed", **init_kwargs

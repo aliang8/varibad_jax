@@ -38,7 +38,7 @@ class TransformerLayer(hk.Module):
         self.dense_block = hk.Sequential(
             [
                 hk.Linear(self.hidden_dim * self.widening_factor, w_init=w_init),
-                jax.nn.gelu,
+                nn.gelu,
                 hk.Linear(self.hidden_dim, w_init=w_init, b_init=b_init),
             ]
         )

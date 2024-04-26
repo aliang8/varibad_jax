@@ -1,4 +1,14 @@
 import numpy as np
+import chex
+import jax.numpy as jnp
+
+
+@chex.dataclass
+class Batch:
+    prev_obs: jnp.ndarray
+    actions: jnp.ndarray
+    rewards: jnp.ndarray
+    next_obs: jnp.ndarray
 
 
 class RolloutStorageVAE:
@@ -256,11 +266,9 @@ class RolloutStorageVAE:
         else:
             tasks = None
 
-        return (
-            prev_obs,
-            next_obs,
-            actions,
-            rewards,
-            tasks,
-            trajectory_lens,
+        return Batch(
+            prev_obs=prev_obs,
+            actions=actions,
+            rewards=rewards,
+            next_obs=next_obs,
         )
