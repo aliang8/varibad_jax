@@ -79,26 +79,33 @@ class VariBADModel(BaseModel):
         self._params = encoder_params
         self._state = encoder_state
 
-    @partial(jax.jit, static_argnums=(0, 2))
-    def get_prior(self, rng, batch_size):
+    @partial(jax.jit, static_argnums=(0, 3))
+    def get_prior_jit(self, params, rng, batch_size):
         logging.info("inside get_prior")
-        return get_prior.apply(
-            self._params, rng, config=self.config, batch_size=batch_size
-        )
+        return get_prior.apply(params, rng, config=self.config, batch_size=batch_size)
+
+    def get_prior(self, rng, batch_size):
+        return self.get_prior_jit(self._params, rng, batch_size)
 
     @partial(jax.jit, static_argnums=(0,))
-    def encode_trajectory(self, rng, *args, **kwargs):
+    def encode_trajectory_jit(self, params, state, rng, *args, **kwargs):
         logging.info("inside encode_trajectory")
         return encode_trajectory.apply(
-            self._params, self._state, rng, config=self.config, *args, **kwargs
+            params, state, rng, config=self.config, *args, **kwargs
+        )
+
+    def encode_trajectory(self, rng, *args, **kwargs):
+        return self.encode_trajectory_jit(
+            self._params, self._state, rng, *args, **kwargs
         )
 
     @partial(jax.jit, static_argnums=(0,))
-    def decode(self, rng, *args, **kwargs):
+    def decode_jit(self, params, state, rng, *args, **kwargs):
         logging.info("inside decode")
-        return decode.apply(
-            self._params, self._state, rng, config=self.config, *args, **kwargs
-        )
+        return decode.apply(params, state, rng, config=self.config, *args, **kwargs)
+
+    def decode(self, rng, *args, **kwargs):
+        return self.decode_jit(self._params, self._state, rng, *args, **kwargs)
 
     def loss_fn(self, params: hk.Params, state: hk.State, rng_key: PRNGKey, batch):
         logging.debug("inside loss_vae")

@@ -84,6 +84,7 @@ def get_config(config_string: str = None):
     config.exp_name = "vb_jax"
     config.group_name = ""
     config.ray_logdir = "ray_results"
+    config.overwrite = True
 
     # for rollout visualization
     config.fps = 5

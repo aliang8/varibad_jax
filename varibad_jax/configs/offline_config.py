@@ -4,7 +4,7 @@ from varibad_jax.configs.model_configs import (
     image_encoder_configs,
     image_decoder_config,
 )
-from ml_collections import config_dict
+from ml_collections.config_dict import ConfigDict
 
 
 def get_config(config_string: str = None):
@@ -36,7 +36,7 @@ def get_config(config_string: str = None):
         image_encoder_config = None
 
     policies = {
-        "dt": config_dict.ConfigDict(
+        "dt": ConfigDict(
             dict(
                 name="dt",
                 transformer_config=transformer_config,
@@ -44,7 +44,7 @@ def get_config(config_string: str = None):
                 image_encoder_config=image_encoder_config,
             )
         ),
-        "lam": config_dict.ConfigDict(
+        "lam": ConfigDict(
             dict(
                 name="lam",
                 transformer_config=transformer_config,
@@ -57,7 +57,7 @@ def get_config(config_string: str = None):
                 beta=0.25,
             )
         ),
-        "lapo": config_dict.ConfigDict(
+        "lapo": ConfigDict(
             dict(
                 name="lapo",
                 idm=dict(
@@ -78,7 +78,7 @@ def get_config(config_string: str = None):
         ),
     }
 
-    policy_config = None
+    policy_config = ConfigDict()
     for k, v in policies.items():
         if k in config_string:
             policy_config = v

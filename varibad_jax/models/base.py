@@ -2,7 +2,9 @@ from absl import logging
 from typing import Tuple
 import jax
 import optax
+import pickle
 import haiku as hk
+from pathlib import Path
 from functools import partial
 from ml_collections.config_dict import ConfigDict
 
@@ -25,6 +27,9 @@ class BaseModel:
         input_action_dim: int,
         continuous_actions: bool,
         task_dim: int = 0,
+        model_key: str = "",
+        load_from_ckpt: bool = False,
+        ckpt_file: str = "",
     ):
         self.config = config
         self.is_continuous = continuous_actions
@@ -38,7 +43,16 @@ class BaseModel:
         self._state = None
         self._opt_state = None
 
-        self._init_model()
+        if load_from_ckpt:
+            logging.info(f"loading {config.name} from checkpoint {ckpt_file}")
+            with open(ckpt_file, "rb") as f:
+                ckpt = pickle.load(f)
+                self._params, self._state = (
+                    ckpt[model_key]["params"],
+                    ckpt[model_key]["state"],
+                )
+        else:
+            self._init_model()
         num_params = sum(p.size for p in jax.tree_util.tree_leaves(self._params))
         logging.info(f"number of {config.name} parameters: {num_params}")
 

@@ -26,7 +26,7 @@ python3 main.py \
     --config.use_wb=False
 
 # XLand
-python3 main.py \
+CUDA_VISIBLE_DEVICES=2 python3 main.py \
     --config=configs/varibad_config.py:lstm-xland-5x5 \
     --config.smoke_test=True \
     --config.use_wb=False

@@ -11,6 +11,7 @@ import wandb
 import optax
 import einops
 import json
+import shutil
 import jax.tree_util as jtu
 from ml_collections import FrozenConfigDict
 from pathlib import Path
@@ -38,7 +39,7 @@ class BaseTrainer:
         self.exp_dir = Path(self.config.exp_dir)
         print("experiment dir: ", self.exp_dir)
 
-        if self.exp_dir.exists():
+        if self.exp_dir.exists() and not self.config.overwrite:
             logging.info(
                 f"experiment dir {self.exp_dir} already exists, will create a slightly different one"
             )
@@ -46,6 +47,10 @@ class BaseTrainer:
             rand_str = str(int(time.time()))
             self.exp_dir = self.exp_dir.parent / self.exp_dir.name / rand_str
             logging.info(f"new experiment dir: {self.exp_dir}")
+        else:
+            logging.info(f"overwriting existing experiment dir {self.exp_dir}")
+            shutil.rmtree(self.exp_dir, ignore_errors=True)
+            self.exp_dir.mkdir(parents=True, exist_ok=True)
 
         self.ckpt_dir = self.exp_dir / "model_ckpts"
         self.ckpt_dir.mkdir(parents=True, exist_ok=True)

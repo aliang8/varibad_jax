@@ -16,10 +16,10 @@ import gymnasium as gym
 import jax.tree_util as jtu
 from ml_collections import ConfigDict, FieldReference, FrozenConfigDict, config_flags
 
-from varibad_jax.trainers.meta_trainer import create_ts
 from varibad_jax.envs.utils import make_envs
 from varibad_jax.utils.rollout import run_rollouts
-from varibad_jax.models.varibad.helpers import get_prior
+from varibad_jax.models.varibad.varibad import VariBADModel
+from varibad_jax.agents.ppo.ppo import PPOAgent
 
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.01"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
@@ -43,9 +43,6 @@ def main(_):
         config_p = json.load(f)
 
     config_p = ConfigDict(config_p)
-    config_p.load_from_ckpt = True
-    config_p.ckpt_step = config.ckpt_step
-    config_p.model_ckpt_dir = config.model_ckpt_dir
     print(config_p)
 
     envs, env_params = make_envs(**config.env, training=False)
@@ -57,17 +54,28 @@ def main(_):
         action_dim = envs.action_space.n
         input_action_dim = 1
 
-    # create train states
-    ts_vae, ts_policy, vae_state, policy_state = create_ts(
-        config_p, next(rng_seq), envs, input_action_dim, action_dim, num_update_steps=0
+    belief_model = VariBADModel(
+        config=config_p.vae,
+        observation_shape=envs.observation_space.shape,
+        action_dim=action_dim,
+        input_action_dim=input_action_dim,
+        continuous_actions=continuous_actions,
+        key=next(rng_seq),
+        load_from_ckpt=True,
+        ckpt_file=model_ckpt_dir / "best.pkl",
+        model_key="belief_model",
     )
 
-    get_prior_fn = functools.partial(
-        jax.jit(
-            get_prior.apply,
-            static_argnames=("config", "batch_size"),
-        ),
-        config=FrozenConfigDict(config_p.vae),
+    agent = PPOAgent(
+        config=config_p.policy,
+        observation_shape=envs.observation_space.shape,
+        action_dim=action_dim,
+        input_action_dim=input_action_dim,
+        continuous_actions=continuous_actions,
+        key=next(rng_seq),
+        load_from_ckpt=True,
+        ckpt_file=model_ckpt_dir / "best.pkl",
+        model_key="agent",
     )
 
     # collect some rollouts
@@ -75,14 +83,13 @@ def main(_):
 
     logging.info("start data collection")
     config_p.num_eval_rollouts = config.num_rollouts_collect
+
     eval_metrics, transitions, actions = run_rollouts(
         rng=next(rng_seq),
-        state=[vae_state, policy_state],
+        agent=agent,
+        belief_model=belief_model,
         env=envs,
         config=config_p,
-        ts_policy=ts_policy,
-        ts_vae=ts_vae,
-        get_prior=get_prior_fn,
         steps_per_rollout=steps_per_rollout,
         action_dim=input_action_dim,
     )
@@ -90,7 +97,11 @@ def main(_):
     logging.info(f"eval metrics: {eval_metrics}")
 
     # save transitions to a dataset format
-    data_dir = Path(config.root_dir) / "datasets" / f"eid-{config.env.env_id}_n-{config.num_rollouts_collect}_steps-{steps_per_rollout}"
+    data_dir = (
+        Path(config.root_dir)
+        / "datasets"
+        / f"eid-{config.env.env_id}_n-{config.num_rollouts_collect}_steps-{steps_per_rollout}"
+    )
     data_dir.mkdir(exist_ok=True, parents=True)
     data_file = data_dir / "dataset.pkl"
     metadata_file = data_dir / "metadata.json"
@@ -118,7 +129,7 @@ def main(_):
         "pretrained_model_config": config_p.to_dict(),
         "ckpt_data": ckpt_data,
         "ckpt_dir": str(model_ckpt_dir),
-        "avg_ep_return": float(eval_metrics["episode_return"])
+        "avg_ep_return": float(eval_metrics["episode_return"]),
     }
     with open(data_file, "wb") as f:
         pickle.dump(data, f)
