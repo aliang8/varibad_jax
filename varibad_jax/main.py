@@ -24,7 +24,6 @@ from varibad_jax.trainers.offline_trainer import OfflineTrainer
 
 # os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.01"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
-
 _CONFIG = config_flags.DEFINE_config_file("config")
 
 # shorthands for config parameters
@@ -111,6 +110,7 @@ def update(source, overrides):
             source[key] = overrides[key]
     return source
 
+
 def create_exp_name(param_space, config):
     trial_str = ""
 
@@ -139,6 +139,7 @@ def create_exp_name(param_space, config):
     print("trial_str: ", trial_str)
     return trial_str
 
+
 def trial_str_creator(trial):
     return create_exp_name(param_space, trial.config)
 
@@ -150,6 +151,10 @@ def main(_):
     logging.info(f"num_devices: {num_devices}, num_local_devices: {num_local_devices}")
 
     config = _CONFIG.value.to_dict()
+
+    if config["enable_jit"] is False:
+        jax.config.update("jax_disable_jit", True)
+
     if config["smoke_test"] is False:
         config["use_wb"] = True  # log to wandb
         # update dict of dict

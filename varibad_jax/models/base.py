@@ -19,17 +19,19 @@ class BaseModel:
     def __init__(
         self,
         config,
+        key: jax.random.PRNGKey,
         observation_shape: Tuple,
         action_dim: int,
         input_action_dim: int,
         continuous_actions: bool,
-        key: jax.random.PRNGKey,
+        task_dim: int = 0,
     ):
         self.config = config
         self.is_continuous = continuous_actions
         self.action_dim = action_dim
         self.observation_shape = observation_shape
         self.input_action_dim = input_action_dim
+        self.task_dim = task_dim
 
         self._key = key
         self._params = None
@@ -86,10 +88,12 @@ class BaseModel:
 
 class BaseAgent(BaseModel):
 
-    # using env_state because of naming conflict with hk state
     @partial(jax.jit, static_argnums=(0,))
-    def get_action(self, rng, env_state, **kwargs):
+    def get_action_jit(self, params, state, rng, env_state, **kwargs):
         logging.info("inside get action")
-        return self.model.apply(
-            self._params, self._state, rng, self, env_state, **kwargs
-        )
+        # jax.debug.print("{x}", x=params["ActorCritic/~/task_embed"]["w"].mean())
+        return self.model.apply(params, state, rng, self, env_state, **kwargs)
+
+    # using env_state because of naming conflict with hk state
+    def get_action(self, rng, env_state, **kwargs):
+        return self.get_action_jit(self._params, self._state, rng, env_state, **kwargs)

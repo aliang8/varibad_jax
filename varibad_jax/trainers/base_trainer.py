@@ -34,6 +34,28 @@ class BaseTrainer:
         self.rng_seq = hk.PRNGSequence(config.seed)
         np.random.seed(config.seed)
 
+        # setup log dirs
+        self.exp_dir = Path(self.config.exp_dir)
+        print("experiment dir: ", self.exp_dir)
+
+        if self.exp_dir.exists():
+            logging.info(
+                f"experiment dir {self.exp_dir} already exists, will create a slightly different one"
+            )
+            # raise ValueError("experiment dir already exists")
+            rand_str = str(int(time.time()))
+            self.exp_dir = self.exp_dir.parent / self.exp_dir.name / rand_str
+            logging.info(f"new experiment dir: {self.exp_dir}")
+
+        self.ckpt_dir = self.exp_dir / "model_ckpts"
+        self.ckpt_dir.mkdir(parents=True, exist_ok=True)
+        self.video_dir = self.exp_dir / "videos"
+        self.video_dir.mkdir(parents=True, exist_ok=True)
+
+        # save config to json file readable
+        with open(self.exp_dir / "config.json", "w") as f:
+            json.dump(self.config.to_dict(), f, indent=4)
+
         if self.config.use_wb:
             self.wandb_run = wandb.init(
                 # set the wandb project where this run will be logged
@@ -48,19 +70,6 @@ class BaseTrainer:
             )
         else:
             self.wandb_run = None
-
-        # setup log dirs
-        self.exp_dir = Path(self.config.exp_dir)
-        print("experiment dir: ", self.exp_dir)
-
-        self.ckpt_dir = self.exp_dir / "model_ckpts"
-        self.ckpt_dir.mkdir(parents=True, exist_ok=True)
-        self.video_dir = self.exp_dir / "videos"
-        self.video_dir.mkdir(parents=True, exist_ok=True)
-
-        # save config to json file readable
-        with open(self.exp_dir / "config.json", "w") as f:
-            json.dump(self.config.to_dict(), f, indent=4)
 
         # create env
         self.envs, self.env_params = make_envs(**self.config.env)
@@ -100,8 +109,6 @@ class BaseTrainer:
         else:
             self.best_metric = float("inf")
 
-
-
     def create_ts(self):
         raise NotImplementedError
 
@@ -114,17 +121,13 @@ class BaseTrainer:
     def train(self):
         raise NotImplementedError
 
-    def save_model(self, ckpt_dict, metrics, iter_idx: int=None):
+    def save_model(self, ckpt_dict, metrics, iter_idx: int = None):
         if self.config.save_key and self.config.save_key in metrics:
             # import ipdb; ipdb.set_trace()
             key = self.config.save_key
             if (
-                self.config.best_metric == "max"
-                and metrics[key] > self.best_metric
-            ) or (
-                self.config.best_metric == "min"
-                and metrics[key] < self.best_metric
-            ):
+                self.config.best_metric == "max" and metrics[key] > self.best_metric
+            ) or (self.config.best_metric == "min" and metrics[key] < self.best_metric):
                 self.best_metric = metrics[key]
                 ckpt_file = self.ckpt_dir / f"best.pkl"
                 logging.info(
@@ -137,7 +140,7 @@ class BaseTrainer:
                 best_ckpt_file = self.ckpt_dir / "best.txt"
                 with open(best_ckpt_file, "w") as f:
                     f.write(f"{iter_idx + 1}, {metrics[key]}")
-        
+
         # also save model to ckpt everytime we run evaluation
         ckpt_file = Path(self.ckpt_dir) / f"ckpt_{iter_idx + 1}.pkl"
         logging.debug(f"saving checkpoint to {ckpt_file}")

@@ -146,10 +146,6 @@ class MetaRLTrainer(BaseTrainer):
                 is_training=True,
             )
 
-            # import ipdb
-
-            # ipdb.set_trace()
-
             # take a step in the environment
             action = policy_output.action
             xtimestep = self.jit_step(self.env_params, xtimestep, action)

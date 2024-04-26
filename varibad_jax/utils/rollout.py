@@ -53,7 +53,7 @@ def run_rollouts(
     elif config.trainer == "offline" and config.policy.name == "dt":
         rollout_fn = eval_rollout_dt
     elif config.trainer == "rl":
-        return {}
+        rollout_fn = eval_rollout
 
     # render function doesn't work with vmap
     eval_metrics, (transitions, actions) = jax.vmap(
@@ -207,10 +207,9 @@ def eval_rollout_dt(
 
 def eval_rollout(
     rng: jax.Array,
-    state: hk.State,
+    agent,
     env: Environment,
     config: dict,
-    ts_policy: TrainState,
     action_dim: int,
     steps_per_rollout: int,
 ) -> RolloutStats:
@@ -231,7 +230,6 @@ def eval_rollout(
         (
             rng,
             stats,
-            state,
             xtimestep,
             prev_action,
             prev_reward,
@@ -243,9 +241,7 @@ def eval_rollout(
         observation = observation.astype(jnp.float32)
         observation = observation[jnp.newaxis]
 
-        policy_output, state = ts_policy.apply_fn(
-            ts_policy.params,
-            state,
+        policy_output, state = agent.get_action(
             policy_rng,
             env_state=observation,
             task=task,
@@ -272,7 +268,6 @@ def eval_rollout(
         return (
             rng,
             stats,
-            state,
             xtimestep,
             action,
             reward,
@@ -282,7 +277,6 @@ def eval_rollout(
     init_carry = (
         rng,
         stats,
-        state,
         xtimestep,
         prev_action,
         prev_reward,

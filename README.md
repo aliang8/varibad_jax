@@ -9,6 +9,14 @@ pip3 install -e . # should install this repo and dependencies
 ```
 
 ### Example command 
+Run basic goal-conditioned RL 
+```
+python3 main.py \
+    --config=configs/rl_config.py:lstm-gridworld \
+    --config.smoke_test=True \
+    --config.use_wb=False
+```
+
 Run VariBAD on XLand using LSTM encoder
 ```
 # gridworld 

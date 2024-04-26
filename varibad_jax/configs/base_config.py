@@ -1,7 +1,7 @@
 """Config for posterior transformer training."""
 
 from flax import struct
-from ml_collections import config_dict
+from ml_collections.config_dict import ConfigDict
 import numpy as np
 
 
@@ -11,14 +11,15 @@ def get_config(config_string: str = None):
     # =============================================================
     # Environment config
     # =============================================================
-    config = config_dict.ConfigDict()
+    config = ConfigDict()
 
-    env_config = config_dict.ConfigDict()
+    env_config = ConfigDict()
 
     # define env specific configs
     envs = {
-        "gridworld": config_dict.ConfigDict(
+        "gridworld": ConfigDict(
             dict(
+                task_dim=2,
                 env_name="gridworld",
                 env_id="GridNaviJAX-v0",
                 num_episodes_per_rollout=4,
@@ -29,7 +30,7 @@ def get_config(config_string: str = None):
                 env_kwargs=dict(grid_size=5, max_episode_steps=15, num_actions=5),
             )
         ),
-        "xland": config_dict.ConfigDict(
+        "xland": ConfigDict(
             dict(
                 env_name="xland",
                 env_kwargs=dict(view_size=5, height=9, width=9),
