@@ -31,7 +31,7 @@ def run_rollouts(
     steps_per_rollout: int,
     action_dim: int,
     wandb_run=None,
-    **kwargs
+    **kwargs,
 ) -> RolloutStats:
     logging.info("Evaluating policy rollout...")
 
@@ -45,7 +45,7 @@ def run_rollouts(
         steps_per_rollout=steps_per_rollout,
         env=env,
         config=config,
-        **kwargs
+        **kwargs,
     )
 
     if config.trainer == "vae":
@@ -149,6 +149,10 @@ def eval_rollout_dt(
             is_training=False,
         )
 
+        entropy = policy_output.entropy
+        entropy = jnp.mean(entropy)
+        logging.info(f"entropy: {entropy}")
+
         # [B, T]
         action = policy_output.action
         action = action[0, stats.length]
@@ -160,13 +164,11 @@ def eval_rollout_dt(
         action = action.reshape(1).astype(jnp.float32)
         reward = reward.reshape(1)
 
-        # import ipdb
-
-        # ipdb.set_trace()
         actions = actions.at[0, stats.length].set(action)
 
         # return to go is the previous return minus rewad
         rtg = rtg - timestep.reward
+
         rewards = rewards.at[0, stats.length].set(rtg)
 
         stats = stats.replace(

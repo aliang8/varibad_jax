@@ -42,6 +42,7 @@ def get_config(config_string: str = None):
                 transformer_config=transformer_config,
                 image_obs=config.env.get_ref("image_obs"),
                 image_encoder_config=image_encoder_config,
+                batch_first=True,
             )
         ),
         "lam": ConfigDict(

@@ -11,7 +11,7 @@ import jax.numpy as jnp
 from absl import logging
 from functools import partial
 
-from varibad_jax.models.base import BaseAgent
+from varibad_jax.models.base import BaseModel
 from varibad_jax.models.lapo.model import LatentFDM, LatentActionIDM
 
 
@@ -22,9 +22,9 @@ class LAPOOutput:
     quantize: jnp.ndarray
 
 
-class LAPOAgent(BaseAgent):
+class LAPOModel(BaseModel):
     @hk.transform_with_state
-    def model(self, states, actions, is_training=True):
+    def model(self, states, is_training=True):
         idm = LatentActionIDM(self.config.idm)
         fdm = LatentFDM(self.config.fdm)
 
@@ -55,13 +55,11 @@ class LAPOAgent(BaseAgent):
     def _init_model(self):
         t, bs = 3, 2
         dummy_states = np.zeros((bs, t, *self.observation_shape), dtype=np.float32)
-        dummy_actions = np.zeros((bs, t, self.input_action_dim))
 
         self._params, self._state = self.model.init(
             self._key,
             self,
             states=dummy_states,
-            actions=dummy_actions,
             is_training=True,
         )
 
@@ -77,7 +75,6 @@ class LAPOAgent(BaseAgent):
             rng,
             self,
             states=observations.astype(jnp.float32),
-            actions=actions,
             is_training=True,
         )
 

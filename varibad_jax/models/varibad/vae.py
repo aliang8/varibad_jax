@@ -6,7 +6,7 @@ import haiku as hk
 import jax.numpy as jnp
 from ml_collections.config_dict import ConfigDict, FrozenConfigDict
 
-from varibad_jax.models.varibad.decoder import Decoder
+from varibad_jax.models.varibad.decoder import RewardDecoder, TaskDecoder
 from varibad_jax.models.varibad.lstm_encoder import LSTMTrajectoryEncoder
 from varibad_jax.models.transformer_encoder import SARTransformerEncoder
 from tensorflow_probability.substrates import jax as tfp
@@ -28,6 +28,7 @@ class EncodeOutputs:
 class DecodeOutputs:
     rew_pred: jnp.ndarray
     state_pred: Optional[jnp.ndarray] = None
+    task_pred: Optional[jnp.ndarray] = None
     termination_pred: Optional[jnp.ndarray] = None
 
 
@@ -55,7 +56,17 @@ class VaribadVAE(hk.Module):
             self.config.latent_dim, name="latent_logvar", **init_kwargs
         )
 
-        self.reward_decoder = Decoder(**self.config.decoder)
+        if self.config.decode_rewards:
+            self.reward_decoder = RewardDecoder(**self.config.decoder)
+
+        if self.config.decode_tasks:
+            self.task_decoder = TaskDecoder(**self.config.decoder)
+        
+        if self.config.decode_states:
+            # TODO: fix this
+            self.state_decoder = hk.Linear(
+                self.config.state_dim, name="state_decoder", **init_kwargs
+            )
 
     def get_prior(self, batch_size: int):
         if self.config.encoder.name == "lstm":
@@ -140,22 +151,34 @@ class VaribadVAE(hk.Module):
         Returns:
           decode_outputs: DecodeOutputs
         """
-        rew_pred = self.reward_decoder(
-            latents=latent_samples,
-            prev_states=prev_states,
-            next_states=next_states,
-            actions=actions,
-            is_training=is_training,
-        )
+        if self.config.decode_rewards:
+            rew_pred = self.reward_decoder(
+                latents=latent_samples,
+                prev_states=prev_states,
+                next_states=next_states,
+                actions=actions,
+                is_training=is_training,
+            )
+        else:
+            rew_pred = None
 
         # Reconstruct state
         # p(s_t+1 | s_t, a_t, m)
-        # state_pred = self.state_decoder(
-        #     latents=latent_samples, states=prev_states, actions=actions
-        # )
+        if self.config.decode_states:
+            state_pred = self.state_decoder(
+                latents=latent_samples, states=prev_states, actions=actions
+            )
+        else:
+            state_pred = None
+
+        if self.config.decode_tasks:
+            task_pred = self.task_decoder(latents=latent_samples)
+        else:
+            task_pred = None
 
         decode_outputs = DecodeOutputs(
             rew_pred=rew_pred,
-            state_pred=None,
+            state_pred=state_pred,
+            task_pred=task_pred
         )
         return decode_outputs

@@ -84,12 +84,14 @@ class BaseModel:
         if update_model:
             grads, opt_state = self.opt.update(grads, self._opt_state)
             params = optax.apply_updates(params, grads)
+        else:
+            opt_state = self._opt_state
         return params, state, opt_state, metrics
 
     def update(self, rng, batch, update_model=True):
         self._params, self._state, self._opt_state, metrics = self.update_model(
             self._params, self._state, rng, batch, update_model
-        )
+        )            
         return metrics
 
     @property

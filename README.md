@@ -23,7 +23,8 @@ Run VariBAD on XLand using LSTM encoder
 python3 main.py \
     --config=configs/varibad_config.py:lstm-gridworld \
     --config.smoke_test=True \
-    --config.use_wb=False
+    --config.use_wb=False \
+    --config.overwrite=False
 
 # XLand
 CUDA_VISIBLE_DEVICES=2 python3 main.py \
@@ -54,6 +55,15 @@ CUDA_VISIBLE_DEVICES=4 python3 main.py \
     --config.smoke_test=True \
     --config.use_wb=False
 ```
+
+```
+Train LAPO
+CUDA_VISIBLE_DEVICES=4 python3 main.py \
+    --config=configs/offline_config.py:lapo-xland-5x5 \
+    --config.smoke_test=True \
+    --config.use_wb=False
+```
+
 
 Also supports using Ray for hyperparameter search and WandB for logging experiment metrics. Use `smoke_test` to toggle Ray tune. 
 

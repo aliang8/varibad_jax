@@ -9,8 +9,8 @@ from varibad_jax.models.common import ImageEncoder
 
 
 @dataclasses.dataclass
-class Decoder(hk.Module):
-    """Decoder"""
+class RewardDecoder(hk.Module):
+    """RewardDecoder"""
 
     def __init__(
         self,
@@ -99,3 +99,36 @@ class Decoder(hk.Module):
 
         rew_pred = self.output_mlp(inputs)
         return rew_pred
+
+@dataclasses.dataclass
+class TaskDecoder(hk.Module):
+    def __init__(
+        self,
+        task_dim: int = 2,
+        layer_sizes: List[int] = [32, 32],
+        w_init=hk.initializers.VarianceScaling(scale=2.0),
+        b_init=hk.initializers.Constant(0.0),
+        **kwargs
+    ):
+        """Decodes the tasks in a trajectory given the latent information
+
+        Args:
+          embedding_dim: hidden size for embedding inputs
+          layer_sizes: a list of integers specifying the size of each layer in the
+            output MLP
+        """
+        super().__init__(name="TaskDecoder")
+
+        init_kwargs = dict(w_init=w_init, b_init=b_init)
+        self.output_mlp = hk.nets.MLP(
+            list(layer_sizes) + [task_dim],
+            activation=nn.gelu,
+            name="task_mlp",
+            activate_final=False,
+            **init_kwargs,
+        )
+    
+    def __call__(self, latents: jnp.ndarray, is_training: bool = True):
+        """Forwards the task decoder network"""
+        task_pred = self.output_mlp(latents)
+        return task_pred

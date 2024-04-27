@@ -23,10 +23,10 @@ class DecisionTransformerAgent(BaseAgent):
 
     def _init_model(self):
         t, bs = 2, 2
-        dummy_states = np.zeros((t, bs, *self.observation_shape), dtype=np.float32)
-        dummy_actions = np.zeros((t, bs, self.input_action_dim))
-        dummy_rewards = np.zeros((t, bs, 1))
-        dummy_mask = np.ones((t, bs))
+        dummy_states = np.zeros((bs, t, *self.observation_shape), dtype=np.float32)
+        dummy_actions = np.zeros((bs, t, self.input_action_dim))
+        dummy_rewards = np.zeros((bs, t, 1))
+        dummy_mask = np.ones((bs, t))
 
         self._params, self._state = self.model.init(
             self._key,

@@ -48,6 +48,9 @@ psh = {
         "dropout_rate": "do",
         "num_vae_updates": "nvu",
         "embedding_dim": "ed",
+        "decode_tasks": "dec_t",
+        "decode_rewards": "dec_r",
+        "decode_states": "dec_s",
     },
     "policy": {
         "pass_latent_to_policy": "pltp",

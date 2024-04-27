@@ -49,9 +49,8 @@ class ImageEncoder(hk.Module):
             intermediate.append(x)
 
         # flatten and reembed
-        embedding = x
-        # embedding = hk.Flatten(preserve_dims=1)(x)
-        # embedding = hk.Linear(self.embedding_dim, **self.init_kwargs)(embedding)
+        embedding = hk.Flatten(preserve_dims=1)(x)
+        embedding = hk.Linear(self.embedding_dim, **self.init_kwargs)(embedding)
 
         logging.info(f"encoder embedding shape: {embedding.shape}")
         if x.ndim > 4:

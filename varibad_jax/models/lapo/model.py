@@ -75,9 +75,11 @@ class LatentFDM(hk.Module):
         x = jnp.concatenate([prev_states, action_expand], axis=1)
         logging.info(f"shape after concat: {x.shape}")
 
-        embeddings, intermediates = self.state_embed(
+        _, intermediates = self.state_embed(
             x, is_training=is_training, return_intermediate=True
         )
+        embeddings = intermediates[-1]
+
         intermediates[-1] = actions
         intermediates[-1] = einops.repeat(
             intermediates[-1],

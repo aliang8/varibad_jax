@@ -16,7 +16,6 @@ class DecisionTransformer(hk.Module):
         is_continuous: bool = False,
         w_init=hk.initializers.VarianceScaling(scale=2.0),
         b_init=hk.initializers.Constant(0.0),
-        batch_first: bool = True,
         **kwargs
     ):
         """
@@ -30,7 +29,7 @@ class DecisionTransformer(hk.Module):
             **transformer_config,
             image_encoder_config=config.image_encoder_config,
             image_obs=config.image_obs,
-            batch_first=batch_first,
+            batch_first=config.batch_first,
             w_init=w_init,
             b_init=b_init
         )
@@ -49,7 +48,6 @@ class DecisionTransformer(hk.Module):
         embeddings = self.transformer(
             states, actions, rewards, mask, is_training=is_training
         )
-        # jax.debug.breakpoint()
 
         # reshape embeddings to [B, T, 3, D]
         embeddings = einops.rearrange(embeddings, "b (t c) d -> b c t d", c=3)

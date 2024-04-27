@@ -1,3 +1,4 @@
+from typing import Optional
 import numpy as np
 import chex
 import jax.numpy as jnp
@@ -9,6 +10,7 @@ class Batch:
     actions: jnp.ndarray
     rewards: jnp.ndarray
     next_obs: jnp.ndarray
+    tasks: Optional[jnp.ndarray] = None 
 
 
 class RolloutStorageVAE:
@@ -71,7 +73,7 @@ class RolloutStorageVAE:
             )
             self.rewards = np.zeros((self.max_traj_len, self.max_buffer_size, 1))
             if task_dim is not None:
-                self.tasks = np.zeros((self.max_buffer_size, task_dim))
+                self.tasks = np.zeros((self.max_traj_len, self.max_buffer_size, task_dim))
             else:
                 self.tasks = None
             self.trajectory_lens = [0] * self.max_buffer_size
@@ -90,7 +92,7 @@ class RolloutStorageVAE:
         self.running_rewards = np.zeros((self.max_traj_len, num_processes, 1))
         self.running_actions = np.zeros((self.max_traj_len, num_processes, action_dim))
         if task_dim is not None:
-            self.running_tasks = np.zeros((num_processes, task_dim))
+            self.running_tasks = np.zeros((self.max_traj_len, num_processes, task_dim))
         else:
             self.running_tasks = None
 
@@ -119,7 +121,7 @@ class RolloutStorageVAE:
             self.running_rewards[self.curr_timestep[0]] = rewards
             self.running_actions[self.curr_timestep[0]] = actions
             if task is not None:
-                self.running_tasks = task
+                self.running_tasks[self.curr_timestep[0]] = task
             self.curr_timestep += 1
             already_inserted = True
 
@@ -155,12 +157,9 @@ class RolloutStorageVAE:
                         :, self.insert_idx : self.insert_idx + self.num_processes
                     ] = self.running_rewards
                     if (self.tasks is not None) and (self.running_tasks is not None):
-                        insert_shape = self.tasks[
-                            self.insert_idx : self.insert_idx + self.num_processes
-                        ].shape
                         self.tasks[
-                            self.insert_idx : self.insert_idx + self.num_processes
-                        ] = self.running_tasks.reshape(insert_shape)
+                        :, self.insert_idx : self.insert_idx + self.num_processes
+                    ] = self.running_rewards
                     self.trajectory_lens[
                         self.insert_idx : self.insert_idx + self.num_processes
                     ] = self.curr_timestep.copy()
@@ -187,7 +186,7 @@ class RolloutStorageVAE:
                     self.running_rewards[self.curr_timestep[i], i] = rewards[i]
                     self.running_actions[self.curr_timestep[i], i] = actions[i]
                     if self.running_tasks is not None:
-                        self.running_tasks[i] = task[i]
+                        self.running_tasks[self.curr_timestep[i], i] = task[i]
                     self.curr_timestep[i] += 1
 
                 if not already_reset:
@@ -223,7 +222,7 @@ class RolloutStorageVAE:
                                     :, i
                                 ]
                                 if self.tasks is not None:
-                                    self.tasks[self.insert_idx] = self.running_tasks[i]
+                                    self.tasks[:, self.insert_idx] = self.running_tasks[:, i]
                                 self.trajectory_lens[self.insert_idx] = (
                                     self.curr_timestep[i].copy()
                                 )
@@ -262,7 +261,7 @@ class RolloutStorageVAE:
         actions = self.actions[:, rollout_indices, :]
         rewards = self.rewards[:, rollout_indices, :]
         if self.tasks is not None:
-            tasks = self.tasks[rollout_indices]
+            tasks = self.tasks[:, rollout_indices, :]
         else:
             tasks = None
 
@@ -271,4 +270,5 @@ class RolloutStorageVAE:
             actions=actions,
             rewards=rewards,
             next_obs=next_obs,
+            tasks=tasks
         )

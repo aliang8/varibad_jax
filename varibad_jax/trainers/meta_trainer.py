@@ -94,7 +94,7 @@ class MetaRLTrainer(BaseTrainer):
             max_num_rollouts=self.config.vae.buffer_size,
             state_dim=self.envs.observation_space.shape,
             action_dim=self.input_action_dim,
-            task_dim=None,
+            task_dim=self.config.env.task_dim if self.config.vae.decode_tasks else 0,
             vae_buffer_add_thresh=1.0,
         )
         return policy_storage, vae_storage
@@ -109,6 +109,10 @@ class MetaRLTrainer(BaseTrainer):
         state = state.astype(np.float32)
         if len(state.shape) == 1:  # add extra dimension
             state = state[..., np.newaxis]
+
+        task = xtimestep.timestep.state.goal
+        if len(task.shape) == 1:
+            task = task[np.newaxis]
 
         prior_outputs = self.belief_model.get_prior(
             next(self.rng_seq), batch_size=self.num_processes
@@ -244,7 +248,7 @@ class MetaRLTrainer(BaseTrainer):
                 actions=action,
                 rewards=reward,
                 done=done,
-                task=None,
+                task=task,
             )
             # print("*" * 20)
             # print(step, next_state)
@@ -263,7 +267,7 @@ class MetaRLTrainer(BaseTrainer):
             self.policy_storage.insert(
                 state=next_state,
                 belief=None,
-                task=None,
+                task=task,
                 actions=action,
                 rewards_raw=reward,
                 rewards_normalised=reward_norm,

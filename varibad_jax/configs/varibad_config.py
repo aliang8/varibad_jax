@@ -27,7 +27,10 @@ def get_config(config_string: str = None):
             subsample_decode_timesteps=0,
             latent_dim=5,
             decode_rewards=True,
+            decode_states=False,
+            decode_tasks=False,
             rew_recon_weight=1.0,
+            task_recon_weight=1.0,
             embedding_dim=8,
         )
     )
@@ -79,6 +82,7 @@ def get_config(config_string: str = None):
             embedding_dim=vae_config.get_ref("embedding_dim"),
             image_encoder_config=image_encoder_config,
             layer_sizes=[32, 32],
+            task_dim=config.env.get_ref("task_dim"),
         )
     )
 
@@ -128,7 +132,7 @@ def get_config(config_string: str = None):
         "trainer": None,
         "env": ["env_name"],
         "policy": ["algo", "pass_latent_to_policy"],
-        "vae": ["num_vae_updates", "embedding_dim"],
+        "vae": ["num_vae_updates", "embedding_dim", "decode_tasks"],
     }
 
     config.cpu = 5

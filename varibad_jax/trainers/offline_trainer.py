@@ -20,7 +20,7 @@ from varibad_jax.trainers.base_trainer import BaseTrainer
 import varibad_jax.utils.general_utils as gutl
 
 from varibad_jax.models.decision_transformer.dt import DecisionTransformerAgent
-from varibad_jax.models.lapo.lapo import LAPOAgent
+from varibad_jax.models.lapo.lapo import LAPOModel
 
 
 class OfflineTrainer(BaseTrainer):
@@ -82,27 +82,26 @@ class OfflineTrainer(BaseTrainer):
 
         batch_size = self.config.batch_size
 
-        # def create_loader(observations, actions, rewards):
-        #     num_complete_batches, leftover = divmod(observations.shape[0], batch_size)
-        #     num_batches = num_complete_batches + bool(leftover)
-
-        #     def data_stream():
-        #         while True:
-        #             perm = rng.permutation(num_train)
-        #             for i in range(num_batches):
-        #                 batch_idx = perm[i * batch_size : (i + 1) * batch_size]
-        #                 yield observations[batch_idx], actions[batch_idx], rewards[
-        #                     batch_idx
-        #                 ]
-
-        #     batches = data_stream()
-        #     return batches, num_batches
-
-        def create_loader(observations, actions, rewards):
+        def create_traj_loader(observations, actions, rewards):
             num_complete_batches, leftover = divmod(observations.shape[0], batch_size)
             num_batches = num_complete_batches + bool(leftover)
 
-            # this streamer is for LAPO training
+            def data_stream():
+                while True:
+                    perm = rng.permutation(num_train)
+                    for i in range(num_batches):
+                        batch_idx = perm[i * batch_size : (i + 1) * batch_size]
+                        yield observations[batch_idx], actions[batch_idx], rewards[
+                            batch_idx
+                        ]
+
+            batches = data_stream()
+            return batches, num_batches
+
+        def create_lapo_loader(observations, actions, rewards):
+            num_complete_batches, leftover = divmod(observations.shape[0], batch_size)
+            num_batches = num_complete_batches + bool(leftover)
+
             def data_stream():
                 while True:
                     perm = rng.permutation(num_train)
@@ -117,11 +116,16 @@ class OfflineTrainer(BaseTrainer):
 
             batches = data_stream()
             return batches, num_batches
+        
+        if self.config.policy.name == "dt":
+            loader = create_traj_loader
+        elif self.config.policy.name == "lapo":
+            loader = create_lapo_loader
 
-        self.train_dataloader, self.num_train_batches = create_loader(
+        self.train_dataloader, self.num_train_batches = loader(
             train_observations, train_actions, train_rewards
         )
-        self.eval_dataloader, self.num_eval_batches = create_loader(
+        self.eval_dataloader, self.num_eval_batches = loader(
             eval_observations, eval_actions, eval_rewards
         )
 
@@ -140,7 +144,7 @@ class OfflineTrainer(BaseTrainer):
         if self.config.policy.name == "dt":
             agent_cls = DecisionTransformerAgent
         elif self.config.policy.name == "lapo":
-            agent_cls = LAPOAgent
+            agent_cls = LAPOModel
 
         self.agent = agent_cls(
             config=config.policy,
@@ -204,16 +208,17 @@ class OfflineTrainer(BaseTrainer):
             eval_metrics[k] = jnp.mean(jnp.array(v))
 
         # run rollouts
-        rollout_metrics, *_ = run_rollouts(
-            rng=next(self.rng_seq),
-            agent=self.agent,
-            env=self.eval_envs,
-            config=self.config,
-            action_dim=self.input_action_dim,
-            steps_per_rollout=self.steps_per_rollout,
-            wandb_run=self.wandb_run,
-        )
-        eval_metrics.update(rollout_metrics)
+        if self.config.policy.name == "dt":
+            rollout_metrics, *_ = run_rollouts(
+                rng=next(self.rng_seq),
+                agent=self.agent,
+                env=self.eval_envs,
+                config=self.config,
+                action_dim=self.input_action_dim,
+                steps_per_rollout=self.steps_per_rollout,
+                wandb_run=self.wandb_run,
+            )
+            eval_metrics.update(rollout_metrics)
 
         # save model
         self.save_model(self.agent.save_dict, eval_metrics, epoch)

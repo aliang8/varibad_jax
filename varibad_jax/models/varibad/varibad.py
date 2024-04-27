@@ -186,9 +186,25 @@ class VariBADModel(BaseModel):
 
         # reward reconstruction loss
         # should be [num_elbos, num_decodes, B, 1]
-        rew_pred = decode_outputs.rew_pred
-        rew_recon_loss = optax.squared_error(rew_pred, dec_rewards)
-        rew_recon_loss = rew_recon_loss.sum(axis=0).sum(axis=0).mean()
+        if self.config.decode_rewards:
+            rew_pred = decode_outputs.rew_pred
+            rew_recon_loss = optax.squared_error(rew_pred, dec_rewards)
+            rew_recon_loss = rew_recon_loss.sum(axis=0).sum(axis=0).mean()
+        else:
+            rew_recon_loss = 0.0
+        
+        if self.config.decode_states:
+            pass 
+
+        if self.config.decode_tasks:
+            tasks = batch.tasks
+            dec_tasks = repeat_elbos(tasks)
+            logging.info(f"dec_tasks: {dec_tasks.shape}")
+            task_pred = decode_outputs.task_pred
+            task_recon_loss = optax.squared_error(task_pred, dec_tasks)
+            task_recon_loss = task_recon_loss.sum(axis=0).sum(axis=0).mean()
+        else:
+            task_recon_loss = 0.0
 
         # kl loss
         if self.config.kl_to_fixed_prior:
@@ -218,12 +234,13 @@ class VariBADModel(BaseModel):
         kld = kld.sum(axis=0).sum(axis=0).mean()
 
         total_loss = (
-            self.config.kl_weight * kld + self.config.rew_recon_weight * rew_recon_loss
+            self.config.kl_weight * kld + self.config.rew_recon_weight * rew_recon_loss + self.config.task_recon_weight * task_recon_loss
         )
 
         loss_dict = {
             "kld": kld,
             "rew_recon_loss": rew_recon_loss,
+            "task_recon_loss": task_recon_loss,
             "total_loss": total_loss,
         }
 
