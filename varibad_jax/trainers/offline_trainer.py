@@ -46,7 +46,9 @@ class OfflineTrainer(BaseTrainer):
         with open(data_path, "rb") as f:
             data = pickle.load(f)
 
+        # [B, T, *], trajectory data
         observations = data["observations"]
+        next_observations = data["next_observations"]
         actions = data["actions"]
         rewards = data["rewards"]
 
@@ -61,7 +63,10 @@ class OfflineTrainer(BaseTrainer):
 
         # need to convert rewards into returns to go
         # do i need to do discounting here?
-        returns = jnp.cumsum(rewards[:, ::-1], axis=1)[:, ::-1]
+        if self.config.policy.name == "dt":
+            returns = jnp.cumsum(rewards[:, ::-1], axis=1)[:, ::-1]
+        else:
+            returns = rewards
 
         # split into train and eval
         train_observations, train_actions, train_rewards = (
@@ -77,17 +82,37 @@ class OfflineTrainer(BaseTrainer):
 
         batch_size = self.config.batch_size
 
+        # def create_loader(observations, actions, rewards):
+        #     num_complete_batches, leftover = divmod(observations.shape[0], batch_size)
+        #     num_batches = num_complete_batches + bool(leftover)
+
+        #     def data_stream():
+        #         while True:
+        #             perm = rng.permutation(num_train)
+        #             for i in range(num_batches):
+        #                 batch_idx = perm[i * batch_size : (i + 1) * batch_size]
+        #                 yield observations[batch_idx], actions[batch_idx], rewards[
+        #                     batch_idx
+        #                 ]
+
+        #     batches = data_stream()
+        #     return batches, num_batches
+
         def create_loader(observations, actions, rewards):
             num_complete_batches, leftover = divmod(observations.shape[0], batch_size)
             num_batches = num_complete_batches + bool(leftover)
 
+            # this streamer is for LAPO training
             def data_stream():
                 while True:
                     perm = rng.permutation(num_train)
                     for i in range(num_batches):
                         batch_idx = perm[i * batch_size : (i + 1) * batch_size]
-                        yield observations[batch_idx], actions[batch_idx], rewards[
-                            batch_idx
+                        time_idx = rng.randint(1, observations.shape[1] - 1)
+                        yield observations[
+                            batch_idx, time_idx - 1 : time_idx + 2
+                        ], actions[batch_idx, time_idx - 1 : time_idx + 2], rewards[
+                            batch_idx, time_idx - 1 : time_idx + 2
                         ]
 
             batches = data_stream()
@@ -107,13 +132,18 @@ class OfflineTrainer(BaseTrainer):
             f"len eval dataset: {len(eval_observations)}, num eval batches: {self.num_eval_batches}"
         )
 
+        # test dataloader
+        batch = next(self.train_dataloader)
+        logging.info(f"batch observations: {batch[0].shape}")
+        logging.info(f"len batch: {len(batch)}")
+
         if self.config.policy.name == "dt":
             agent_cls = DecisionTransformerAgent
         elif self.config.policy.name == "lapo":
             agent_cls = LAPOAgent
 
         self.agent = agent_cls(
-            config=config,
+            config=config.policy,
             observation_shape=observations.shape[2:],
             action_dim=self.action_dim,
             input_action_dim=self.input_action_dim,
@@ -137,7 +167,7 @@ class OfflineTrainer(BaseTrainer):
             epoch_metrics = dd(list)
             for _ in range(self.num_train_batches):
                 batch = next(self.train_dataloader)
-                metrics = self.agent.update(batch, next(self.rng_seq))
+                metrics = self.agent.update(next(self.rng_seq), batch)
                 for k, v in metrics.items():
                     epoch_metrics[k].append(v)
 
@@ -165,7 +195,7 @@ class OfflineTrainer(BaseTrainer):
         # run on eval batches
         for _ in range(self.num_eval_batches):
             metrics = self.agent.update(
-                next(self.eval_dataloader), next(self.rng_seq), update_model=False
+                next(self.rng_seq), next(self.eval_dataloader), update_model=False
             )
             for k, v in metrics.items():
                 eval_metrics[k].append(v)

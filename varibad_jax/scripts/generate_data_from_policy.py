@@ -45,7 +45,7 @@ def main(_):
     config_p = ConfigDict(config_p)
     print(config_p)
 
-    envs, env_params = make_envs(**config.env, training=False)
+    envs, env_params = make_envs(**config_p.env, training=False)
     continuous_actions = not isinstance(envs.action_space, gym.spaces.Discrete)
 
     if continuous_actions:
@@ -105,21 +105,28 @@ def main(_):
     data_dir.mkdir(exist_ok=True, parents=True)
     data_file = data_dir / "dataset.pkl"
     metadata_file = data_dir / "metadata.json"
-
-    # make into list of pytrees
-    @jax.jit
-    def get_ts(i):
-        return jtu.tree_map(lambda y: y[i], transitions)
-
     dataset_size = actions.shape[0]
-    observations = jnp.array([get_ts(i).observation for i in range(dataset_size)])
-    rewards = jnp.array([get_ts(i).reward for i in range(dataset_size)])
-    dones = jnp.array([get_ts(i).last() for i in range(dataset_size)])
+
+    logging.info(f"dataset size: {dataset_size}")
+
+    observations = transitions.observation
+    next_observations = transitions.observation[:, 1:]
+    # append the last observation
+    next_observations = jnp.concatenate(
+        [next_observations, next_observations[:, -2:-1]], axis=1
+    )
+    rewards = transitions.reward
+    dones = transitions.last()
+
+    logging.info(
+        f"observations shape: {observations.shape}, rewards shape: {rewards.shape}, actions shape: {actions.shape}"
+    )
 
     # actions - [T, B, 1]
     # observations - [T, B, ...]
     data = dict(
         observations=observations,
+        next_observations=next_observations,
         actions=actions,
         rewards=rewards,
         dones=dones,

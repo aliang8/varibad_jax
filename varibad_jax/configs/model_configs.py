@@ -39,9 +39,9 @@ image_encoder_configs = {
 image_decoder_config = config_dict.ConfigDict(
     dict(
         name="image_decoder",
-        output_channels=[32, 32, 16, 2],
-        kernel_shapes=[2, 2, 2, 3],
-        strides=[1, 2, 2, 2],
-        padding=["SAME", "VALID", "VALID", "VALID"],
+        output_channels=[32, 16, 2],
+        kernel_shapes=[2, 2, 2],
+        strides=[1, 1, 1],
+        padding=["VALID", "VALID", "VALID"],
     )
 )

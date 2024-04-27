@@ -15,7 +15,7 @@ class DecisionTransformerAgent(BaseAgent):
     @hk.transform_with_state
     def model(self, *args, **kwargs):
         model = DecisionTransformer(
-            config=self.config.policy,
+            config=self.config,
             is_continuous=self.is_continuous,
             action_dim=self.action_dim,
         )
@@ -39,7 +39,7 @@ class DecisionTransformerAgent(BaseAgent):
         )
 
     def loss_fn(
-        self, params: hk.Params, state: hk.State, batch, rng: jax.random.PRNGKey
+        self, params: hk.Params, state: hk.State, rng: jax.random.PRNGKey, batch: Tuple
     ):
         # trajectory level
         # observations: [B, T, *_]

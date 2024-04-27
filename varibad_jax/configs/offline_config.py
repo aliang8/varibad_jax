@@ -62,12 +62,16 @@ def get_config(config_string: str = None):
                 name="lapo",
                 idm=dict(
                     image_obs=config.env.get_ref("image_obs"),
-                    image_encoder_config=image_encoder_config,
+                    image_encoder_config=ConfigDict(
+                        dict(out_channels=[16, 32, 32], out_features=256)
+                    ),
                     # vq_vae
                     num_codes=8,
-                    code_dim=config.get_ref("embedding_dim"),
+                    code_dim=128,
                     beta=0.25,
                     ema_decay=0.99,
+                    layer_sizes=[32, 32],
+                    latent_action_dim=128,
                 ),
                 fdm=dict(
                     image_obs=config.env.get_ref("image_obs"),

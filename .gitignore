@@ -16,3 +16,4 @@ varibad_jax/varibad_jax/ray_results/*
 *.pkl
 *.mp4
 test*
+misc/*

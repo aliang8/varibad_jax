@@ -139,8 +139,9 @@ def eval_rollout_dt(
         observations = observations.at[0, stats.length].set(observation)
         mask = mask.at[0, stats.length].set(1.0)
 
-        policy_output = agent.get_action(
+        policy_output, _ = agent.get_action(
             policy_rng,
+            env_state=None,
             states=observations,
             actions=actions,
             rewards=rewards,

@@ -1,12 +1,15 @@
 import dataclasses
 from typing import Any, Callable, List, NamedTuple, Optional, Tuple
-
+from absl import logging
 import flax.linen as nn
 import haiku as hk
 import jax
 import jax.numpy as jnp
-from varibad_jax.models.common import ImageEncoder, ImageDecoder
+import einops
 from ml_collections.config_dict import ConfigDict
+
+from varibad_jax.models.common import ImageEncoder, ImageDecoder
+from varibad_jax.models.lapo.helpers import ImpalaCNN
 
 
 @dataclasses.dataclass
@@ -16,9 +19,12 @@ class LatentFDM(hk.Module):
         config: ConfigDict,
         w_init=hk.initializers.VarianceScaling(scale=2.0),
         b_init=hk.initializers.Constant(0.0),
-        **kwargs
+        **kwargs,
     ):
-        """Forward Dynamics Model in LAPO, they call this a World Model
+        """Forward Dynamics Model in LAPO, they call this a World Model in LAPO
+        FDM predicts o_t+1 given o_t-1, o_t and z_t
+
+        Use U-net style architecture following: https://github.com/schmidtdominik/LAPO/blob/main/lapo/models.py
 
         Args:
           pass
@@ -30,12 +36,14 @@ class LatentFDM(hk.Module):
         self.image_obs = config.image_obs
 
         if self.image_obs:
+            # https://asiltureli.github.io/Convolution-Layer-Calculator/
             self.state_embed = ImageEncoder(
                 **config.image_encoder_config, **init_kwargs
             )
             self.state_decoder = ImageDecoder(
                 **config.image_decoder_config, **init_kwargs
             )
+
         else:
             self.embedding_dim = config.embedding_dim
             self.state_embed = hk.Linear(
@@ -44,37 +52,43 @@ class LatentFDM(hk.Module):
 
     def __call__(
         self,
-        states: jnp.ndarray,
+        prev_states: jnp.ndarray,
         actions: jnp.ndarray,
         is_training: bool = True,
     ):
-        """FDM takes the state and latent action and predicts the next state
+        """FDM takes the prev states and latent action and predicts the next state
 
-        Note that the LAPO world model uses a U-Net style architecture for image input
-
-        Also LAPO does a weird thing where they merge the TC dims
+        T is the length of the context provided. For LAPO, T=2, just o_t-1 and o_t
 
         Input:
-            states: (B, T, D) or (B, T, C, H, W)
+            prev_states: (B, T, D) or (B, T, C, H, W) for image inputs
             actions: (B, T)
 
         Output:
             next_state_pred: (B, T, D) or (B, T, C, H, W)
         """
+        logging.info("inside LatentFDM")
+        prev_states = einops.rearrange(prev_states, "b t h w c -> b (t c) h w")
+        h, w = prev_states.shape[2], prev_states.shape[3]
+        actions = einops.rearrange(actions, "b t -> b t 1 1")
+        action_expand = einops.repeat(actions, "b t 1 1 -> b t h w", h=h, w=w)
+        x = jnp.concatenate([prev_states, action_expand], axis=1)
+        logging.info(f"shape after concat: {x.shape}")
 
-        if self.image_obs:
-            state_embed = self.state_embed(states, is_training=is_training)
-        else:
-            state_embed = self.state_embed(states)
-
-        # embed the actions and concatenate with the state embedding
-        action_embed = self.latent_embed(actions)
-        decoder_input = jnp.concatenate([state_embed, action_embed], axis=-1)
-
-        # decoder and predict the next state
-        if self.image_obs:
-            next_state_pred = self.state_decoder(decoder_input, is_training=is_training)
-
+        embeddings, intermediates = self.state_embed(
+            x, is_training=is_training, return_intermediate=True
+        )
+        intermediates[-1] = actions
+        intermediates[-1] = einops.repeat(
+            intermediates[-1],
+            "b t 1 1 -> b t h w",
+            h=embeddings.shape[-1],
+            w=embeddings.shape[-1],
+        )
+        next_state_pred = self.state_decoder(
+            embeddings, intermediates=intermediates, is_training=is_training
+        )
+        # out = nn.tanh(out) / 2
         return next_state_pred
 
 
@@ -85,7 +99,7 @@ class LatentActionIDM(hk.Module):
         config: ConfigDict,
         w_init=hk.initializers.VarianceScaling(scale=2.0),
         b_init=hk.initializers.Constant(0.0),
-        **kwargs
+        **kwargs,
     ):
         """Inverse Dynamics Model in LAPO with Quantization
 
@@ -99,9 +113,7 @@ class LatentActionIDM(hk.Module):
         self.image_obs = config.image_obs
 
         if self.image_obs:
-            self.state_embed = ImageEncoder(
-                **config.image_encoder_config, **init_kwargs
-            )
+            self.state_embed = ImpalaCNN(**config.image_encoder_config, **init_kwargs)
         else:
             self.embedding_dim = config.embedding_dim
             self.state_embed = hk.Linear(
@@ -118,39 +130,41 @@ class LatentActionIDM(hk.Module):
             name="VQEMA",
         )
 
-    def __call__(
-        self, states: jnp.ndarray, next_states: jnp.ndarray, is_training: bool = True
-    ):
-        """IDM takes the state and next state and predicts the action
+        self.policy_head = hk.nets.MLP(
+            list(config.layer_sizes) + [config.latent_action_dim],
+            activation=nn.gelu,
+            name="reward_mlp",
+            activate_final=False,
+            **init_kwargs,
+        )
 
-        states: (B, T, D) or (B, T, C, H, W)
-        next_states: (B, T, D) or (B, T, C, H, W)
+    def __call__(self, states: jnp.ndarray, is_training: bool = True):
+        """IDM takes the state and next state and predicts the action
+        IDM predicts the latent action (z_t) given o_t-1, o_t and o_t+1
+
+        Use IMPALA CNN for encoding the images
+
+        T=3 for LAPO, o_t-1, o_t, o_t+1
+
+        Input:
+            states: (B, T, D) or (B, T, H, W, C)
+
+        Output:
+            vq_outputs: dict
         """
-        jax.debug.breakpoint()
         if self.image_obs:
+            # compute T and C dimension
+            # first transpose
+            states = einops.rearrange(states, "b t h w c -> b (t c) h w")
             state_embeds = self.state_embed(states, is_training=is_training)
-            next_state_embeds = self.state_embed(next_states, is_training=is_training)
         else:
             state_embeds = self.state_embed(states)
-            next_state_embeds = self.state_embed(next_states)
 
-        policy_input = jnp.concatenate([state_embeds, next_state_embeds], axis=-1)
-        policy_input = nn.gelu(policy_input)
+        policy_input = nn.gelu(state_embeds)
 
         # predict latent actions
         latent_actions = self.policy_head(policy_input)
 
         # compute quantized latent actions
-        quantize, loss, perplexity, encodings, encoding_indices = self.vq(
-            latent_actions, is_training
-        )
-
-        model_outputs = LAMOutputs(
-            z_e=encodings,
-            z_q=quantize,
-            obs_pred=None,
-            codebook_loss=loss,
-            encoding_indices=encoding_indices,
-        )
-
-        return model_outputs
+        vq_outputs = self.vq(latent_actions, is_training)
+        return vq_outputs
