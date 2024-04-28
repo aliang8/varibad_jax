@@ -1,4 +1,5 @@
 import chex
+import optax
 import haiku as hk
 import jax.numpy as jnp
 from tensorflow_probability.substrates import jax as tfp
@@ -40,7 +41,9 @@ class ActionHead(hk.Module):
             self.mean = hk.Linear(action_dim, name="mean", **init_kwargs)
             self.logvar = hk.Linear(action_dim, name="logvar", **init_kwargs)
 
-    def __call__(self, h: jnp.ndarray, is_training: bool = True) -> PolicyOutput:
+    def __call__(
+        self, h: jnp.ndarray, is_training: bool = True, gt_actions: jnp.ndarray = None
+    ) -> PolicyOutput:
         if not self.is_continuous:
             logits = self.logits(h)
             action_dist = tfd.Categorical(logits=logits)
@@ -48,6 +51,7 @@ class ActionHead(hk.Module):
                 action = action_dist.sample(seed=hk.next_rng_key())
             else:
                 action = action_dist.mode()
+            entropy = action_dist.entropy()
 
         else:
             mean = self.mean(h)

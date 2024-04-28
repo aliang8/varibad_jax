@@ -56,22 +56,6 @@ CUDA_VISIBLE_DEVICES=4 python3 main.py \
     --config.use_wb=False
 ```
 
-```
-Train LAPO Model
-CUDA_VISIBLE_DEVICES=4 python3 main.py \
-    --config=configs/offline_config.py:lapo-xland-5x5 \
-    --config.smoke_test=True \
-    --config.use_wb=True
-
-Train LAPO BC Agent
-CUDA_VISIBLE_DEVICES=4 python3 main.py \
-    --config=configs/offline_config.py:lapo_agent-xland-5x5 \
-    --config.smoke_test=True \
-    --config.use_wb=False \
-    --config.overwrite=False
-```
-
-
 Also supports using Ray for hyperparameter search and WandB for logging experiment metrics. Use `smoke_test` to toggle Ray tune. 
 
 ### File organization:

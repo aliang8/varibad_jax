@@ -32,4 +32,27 @@
 - Hyperparameters I am not sure about: VQVAE, CNN architecture
 - TODO: 
     - [x] Implement latent BC policy ($\mathcal{O} \rightarrow \mathcal{Z}$)
-    - [ ] Implement decoder to predict ground truth actions from latent actions
+    - [x] Implement decoder to predict ground truth actions from latent actions
+
+## Usage
+```
+Train LAPO Model
+CUDA_VISIBLE_DEVICES=4 python3 main.py \
+    --config=configs/offline_config.py:lapo-xland-5x5 \
+    --config.smoke_test=True \
+    --config.use_wb=True
+
+Train LAPO BC Agent
+CUDA_VISIBLE_DEVICES=4 python3 main.py \
+    --config=configs/offline_config.py:lapo_agent-xland-5x5 \
+    --config.smoke_test=True \
+    --config.use_wb=False \
+    --config.overwrite=False
+
+Train LAPO Action Decoder with small amount of labelled data
+CUDA_VISIBLE_DEVICES=4 python3 main.py \
+    --config=configs/offline_config.py:lapo_action_decoder-xland-5x5 \
+    --config.smoke_test=True \
+    --config.use_wb=False \
+    --config.overwrite=False
+```

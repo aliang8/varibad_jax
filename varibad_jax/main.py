@@ -58,6 +58,7 @@ psh = {
         "name": "pn",
         "algo": "alg",
     },
+    "model": {"name": "pn"},
 }
 
 # run with ray tune

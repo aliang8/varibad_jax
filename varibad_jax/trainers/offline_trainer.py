@@ -1,5 +1,6 @@
 from absl import logging
 import jax
+import chex
 import time
 import pickle
 from ml_collections import ConfigDict
@@ -13,6 +14,7 @@ import functools
 import gymnasium as gym
 import tqdm
 import numpy as np
+import einops
 from collections import defaultdict as dd
 from varibad_jax.utils.rollout import run_rollouts
 
@@ -20,7 +22,16 @@ from varibad_jax.trainers.base_trainer import BaseTrainer
 import varibad_jax.utils.general_utils as gutl
 
 from varibad_jax.models.decision_transformer.dt import DecisionTransformerAgent
-from varibad_jax.models.lapo.lapo import LAPOModel, LAPOAgent
+from varibad_jax.models.lapo.lapo import LAPOModel, LAPOAgent, LAPOActionDecoder
+
+
+@chex.dataclass
+class Batch:
+    observations: jnp.ndarray
+    actions: jnp.ndarray
+    rewards: jnp.ndarray
+    next_observations: jnp.ndarray
+    dones: jnp.ndarray
 
 
 class OfflineTrainer(BaseTrainer):
@@ -46,44 +57,46 @@ class OfflineTrainer(BaseTrainer):
         with open(data_path, "rb") as f:
             data = pickle.load(f)
 
-        # [B, T, *], trajectory data
-        observations = data["observations"]
-        next_observations = data["next_observations"]
-        actions = data["actions"]
-        rewards = data["rewards"]
-
-        dataset_size = observations.shape[0]
-        num_train = int(dataset_size * self.config.train_frac)
-        num_eval = dataset_size - num_train
-
-        logging.info(
-            f"observations shape: {observations.shape}, rewards shape: {rewards.shape}, actions shape: {actions.shape}"
-        )
-        logging.info(f"average return: {jnp.mean(jnp.sum(rewards, axis=-1))}")
+        num_trajs, num_timesteps = data["observations"].shape[:2]
+        avg_return = jnp.mean(jnp.sum(data["rewards"], axis=-1))
+        logging.info(f"average return: {avg_return}")
 
         # need to convert rewards into returns to go
         # do i need to do discounting here?
-        if self.config.policy.name == "dt":
-            returns = jnp.cumsum(rewards[:, ::-1], axis=1)[:, ::-1]
-        else:
-            returns = rewards
+        if self.config.model.name == "dt":
+            returns = jnp.cumsum(data["rewards"][:, ::-1], axis=1)[:, ::-1]
+            data["rewards"] = returns
 
-        # split into train and eval
-        train_observations, train_actions, train_rewards = (
-            observations[:num_train],
-            actions[:num_train],
-            returns[:num_train],
-        )
-        eval_observations, eval_actions, eval_rewards = (
-            observations[num_train:],
-            actions[num_train:],
-            returns[num_train:],
-        )
+        # [B, T, *], trajectory data
+        if self.config.num_trajs != -1:
+            indices = rng.choice(num_trajs, size=self.config.num_trajs, replace=False)
+            for k, v in data.items():
+                data[k] = v[indices]
 
+        if self.config.model.name == "lapo_action_decoder":
+            # flatten our data to be [B*T, *]
+            for k, v in data.items():
+                data[k] = einops.rearrange(v, "B T ... -> (B T) ...")
+
+        for k, v in data.items():
+            logging.info(f"{k}: {v.shape}")
+
+        dataset_size = data["observations"].shape[0]
+        num_train = int(dataset_size * self.config.train_frac)
+        num_eval = dataset_size - num_train
         batch_size = self.config.batch_size
 
-        def create_traj_loader(observations, actions, rewards):
-            num_complete_batches, leftover = divmod(observations.shape[0], batch_size)
+        num_complete_batches, leftover = divmod(dataset_size, batch_size)
+        logging.info(f"num batches per episode: {num_complete_batches}")
+
+        # split into train and eval
+        train_data = {k: v[:num_train] for k, v in data.items()}
+        eval_data = {k: v[num_train:] for k, v in data.items()}
+
+        def create_traj_loader(data):
+            num_complete_batches, leftover = divmod(
+                data["observations"].shape[0], batch_size
+            )
             num_batches = num_complete_batches + bool(leftover)
 
             def data_stream():
@@ -91,15 +104,17 @@ class OfflineTrainer(BaseTrainer):
                     perm = rng.permutation(num_train)
                     for i in range(num_batches):
                         batch_idx = perm[i * batch_size : (i + 1) * batch_size]
-                        yield observations[batch_idx], actions[batch_idx], rewards[
-                            batch_idx
-                        ]
+                        batch = Batch(**{k: v[batch_idx] for k, v in data.items()})
+                        yield batch
 
             batches = data_stream()
             return batches, num_batches
 
-        def create_lapo_loader(observations, actions, rewards):
-            num_complete_batches, leftover = divmod(observations.shape[0], batch_size)
+        def create_lapo_loader(data):
+            # sample small windows of transitions in a trajectory
+            num_complete_batches, leftover = divmod(
+                data["observations"].shape[0], batch_size
+            )
             num_batches = num_complete_batches + bool(leftover)
 
             def data_stream():
@@ -107,53 +122,56 @@ class OfflineTrainer(BaseTrainer):
                     perm = rng.permutation(num_train)
                     for i in range(num_batches):
                         batch_idx = perm[i * batch_size : (i + 1) * batch_size]
-                        time_idx = rng.randint(1, observations.shape[1] - 1)
-                        yield observations[
-                            batch_idx, time_idx - 1 : time_idx + 2
-                        ], actions[batch_idx, time_idx - 1 : time_idx + 2], rewards[
-                            batch_idx, time_idx - 1 : time_idx + 2
-                        ]
+                        time_idx = rng.randint(1, num_timesteps - 1)
+                        batch = Batch(
+                            **{
+                                k: v[batch_idx, time_idx - 1 : time_idx + 2]
+                                for k, v in data.items()
+                            }
+                        )
+                        yield batch
 
             batches = data_stream()
             return batches, num_batches
 
-        if self.config.policy.name == "dt":
+        if (
+            self.config.model.name == "dt"
+            or self.config.model.name == "lapo_action_decoder"
+        ):
             loader = create_traj_loader
         elif (
-            self.config.policy.name == "lapo"
-            or self.config.policy.name == "lapo_bc_agent"
+            self.config.model.name == "lapo"
+            or self.config.model.name == "lapo_bc_agent"
         ):
             loader = create_lapo_loader
 
-        self.train_dataloader, self.num_train_batches = loader(
-            train_observations, train_actions, train_rewards
-        )
-        self.eval_dataloader, self.num_eval_batches = loader(
-            eval_observations, eval_actions, eval_rewards
-        )
+        self.train_dataloader, self.num_train_batches = loader(train_data)
+        self.eval_dataloader, self.num_eval_batches = loader(eval_data)
 
         logging.info(
-            f"len train dataset: {len(train_observations)}, num train batches: {self.num_train_batches}"
+            f"len train dataset: {len(train_data['observations'])}, num train batches: {self.num_train_batches}"
         )
         logging.info(
-            f"len eval dataset: {len(eval_observations)}, num eval batches: {self.num_eval_batches}"
+            f"len eval dataset: {len(eval_data['observations'])}, num eval batches: {self.num_eval_batches}"
         )
 
         # test dataloader
         batch = next(self.train_dataloader)
-        logging.info(f"batch observations: {batch[0].shape}")
+        logging.info(f"batch observations: {batch.observations.shape}")
         logging.info(f"len batch: {len(batch)}")
 
-        if self.config.policy.name == "dt":
-            agent_cls = DecisionTransformerAgent
-        elif self.config.policy.name == "lapo":
-            agent_cls = LAPOModel
-        elif self.config.policy.name == "lapo_bc_agent":
-            agent_cls = LAPOAgent
+        if self.config.model.name == "dt":
+            model_cls = DecisionTransformerAgent
+        elif self.config.model.name == "lapo":
+            model_cls = LAPOModel
+        elif self.config.model.name == "lapo_bc_agent":
+            model_cls = LAPOAgent
+        elif self.config.model.name == "lapo_action_decoder":
+            model_cls = LAPOActionDecoder
 
-        self.agent = agent_cls(
-            config=config.policy,
-            observation_shape=observations.shape[2:],
+        self.model = model_cls(
+            config=config.model,
+            observation_shape=train_data["observations"].shape[2:],
             action_dim=self.action_dim,
             input_action_dim=self.input_action_dim,
             continuous_actions=self.continuous_actions,
@@ -176,7 +194,7 @@ class OfflineTrainer(BaseTrainer):
             epoch_metrics = dd(list)
             for _ in range(self.num_train_batches):
                 batch = next(self.train_dataloader)
-                metrics = self.agent.update(next(self.rng_seq), batch)
+                metrics = self.model.update(next(self.rng_seq), batch)
                 for k, v in metrics.items():
                     epoch_metrics[k].append(v)
 
@@ -203,7 +221,7 @@ class OfflineTrainer(BaseTrainer):
 
         # run on eval batches
         for _ in range(self.num_eval_batches):
-            metrics = self.agent.update(
+            metrics = self.model.update(
                 next(self.rng_seq), next(self.eval_dataloader), update_model=False
             )
             for k, v in metrics.items():
@@ -213,10 +231,10 @@ class OfflineTrainer(BaseTrainer):
             eval_metrics[k] = jnp.mean(jnp.array(v))
 
         # run rollouts
-        if self.config.policy.name == "dt":
+        if self.config.model.name == "dt":
             rollout_metrics, *_ = run_rollouts(
                 rng=next(self.rng_seq),
-                agent=self.agent,
+                agent=self.model,
                 env=self.eval_envs,
                 config=self.config,
                 action_dim=self.input_action_dim,
@@ -226,5 +244,5 @@ class OfflineTrainer(BaseTrainer):
             eval_metrics.update(rollout_metrics)
 
         # save model
-        self.save_model(self.agent.save_dict, eval_metrics, epoch)
+        self.save_model(self.model.save_dict, eval_metrics, epoch)
         return eval_metrics

@@ -72,15 +72,14 @@ class LAPOModel(BaseModel):
     def loss_fn(
         self, params: hk.Params, state: hk.State, rng: jax.random.PRNGKey, batch: Tuple
     ):
-        observations, actions, rewards = batch
-        logging.info(f"lapo loss function, observations: {observations.shape}")
+        logging.info(f"lapo loss function, observations: {batch.observations.shape}")
 
         lapo_output, state = self.model.apply(
             params,
             state,
             rng,
             self,
-            states=observations.astype(jnp.float32),
+            states=batch.observations.astype(jnp.float32),
             is_training=True,
         )
 
@@ -89,7 +88,7 @@ class LAPOModel(BaseModel):
         next_obs_pred = lapo_output.next_obs_pred
         # make sure same format, HWC
         next_obs_pred = einops.rearrange(next_obs_pred, "b c h w -> b h w c")
-        gt_next_obs = observations[:, -1]
+        gt_next_obs = batch.observations[:, -1]
         recon_loss = optax.squared_error(next_obs_pred, gt_next_obs)
         recon_loss = jnp.mean(recon_loss)
 
@@ -103,13 +102,36 @@ class LAPOModel(BaseModel):
         return loss, (metrics, state)
 
 
-class ActionDecoder(BaseModel):
+class LAPOActionDecoder(BaseModel):
     """
     Model that decodes latent actions to ground truth actions. Use in conjunction with the
     IDM model learned with LAPO.
     """
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # load pretrained agent to predict latent actions from observations
+        config = Path(self.config.lapo_agent_ckpt) / "config.json"
+        with open(config, "r") as f:
+            self.lapo_agent_cfg = ConfigDict(json.load(f))
+
+        self.lapo_agent = LAPOAgent(
+            self.lapo_agent_cfg.policy,  # TODO: fix me
+            key=self._init_key,
+            observation_shape=self.observation_shape,
+            action_dim=self.action_dim,
+            input_action_dim=self.input_action_dim,
+            continuous_actions=self.is_continuous,
+            load_from_ckpt=True,
+            ckpt_file=Path(self.config.lapo_agent_ckpt)
+            / "model_ckpts"
+            / "ckpt_1000.pkl",
+        )
+
+    @hk.transform_with_state
     def model(self, latent_actions, is_training=True):
+        logging.info("inside action decoder")
         # some liner layers
         action_head = ActionHead(
             gaussian_policy=False,
@@ -130,6 +152,40 @@ class ActionDecoder(BaseModel):
             latent_actions=dummy_latent_actions,
             is_training=True,
         )
+
+    def loss_fn(
+        self, params: hk.Params, state: hk.State, rng: jax.random.PRNGKey, batch
+    ):
+        observations = einops.rearrange(batch.observations, "b h w c -> b c h w")
+        agent_output, _ = self.lapo_agent.model.apply(
+            self.lapo_agent._params,
+            self.lapo_agent._state,
+            rng,
+            self.lapo_agent,
+            states=observations.astype(jnp.float32),
+            is_training=False,
+        )
+
+        latent_actions = agent_output.action
+
+        # decode latent action to ground truth action
+        action_pred, state = self.model.apply(
+            params,
+            state,
+            rng,
+            self,
+            latent_actions=latent_actions,
+            is_training=True,
+        )
+        if self.is_continuous:
+            loss = optax.squared_error(action_pred.actions, batch.actions)
+        else:
+            loss = optax.softmax_cross_entropy_with_integer_labels(
+                action_pred.logits, batch.actions.squeeze().astype(jnp.int32)
+            )
+        loss = jnp.mean(loss)
+        metrics = {"action_loss": loss}
+        return loss, (metrics, state)
 
 
 class LAPOAgent(BaseAgent):
@@ -184,26 +240,27 @@ class LAPOAgent(BaseAgent):
     def loss_fn(
         self, params: hk.Params, state: hk.State, rng: jax.random.PRNGKey, batch: Tuple
     ):
-        observations, actions, rewards = batch
-        logging.info(f"lapo loss function, observations: {observations.shape}")
+        logging.info(f"lapo loss function, observations: {batch.observations.shape}")
 
         lapo_key, policy_key = jax.random.split(rng, 2)
 
+        # predict the latent action from observations with pretrained model
         lapo_output, _ = self.lapo_model.model.apply(
             self.lapo_model._params,
             self.lapo_model._state,
             lapo_key,
             self.lapo_model,
-            states=observations.astype(jnp.float32),
+            states=batch.observations.astype(jnp.float32),
             is_training=False,
         )
-        latent_action = lapo_output.quantize
+        latent_actions = lapo_output.quantize
 
-        observations = einops.rearrange(observations, "b t h w c -> b t c h w")
+        observations = einops.rearrange(batch.observations, "b t h w c -> b t c h w")
 
         # only the middle observation matters here
         # not a recurrent policy
-        policy_output, state = self.model.apply(
+        # predict latent action
+        action_output, state = self.model.apply(
             params,
             state,
             policy_key,
@@ -211,12 +268,7 @@ class LAPOAgent(BaseAgent):
             states=observations[:, 1].astype(jnp.float32),
             is_training=True,
         )
-
-        # bc loss
-        loss = optax.squared_error(policy_output.action, latent_action)
+        loss = optax.squared_error(action_output.action, latent_actions)
         loss = jnp.mean(loss)
-
-        metrics = {
-            "bc_loss": loss,
-        }
+        metrics = {"bc_loss": loss}
         return loss, (metrics, state)

@@ -14,13 +14,14 @@ def get_config(config_string: str = None):
     config.trainer = "offline"
     config.notes = "Offline RL"
     config.tags = ["offline_rl", "jax"]
-    config.keys_to_include = {"trainer": None, "env": ["env_name"], "policy": ["name"]}
+    config.keys_to_include = {"trainer": None, "env": ["env_name"], "model": ["name"]}
 
     config.data_dir = "datasets"
     config.batch_size = 128
     config.num_epochs = 1000
     config.train_frac = 1.0
     config.eval_interval = 50
+    config.num_trajs = -1
     # config.save_key = ""
 
     config.embedding_dim = 64
@@ -37,7 +38,7 @@ def get_config(config_string: str = None):
     else:
         image_encoder_config = None
 
-    policies = {
+    models = {
         "dt": ConfigDict(
             dict(
                 name="dt",
@@ -84,30 +85,35 @@ def get_config(config_string: str = None):
         "lapo_agent": ConfigDict(
             dict(
                 name="lapo_bc_agent",
-                policy=dict(
-                    lapo_model_ckpt="/home/anthony/varibad_jax/varibad_jax/results/en-xland_pn-lapo_t-offline",
-                    image_obs=config.env.get_ref("image_obs"),
-                    pass_latent_to_policy=False,
-                    pass_task_to_policy=False,
-                    image_encoder_config=image_encoder_config,
-                    embedding_dim=16,
-                    mlp_layers=[128, 128],
-                    latent_action_dim=16,
-                    gaussian_policy=False,
-                ),
+                image_obs=config.env.get_ref("image_obs"),
+                pass_latent_to_policy=False,
+                pass_task_to_policy=False,
+                image_encoder_config=image_encoder_config,
+                embedding_dim=16,
+                mlp_layers=[128, 128],
+                latent_action_dim=16,
+                gaussian_policy=False,
+            )
+        ),
+        "lapo_action_decoder": ConfigDict(
+            dict(
+                name="lapo_action_decoder",
+                lapo_agent_ckpt="/home/anthony/varibad_jax/varibad_jax/results/en-xland_pn-lapo_bc_agent_t-offline",
+                latent_action_dim=16,
             )
         ),
     }
 
-    policy_config = ConfigDict()
-    for k, v in policies.items():
+    model_config = ConfigDict()
+    for k, v in models.items():
         if k in config_string:
-            policy_config = v
+            model_config = v
 
-    config.policy = policy_config
-    config.policy.anneal_lr = False
-    config.policy.lr = 3e-4
-    config.policy.eps = 1e-8
+    config.model = model_config
+
+    config.model.anneal_lr = False
+    config.model.lr = 3e-4
+    config.model.eps = 1e-8
 
     # =============================================================
     # Data collection stuff
