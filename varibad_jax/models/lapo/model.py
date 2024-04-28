@@ -32,7 +32,6 @@ class LatentFDM(hk.Module):
         super().__init__(name="LatentFDM")
 
         init_kwargs = dict(w_init=w_init, b_init=b_init)
-
         self.image_obs = config.image_obs
 
         if self.image_obs:
@@ -62,7 +61,7 @@ class LatentFDM(hk.Module):
 
         Input:
             prev_states: (B, T, D) or (B, T, C, H, W) for image inputs
-            actions: (B, T)
+            actions: (B, D_L)
 
         Output:
             next_state_pred: (B, T, D) or (B, T, C, H, W)
@@ -70,8 +69,8 @@ class LatentFDM(hk.Module):
         logging.info("inside LatentFDM")
         prev_states = einops.rearrange(prev_states, "b t h w c -> b (t c) h w")
         h, w = prev_states.shape[2], prev_states.shape[3]
-        actions = einops.rearrange(actions, "b t -> b t 1 1")
-        action_expand = einops.repeat(actions, "b t 1 1 -> b t h w", h=h, w=w)
+        actions = einops.rearrange(actions, "b dl -> b dl 1 1")
+        action_expand = einops.repeat(actions, "b dl 1 1 -> b dl h w", h=h, w=w)
         x = jnp.concatenate([prev_states, action_expand], axis=1)
         logging.info(f"shape after concat: {x.shape}")
 
@@ -79,6 +78,8 @@ class LatentFDM(hk.Module):
             x, is_training=is_training, return_intermediate=True
         )
         embeddings = intermediates[-1]
+
+        # inject actions into the middle of the u-net
 
         intermediates[-1] = actions
         intermediates[-1] = einops.repeat(
@@ -111,7 +112,6 @@ class LatentActionIDM(hk.Module):
         super().__init__(name="LatentActionIDM")
 
         init_kwargs = dict(w_init=w_init, b_init=b_init)
-
         self.image_obs = config.image_obs
 
         if self.image_obs:
@@ -133,10 +133,10 @@ class LatentActionIDM(hk.Module):
         )
 
         self.policy_head = hk.nets.MLP(
-            list(config.layer_sizes) + [config.latent_action_dim],
+            list(config.layer_sizes) + [config.code_dim],
             activation=nn.gelu,
-            name="reward_mlp",
-            activate_final=False,
+            name="policy_head",
+            activate_final=True,
             **init_kwargs,
         )
 
@@ -158,14 +158,14 @@ class LatentActionIDM(hk.Module):
             # compute T and C dimension
             # first transpose
             states = einops.rearrange(states, "b t h w c -> b (t c) h w")
+            # run it through the ImpalaCNN encoder
+            # [B, (T*C), H, W] -> [B, D]
             state_embeds = self.state_embed(states, is_training=is_training)
         else:
             state_embeds = self.state_embed(states)
 
-        policy_input = nn.gelu(state_embeds)
-
         # predict latent actions
-        latent_actions = self.policy_head(policy_input)
+        latent_actions = self.policy_head(nn.gelu(state_embeds))
 
         # compute quantized latent actions
         vq_outputs = self.vq(latent_actions, is_training)

@@ -478,7 +478,7 @@ class MetaRLTrainer(BaseTrainer):
                         "belief_model": self.belief_model.save_dict,
                     }
 
-                    self.save_model(save_dict, eval_metrics, iter_idx=self.iter_idx)
+                    self.save_model(save_dict, eval_metrics, iter_idx=self.iter_idx + 1)
 
                     if self.wandb_run is not None:
                         eval_metrics = gutl.prefix_dict_keys(eval_metrics, "eval/")

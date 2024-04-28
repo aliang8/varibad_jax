@@ -57,11 +57,18 @@ CUDA_VISIBLE_DEVICES=4 python3 main.py \
 ```
 
 ```
-Train LAPO
+Train LAPO Model
 CUDA_VISIBLE_DEVICES=4 python3 main.py \
     --config=configs/offline_config.py:lapo-xland-5x5 \
     --config.smoke_test=True \
-    --config.use_wb=False
+    --config.use_wb=True
+
+Train LAPO BC Agent
+CUDA_VISIBLE_DEVICES=4 python3 main.py \
+    --config=configs/offline_config.py:lapo_agent-xland-5x5 \
+    --config.smoke_test=True \
+    --config.use_wb=False \
+    --config.overwrite=False
 ```
 
 
@@ -77,7 +84,7 @@ Meta-RL algorithms supported:
 
 Offline RL:
 - [x] Decision Transformers 
-- [ ] LAPO
+- [x] LAPO
 
 Misc Models:
 - [ ] Genie

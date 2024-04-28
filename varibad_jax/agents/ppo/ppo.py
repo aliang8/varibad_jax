@@ -15,7 +15,7 @@ from functools import partial
 from collections import defaultdict as dd
 from tensorflow_probability.substrates import jax as tfp
 
-from varibad_jax.agents.ppo.actor_critic import ActorCritic
+from varibad_jax.agents.actor_critic import ActorCritic
 from varibad_jax.models.base import BaseAgent
 
 tfd = tfp.distributions

@@ -38,7 +38,7 @@ class BaseModel:
         self.input_action_dim = input_action_dim
         self.task_dim = task_dim
 
-        self._key = key
+        self._init_key = key
         self._params = None
         self._state = None
         self._opt_state = None
@@ -47,10 +47,13 @@ class BaseModel:
             logging.info(f"loading {config.name} from checkpoint {ckpt_file}")
             with open(ckpt_file, "rb") as f:
                 ckpt = pickle.load(f)
-                self._params, self._state = (
-                    ckpt[model_key]["params"],
-                    ckpt[model_key]["state"],
-                )
+                if model_key:
+                    self._params, self._state = (
+                        ckpt[model_key]["params"],
+                        ckpt[model_key]["state"],
+                    )
+                else:
+                    self._params, self._state = ckpt["params"], ckpt["state"]
         else:
             self._init_model()
         num_params = sum(p.size for p in jax.tree_util.tree_leaves(self._params))
@@ -91,7 +94,7 @@ class BaseModel:
     def update(self, rng, batch, update_model=True):
         self._params, self._state, self._opt_state, metrics = self.update_model(
             self._params, self._state, rng, batch, update_model
-        )            
+        )
         return metrics
 
     @property

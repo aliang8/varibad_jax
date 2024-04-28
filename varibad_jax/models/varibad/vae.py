@@ -35,11 +35,14 @@ class DecodeOutputs:
 class VaribadVAE(hk.Module):
     """VariBAD."""
 
-    def __init__(self, config: FrozenConfigDict):
+    def __init__(
+        self,
+        config: FrozenConfigDict,
+        w_init=hk.initializers.VarianceScaling(scale=2.0),
+        b_init=hk.initializers.Constant(0.0),
+    ):
         super().__init__(name="VariBADVAE")
         self.config = config
-        w_init = hk.initializers.VarianceScaling(scale=2.0)
-        b_init = hk.initializers.Constant(0.0)
         init_kwargs = dict(w_init=w_init, b_init=b_init)
 
         if self.config.encoder.name == "lstm":
@@ -61,7 +64,7 @@ class VaribadVAE(hk.Module):
 
         if self.config.decode_tasks:
             self.task_decoder = TaskDecoder(**self.config.decoder)
-        
+
         if self.config.decode_states:
             # TODO: fix this
             self.state_decoder = hk.Linear(
@@ -177,8 +180,6 @@ class VaribadVAE(hk.Module):
             task_pred = None
 
         decode_outputs = DecodeOutputs(
-            rew_pred=rew_pred,
-            state_pred=state_pred,
-            task_pred=task_pred
+            rew_pred=rew_pred, state_pred=state_pred, task_pred=task_pred
         )
         return decode_outputs

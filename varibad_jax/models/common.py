@@ -10,20 +10,14 @@ class ImageEncoder(hk.Module):
     def __init__(
         self,
         embedding_dim: int,
-        output_channels: List[int],
-        kernel_shapes: List[int],
-        strides: List[int],
-        padding: List[str] = [],
+        arch: List[List[int]] = [],
         w_init=hk.initializers.VarianceScaling(scale=2.0),
         b_init=hk.initializers.Constant(0.0),
         **kwargs,
     ):
         super().__init__()
         self.embedding_dim = embedding_dim
-        self.output_channels = output_channels
-        self.kernel_shapes = kernel_shapes
-        self.strides = strides
-        self.padding = padding
+        self.arch = arch
         self.init_kwargs = dict(w_init=w_init, b_init=b_init)
 
     def __call__(self, x, is_training=True, return_intermediate=False):
@@ -34,12 +28,12 @@ class ImageEncoder(hk.Module):
             x = einops.rearrange(x, "... C H W -> (...) C H W")
 
         intermediate = []
-        for i in range(len(self.output_channels)):
+        for i in range(len(self.arch)):
             x = hk.Conv2D(
-                self.output_channels[i],
-                kernel_shape=self.kernel_shapes[i],
-                stride=self.strides[i],
-                padding=self.padding[i],
+                self.arch[i][0],
+                kernel_shape=self.arch[i][1],
+                stride=self.arch[i][2],
+                padding=self.arch[i][3],
                 data_format="NCHW",
                 **self.init_kwargs,
             )(x)
@@ -66,19 +60,13 @@ class ImageEncoder(hk.Module):
 class ImageDecoder(hk.Module):
     def __init__(
         self,
-        output_channels: List[int],
-        kernel_shapes: List[int],
-        strides: List[int],
-        padding: str = "VALID",
+        arch: List[List[int]] = [],
         w_init=hk.initializers.VarianceScaling(scale=2.0),
         b_init=hk.initializers.Constant(0.0),
         **kwargs,
     ):
         super().__init__()
-        self.output_channels = output_channels
-        self.kernel_shapes = kernel_shapes
-        self.strides = strides
-        self.padding = padding
+        self.arch = arch
         self.init_kwargs = dict(w_init=w_init, b_init=b_init)
 
     def __call__(self, x, intermediates: List[jnp.ndarray], is_training=True):
@@ -89,13 +77,13 @@ class ImageDecoder(hk.Module):
             lead_dims = x.shape[:-3]
             x = einops.rearrange(x, "... C H W -> (...) C H W")
 
-        for i in range(len(self.output_channels)):
+        for i in range(len(self.arch)):
             x = jnp.concatenate([x, intermediates[-i - 1]], axis=1)
             x = hk.Conv2DTranspose(
-                self.output_channels[i],
-                self.kernel_shapes[i],
-                stride=self.strides[i],
-                padding=self.padding[i],
+                self.arch[i][0],
+                kernel_shape=self.arch[i][1],
+                stride=self.arch[i][2],
+                padding=self.arch[i][3],
                 data_format="NCHW",
                 **self.init_kwargs,
             )(x)

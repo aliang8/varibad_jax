@@ -16,6 +16,7 @@ class DecisionTransformerAgent(BaseAgent):
     def model(self, *args, **kwargs):
         model = DecisionTransformer(
             config=self.config,
+            image_obs=self.image_obs,
             is_continuous=self.is_continuous,
             action_dim=self.action_dim,
         )
@@ -29,7 +30,7 @@ class DecisionTransformerAgent(BaseAgent):
         dummy_mask = np.ones((bs, t))
 
         self._params, self._state = self.model.init(
-            self._key,
+            self._init_key,
             self,
             states=dummy_states,
             actions=dummy_actions,

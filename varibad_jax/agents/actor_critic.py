@@ -11,7 +11,7 @@ import numpy as np
 from tensorflow_probability.substrates import jax as tfp
 import gymnasium as gym
 from varibad_jax.models.common import ImageEncoder
-from varibad_jax.agents.ppo.common import ActionHead
+from varibad_jax.agents.common import ActionHead
 
 tfd = tfp.distributions
 tfb = tfp.bijectors
@@ -72,7 +72,12 @@ class ActorCritic(hk.Module):
             **init_kwargs,
         )
 
-        self.action_head = ActionHead(is_continuous, action_dim, **init_kwargs)
+        self.action_head = ActionHead(
+            gaussian_policy=self.config.gaussian_policy,
+            is_continuous=is_continuous,
+            action_dim=action_dim,
+            **init_kwargs,
+        )
 
     def __call__(
         self,

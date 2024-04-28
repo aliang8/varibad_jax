@@ -54,7 +54,7 @@ class VariBADModel(BaseModel):
         else:
             dummy_mask = None
 
-        encoder_key, decoder_key = jax.random.split(self._key)
+        encoder_key, decoder_key = jax.random.split(self._init_key)
         encoder_params, encoder_state = encode_trajectory.init(
             encoder_key,
             config=self.config,
@@ -192,9 +192,9 @@ class VariBADModel(BaseModel):
             rew_recon_loss = rew_recon_loss.sum(axis=0).sum(axis=0).mean()
         else:
             rew_recon_loss = 0.0
-        
+
         if self.config.decode_states:
-            pass 
+            pass
 
         if self.config.decode_tasks:
             tasks = batch.tasks
@@ -234,7 +234,9 @@ class VariBADModel(BaseModel):
         kld = kld.sum(axis=0).sum(axis=0).mean()
 
         total_loss = (
-            self.config.kl_weight * kld + self.config.rew_recon_weight * rew_recon_loss + self.config.task_recon_weight * task_recon_loss
+            self.config.kl_weight * kld
+            + self.config.rew_recon_weight * rew_recon_loss
+            + self.config.task_recon_weight * task_recon_loss
         )
 
         loss_dict = {

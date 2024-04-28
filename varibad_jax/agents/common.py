@@ -12,14 +12,15 @@ tfb = tfp.bijectors
 class PolicyOutput:
     action: jnp.ndarray
     value: jnp.ndarray
-    entropy: jnp.ndarray
-    dist: Any
+    entropy: Optional[jnp.ndarray] = None
+    dist: Optional[tfd.Distribution] = None
     logits: Optional[jnp.ndarray] = None
 
 
 class ActionHead(hk.Module):
     def __init__(
         self,
+        gaussian_policy: bool,
         is_continuous: bool,
         action_dim: int,
         w_init=hk.initializers.VarianceScaling(scale=2.0),
@@ -29,6 +30,7 @@ class ActionHead(hk.Module):
         super().__init__()
         self.is_continuous = is_continuous
         self.action_dim = action_dim
+        self.gaussian_policy = gaussian_policy
 
         init_kwargs = dict(w_init=w_init, b_init=b_init)
 
@@ -46,18 +48,27 @@ class ActionHead(hk.Module):
                 action = action_dist.sample(seed=hk.next_rng_key())
             else:
                 action = action_dist.mode()
+
         else:
             mean = self.mean(h)
             logvar = self.logvar(h)
-            action_dist = tfd.MultivariateNormalDiag(
-                loc=mean, scale_diag=jnp.exp(logvar)
-            )
-            action = action_dist.sample(seed=hk.next_rng_key())
+            if self.gaussian_policy:
+                action_dist = tfd.MultivariateNormalDiag(
+                    loc=mean, scale_diag=jnp.exp(logvar)
+                )
+                action = action_dist.sample(seed=hk.next_rng_key())
+                logits = jnp.stack([mean, logvar], axis=-1)
+                entropy = action_dist.entropy()
+            else:
+                action = mean
+                logits = None
+                entropy = None
+                action_dist = None
 
         return PolicyOutput(
             action=action,
             value=None,
-            entropy=action_dist.entropy(),
+            entropy=entropy,
             dist=action_dist,
             logits=logits,
         )

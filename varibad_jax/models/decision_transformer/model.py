@@ -4,14 +4,14 @@ import jax
 import jax.numpy as jnp
 from ml_collections import ConfigDict
 from varibad_jax.models.transformer_encoder import SARTransformerEncoder
-from varibad_jax.models.common import ImageEncoder
-from varibad_jax.agents.ppo.common import ActionHead
+from varibad_jax.agents.common import ActionHead
 
 
 class DecisionTransformer(hk.Module):
     def __init__(
         self,
         config: ConfigDict,
+        image_obs: bool,
         action_dim: int,
         is_continuous: bool = False,
         w_init=hk.initializers.VarianceScaling(scale=2.0),
@@ -28,7 +28,7 @@ class DecisionTransformer(hk.Module):
         self.transformer = SARTransformerEncoder(
             **transformer_config,
             image_encoder_config=config.image_encoder_config,
-            image_obs=config.image_obs,
+            image_obs=image_obs,
             batch_first=config.batch_first,
             w_init=w_init,
             b_init=b_init

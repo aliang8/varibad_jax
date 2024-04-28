@@ -20,7 +20,7 @@ from varibad_jax.trainers.base_trainer import BaseTrainer
 import varibad_jax.utils.general_utils as gutl
 
 from varibad_jax.models.decision_transformer.dt import DecisionTransformerAgent
-from varibad_jax.models.lapo.lapo import LAPOModel
+from varibad_jax.models.lapo.lapo import LAPOModel, LAPOAgent
 
 
 class OfflineTrainer(BaseTrainer):
@@ -116,10 +116,13 @@ class OfflineTrainer(BaseTrainer):
 
             batches = data_stream()
             return batches, num_batches
-        
+
         if self.config.policy.name == "dt":
             loader = create_traj_loader
-        elif self.config.policy.name == "lapo":
+        elif (
+            self.config.policy.name == "lapo"
+            or self.config.policy.name == "lapo_bc_agent"
+        ):
             loader = create_lapo_loader
 
         self.train_dataloader, self.num_train_batches = loader(
@@ -145,6 +148,8 @@ class OfflineTrainer(BaseTrainer):
             agent_cls = DecisionTransformerAgent
         elif self.config.policy.name == "lapo":
             agent_cls = LAPOModel
+        elif self.config.policy.name == "lapo_bc_agent":
+            agent_cls = LAPOAgent
 
         self.agent = agent_cls(
             config=config.policy,

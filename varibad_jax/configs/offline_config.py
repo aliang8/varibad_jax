@@ -1,3 +1,4 @@
+from pathlib import Path
 from varibad_jax.configs.base_config import get_config as get_base_config
 from varibad_jax.configs.model_configs import (
     transformer_config,
@@ -20,6 +21,7 @@ def get_config(config_string: str = None):
     config.num_epochs = 1000
     config.train_frac = 1.0
     config.eval_interval = 50
+    # config.save_key = ""
 
     config.embedding_dim = 64
     transformer_config.embedding_dim = config.get_ref("embedding_dim")
@@ -40,7 +42,6 @@ def get_config(config_string: str = None):
             dict(
                 name="dt",
                 transformer_config=transformer_config,
-                image_obs=config.env.get_ref("image_obs"),
                 image_encoder_config=image_encoder_config,
                 batch_first=True,
             )
@@ -49,7 +50,6 @@ def get_config(config_string: str = None):
             dict(
                 name="lam",
                 transformer_config=transformer_config,
-                image_obs=config.env.get_ref("image_obs"),
                 image_encoder_config=image_encoder_config,
                 image_decoder_config=image_decoder_config,
                 # vq_vae
@@ -67,17 +67,33 @@ def get_config(config_string: str = None):
                         dict(out_channels=[16, 32, 32], out_features=256)
                     ),
                     # vq_vae
-                    num_codes=8,
-                    code_dim=128,
-                    beta=0.25,
-                    ema_decay=0.99,
+                    num_codes=4,
+                    code_dim=16,
+                    beta=0.05,
+                    ema_decay=0.999,
                     layer_sizes=[32, 32],
-                    latent_action_dim=128,
+                    latent_action_dim=16,
                 ),
                 fdm=dict(
                     image_obs=config.env.get_ref("image_obs"),
                     image_encoder_config=image_encoder_config,
                     image_decoder_config=image_decoder_config,
+                ),
+            )
+        ),
+        "lapo_agent": ConfigDict(
+            dict(
+                name="lapo_bc_agent",
+                policy=dict(
+                    lapo_model_ckpt="/home/anthony/varibad_jax/varibad_jax/results/en-xland_pn-lapo_t-offline",
+                    image_obs=config.env.get_ref("image_obs"),
+                    pass_latent_to_policy=False,
+                    pass_task_to_policy=False,
+                    image_encoder_config=image_encoder_config,
+                    embedding_dim=16,
+                    mlp_layers=[128, 128],
+                    latent_action_dim=16,
+                    gaussian_policy=False,
                 ),
             )
         ),
