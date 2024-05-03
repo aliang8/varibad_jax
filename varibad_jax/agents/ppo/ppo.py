@@ -42,7 +42,7 @@ class PPOAgent(BaseAgent):
             dummy_tasks = None
 
         self._params, self._state = self.model.init(
-            self._key,
+            self._init_key,
             self,
             env_state=dummy_states,
             latent=dummy_latents,

@@ -54,17 +54,24 @@ def main(_):
         action_dim = envs.action_space.n
         input_action_dim = 1
 
-    belief_model = VariBADModel(
-        config=config_p.vae,
-        observation_shape=envs.observation_space.shape,
-        action_dim=action_dim,
-        input_action_dim=input_action_dim,
-        continuous_actions=continuous_actions,
-        key=next(rng_seq),
-        load_from_ckpt=True,
-        ckpt_file=model_ckpt_dir / "best.pkl",
-        model_key="belief_model",
-    )
+    agent_model_key = ""
+
+    if "vae" in config_p:
+        # load the varibad belief model
+        belief_model = VariBADModel(
+            config=config_p.vae,
+            observation_shape=envs.observation_space.shape,
+            action_dim=action_dim,
+            input_action_dim=input_action_dim,
+            continuous_actions=continuous_actions,
+            key=next(rng_seq),
+            load_from_ckpt=True,
+            ckpt_file=model_ckpt_dir / "best.pkl",
+            model_key="belief_model",
+        )
+        agent_model_key = "agent"
+    else:
+        belief_model = None
 
     agent = PPOAgent(
         config=config_p.policy,
@@ -75,11 +82,11 @@ def main(_):
         key=next(rng_seq),
         load_from_ckpt=True,
         ckpt_file=model_ckpt_dir / "best.pkl",
-        model_key="agent",
+        model_key=agent_model_key,
     )
 
     # collect some rollouts
-    steps_per_rollout = config.env.num_episodes_per_rollout * envs.max_episode_steps
+    steps_per_rollout = config_p.env.num_episodes_per_rollout * envs.max_episode_steps
 
     logging.info("start data collection")
     config_p.num_eval_rollouts = config.num_rollouts_collect
@@ -100,7 +107,7 @@ def main(_):
     data_dir = (
         Path(config.root_dir)
         / "datasets"
-        / f"eid-{config.env.env_id}_n-{config.num_rollouts_collect}_steps-{steps_per_rollout}"
+        / f"{config.dataset_name}_eid-{config.env.env_id}_n-{config.num_rollouts_collect}_steps-{steps_per_rollout}"
     )
     data_dir.mkdir(exist_ok=True, parents=True)
     data_file = data_dir / "dataset.pkl"
@@ -118,6 +125,21 @@ def main(_):
     rewards = transitions.reward
     dones = transitions.last()
 
+    states = transitions.state
+    # import ipdb
+
+    # ipdb.set_trace()
+    if config.env.env_name == "gridworld":
+        successes = states.success
+        mask = 1 - successes
+        mask = mask.at[:, -1].set(0)
+
+        tasks = states.goal
+    elif config.env.env_name == "xland":
+        mask = transitions.discount
+
+        tasks = states.goal_encoding
+
     logging.info(
         f"observations shape: {observations.shape}, rewards shape: {rewards.shape}, actions shape: {actions.shape}"
     )
@@ -130,7 +152,13 @@ def main(_):
         actions=actions,
         rewards=rewards,
         dones=dones,
+        tasks=tasks,
+        mask=mask,
     )
+
+    # import ipdb
+
+    # ipdb.set_trace()
 
     metadata = {
         "pretrained_model_config": config_p.to_dict(),

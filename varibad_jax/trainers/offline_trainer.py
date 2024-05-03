@@ -15,23 +15,25 @@ import gymnasium as gym
 import tqdm
 import numpy as np
 import einops
+import tqdm
+from functools import partial
 from collections import defaultdict as dd
 from varibad_jax.utils.rollout import run_rollouts
 
 from varibad_jax.trainers.base_trainer import BaseTrainer
 import varibad_jax.utils.general_utils as gutl
+from varibad_jax.utils.data_utils import (
+    load_data,
+    create_traj_loader,
+    create_lapo_loader,
+)
 
 from varibad_jax.models.decision_transformer.dt import DecisionTransformerAgent
-from varibad_jax.models.lapo.lapo import LAPOModel, LAPOAgent, LAPOActionDecoder
-
-
-@chex.dataclass
-class Batch:
-    observations: jnp.ndarray
-    actions: jnp.ndarray
-    rewards: jnp.ndarray
-    next_observations: jnp.ndarray
-    dones: jnp.ndarray
+from varibad_jax.models.lam.lam import (
+    LatentActionModel,
+    LatentActionAgent,
+    LatentActionDecoder,
+)
 
 
 class OfflineTrainer(BaseTrainer):
@@ -40,141 +42,72 @@ class OfflineTrainer(BaseTrainer):
 
         rng = npr.RandomState(config.seed)
 
-        steps_per_rollout = (
-            config.env.num_episodes_per_rollout * self.envs.max_episode_steps
-        )
-        self.steps_per_rollout = steps_per_rollout
-
-        # load dataset
-        dataset_name = f"eid-{config.env.env_id}_n-{config.num_rollouts_collect}_steps-{steps_per_rollout}"
-        data_path = (
-            Path(self.config.root_dir)
-            / self.config.data_dir
-            / dataset_name
-            / "dataset.pkl"
-        )
-        logging.info(f"loading data from {data_path}")
-        with open(data_path, "rb") as f:
-            data = pickle.load(f)
-
-        num_trajs, num_timesteps = data["observations"].shape[:2]
-        avg_return = jnp.mean(jnp.sum(data["rewards"], axis=-1))
-        logging.info(f"average return: {avg_return}")
-
-        # need to convert rewards into returns to go
-        # do i need to do discounting here?
-        if self.config.model.name == "dt":
-            returns = jnp.cumsum(data["rewards"][:, ::-1], axis=1)[:, ::-1]
-            data["rewards"] = returns
-
-        # [B, T, *], trajectory data
-        if self.config.num_trajs != -1:
-            indices = rng.choice(num_trajs, size=self.config.num_trajs, replace=False)
-            for k, v in data.items():
-                data[k] = v[indices]
-
-        if self.config.model.name == "lapo_action_decoder":
-            # flatten our data to be [B*T, *]
-            for k, v in data.items():
-                data[k] = einops.rearrange(v, "B T ... -> (B T) ...")
-
-        for k, v in data.items():
-            logging.info(f"{k}: {v.shape}")
-
-        dataset_size = data["observations"].shape[0]
-        num_train = int(dataset_size * self.config.train_frac)
-        num_eval = dataset_size - num_train
-        batch_size = self.config.batch_size
-
-        num_complete_batches, leftover = divmod(dataset_size, batch_size)
-        logging.info(f"num batches per episode: {num_complete_batches}")
-
-        # split into train and eval
-        train_data = {k: v[:num_train] for k, v in data.items()}
-        eval_data = {k: v[num_train:] for k, v in data.items()}
-
-        def create_traj_loader(data):
-            num_complete_batches, leftover = divmod(
-                data["observations"].shape[0], batch_size
+        try:
+            steps_per_rollout = (
+                config.env.num_episodes_per_rollout * self.envs.max_episode_steps
             )
-            num_batches = num_complete_batches + bool(leftover)
+            self.steps_per_rollout = steps_per_rollout
+        except:
+            steps_per_rollout = None
 
-            def data_stream():
-                while True:
-                    perm = rng.permutation(num_train)
-                    for i in range(num_batches):
-                        batch_idx = perm[i * batch_size : (i + 1) * batch_size]
-                        batch = Batch(**{k: v[batch_idx] for k, v in data.items()})
-                        yield batch
+        train_dataset, eval_dataset = load_data(
+            config=config, rng=rng, steps_per_rollout=steps_per_rollout
+        )
+        self.train_dataset = train_dataset
+        self.eval_dataset = eval_dataset
 
-            batches = data_stream()
-            return batches, num_batches
-
-        def create_lapo_loader(data):
-            # sample small windows of transitions in a trajectory
-            num_complete_batches, leftover = divmod(
-                data["observations"].shape[0], batch_size
+        if self.config.env.env_name == "procgen":
+            self.train_dataloader = train_dataset.get_iter(self.config.batch_size)
+            self.eval_dataloader = eval_dataset.get_iter(self.config.batch_size)
+            # number of batches ot iterate over each epoch of training
+            self.num_train_batches = 50
+            self.num_eval_batches = 2
+        else:
+            loader = partial(
+                create_traj_loader, num_traj_per_batch=config.num_traj_per_batch
             )
-            num_batches = num_complete_batches + bool(leftover)
 
-            def data_stream():
-                while True:
-                    perm = rng.permutation(num_train)
-                    for i in range(num_batches):
-                        batch_idx = perm[i * batch_size : (i + 1) * batch_size]
-                        time_idx = rng.randint(1, num_timesteps - 1)
-                        batch = Batch(
-                            **{
-                                k: v[batch_idx, time_idx - 1 : time_idx + 2]
-                                for k, v in data.items()
-                            }
-                        )
-                        yield batch
+            if "lapo" in self.config.exp_name:
+                loader = create_lapo_loader
 
-            batches = data_stream()
-            return batches, num_batches
+            self.train_dataloader, self.num_train_batches = loader(
+                train_dataset, rng, batch_size=config.batch_size
+            )
+            self.eval_dataloader, self.num_eval_batches = loader(
+                eval_dataset, rng, batch_size=config.batch_size
+            )
 
-        if (
-            self.config.model.name == "dt"
-            or self.config.model.name == "lapo_action_decoder"
-        ):
-            loader = create_traj_loader
-        elif (
-            self.config.model.name == "lapo"
-            or self.config.model.name == "lapo_bc_agent"
-        ):
-            loader = create_lapo_loader
-
-        self.train_dataloader, self.num_train_batches = loader(train_data)
-        self.eval_dataloader, self.num_eval_batches = loader(eval_data)
-
-        logging.info(
-            f"len train dataset: {len(train_data['observations'])}, num train batches: {self.num_train_batches}"
-        )
-        logging.info(
-            f"len eval dataset: {len(eval_data['observations'])}, num eval batches: {self.num_eval_batches}"
-        )
+            logging.info(
+                f"num_train_batches: {self.num_train_batches}, num_eval_batches: {self.num_eval_batches}"
+            )
 
         # test dataloader
         batch = next(self.train_dataloader)
-        logging.info(f"batch observations: {batch.observations.shape}")
-        logging.info(f"len batch: {len(batch)}")
+        for k, v in batch.items():
+            logging.info(f"{k}: {v.shape}")
+
+        # batch = next(self.eval_dataloader)
+        # for k, v in batch.items():
+        #     logging.info(f"{k}: {v.shape}")
 
         if self.config.model.name == "dt":
             model_cls = DecisionTransformerAgent
-        elif self.config.model.name == "lapo":
-            model_cls = LAPOModel
-        elif self.config.model.name == "lapo_bc_agent":
-            model_cls = LAPOAgent
-        elif self.config.model.name == "lapo_action_decoder":
-            model_cls = LAPOActionDecoder
+        elif self.config.model.name == "lam":
+            model_cls = LatentActionModel
+        elif self.config.model.name == "latent_action_decoder":
+            model_cls = LatentActionDecoder
+        elif self.config.model.name == "lam_agent":
+            model_cls = LatentActionAgent
+        else:
+            raise ValueError(f"Unknown model name: {self.config.model.name}")
 
         self.model = model_cls(
             config=config.model,
-            observation_shape=train_data["observations"].shape[2:],
+            observation_shape=self.obs_shape,
             action_dim=self.action_dim,
             input_action_dim=self.input_action_dim,
             continuous_actions=self.continuous_actions,
+            task_dim=self.config.env.task_dim,
             key=next(self.rng_seq),
         )
 
@@ -198,12 +131,12 @@ class OfflineTrainer(BaseTrainer):
                 for k, v in metrics.items():
                     epoch_metrics[k].append(v)
 
-            # average a list of dicts using jax tree operations
             for k, v in epoch_metrics.items():
                 epoch_metrics[k] = jnp.mean(jnp.array(v))
 
             epoch_time = time.time() - start_time
             epoch_metrics["time/epoch"] = epoch_time
+            epoch_metrics["misc/lr"] = self.model._opt_state.hyperparams["lr"]
 
             if self.wandb_run is not None:
                 metrics = gutl.prefix_dict_keys(epoch_metrics, prefix="train/")
@@ -211,6 +144,8 @@ class OfflineTrainer(BaseTrainer):
 
             if (epoch + 1) % self.config.eval_interval == 0:
                 eval_metrics = self.eval(epoch + 1)
+
+                print(epoch_metrics)
 
                 if self.wandb_run is not None:
                     eval_metrics = gutl.prefix_dict_keys(eval_metrics, prefix="eval/")
@@ -230,8 +165,18 @@ class OfflineTrainer(BaseTrainer):
         for k, v in eval_metrics.items():
             eval_metrics[k] = jnp.mean(jnp.array(v))
 
+        if self.config.model.name == "dt" and self.config.model.demo_conditioning:
+            # sample a couple of demo prompts
+            num_trajs = self.eval_dataset["observations"].shape[0]
+            prompt_idxs = npr.choice(
+                num_trajs, size=self.config.num_eval_rollouts, replace=False
+            )
+            prompts = {k: v[prompt_idxs] for k, v in self.eval_dataset.items()}
+        else:
+            prompts = None
+
         # run rollouts
-        if self.config.model.name == "dt":
+        if hasattr(self.model, "get_action") and self.config.run_eval_rollouts:
             rollout_metrics, *_ = run_rollouts(
                 rng=next(self.rng_seq),
                 agent=self.model,
@@ -240,9 +185,12 @@ class OfflineTrainer(BaseTrainer):
                 action_dim=self.input_action_dim,
                 steps_per_rollout=self.steps_per_rollout,
                 wandb_run=self.wandb_run,
+                prompts=prompts,
             )
             eval_metrics.update(rollout_metrics)
 
         # save model
-        self.save_model(self.model.save_dict, eval_metrics, epoch)
+        if self.config.mode == "train":
+            self.save_model(self.model.save_dict, eval_metrics, epoch)
+
         return eval_metrics

@@ -17,3 +17,4 @@ varibad_jax/varibad_jax/ray_results/*
 *.mp4
 test*
 misc/*
+varibad_jax/datasets/*

@@ -1,3 +1,4 @@
+from absl import logging
 import haiku as hk
 import dataclasses
 import jax
@@ -75,7 +76,7 @@ class TransformerEncoder(hk.Module):
         attn_size: int,
         dropout_rate: float,
         widening_factor: int = 4,
-        **kwargs
+        **kwargs,
     ):
         super().__init__()
         self.num_heads = num_heads
@@ -107,6 +108,7 @@ class TransformerEncoder(hk.Module):
         is_training: bool = True,
     ) -> jax.Array:  # [B, T, D]
         """Transforms input embedding sequences to output embedding sequences."""
+        logging.info(f"embeddings shape: {embeddings.shape}")
         B, seq_len, D = embeddings.shape
 
         if mask is None:
@@ -118,7 +120,8 @@ class TransformerEncoder(hk.Module):
         mask = mask * causal_mask  # [B, H=1, T, T]
 
         h = embeddings
-        for layer in self.layers:
+        for i, layer in enumerate(self.layers):
+            logging.info(f"h shape: {h.shape}")
             h = layer(h, mask, is_training=is_training)
 
         return self.ln(h)
@@ -138,11 +141,10 @@ class SARTransformerEncoder(hk.Module):
         max_timesteps: int = 1000,
         encode_separate: bool = False,
         batch_first: bool = False,
-        format: str = "SAR",
         image_encoder_config: ConfigDict = None,
         w_init=hk.initializers.VarianceScaling(scale=2.0),
         b_init=hk.initializers.Constant(0.0),
-        **kwargs
+        **kwargs,
     ):
         super().__init__()
         self.image_obs = image_obs
@@ -166,6 +168,7 @@ class SARTransformerEncoder(hk.Module):
         self.action_embed = hk.Linear(embedding_dim, **init_kwargs)
         self.reward_embed = hk.Linear(embedding_dim, **init_kwargs)
         self.timestep_embed = hk.Embed(max_timesteps, embedding_dim)
+        self.prompt_embed = hk.Linear(embedding_dim, **init_kwargs)
 
         self.embed = hk.Linear(hidden_dim, **init_kwargs)
 
@@ -173,11 +176,19 @@ class SARTransformerEncoder(hk.Module):
         self,
         states: jax.Array,  # [T, B, D]
         actions: jax.Array,  # [T, B, D]
-        rewards: jax.Array,  # [T, B, 1]
         mask: jax.Array,  # [T, B]
+        rewards: jax.Array = None,  # [T, B, 1]
+        prompt: jax.Array = None,
         is_training: bool = True,
-        **kwargs
+        **kwargs,
     ) -> jax.Array:
+        """
+        Implement causal transformer. Each of state, action, and reward are either embedded
+        as separate tokens or treated as a single timestep.
+
+        Reward can be optional. If not provided, then we will just have state, action sequences.
+        """
+
         # make batch first
         if self.batch_first:
             B, T, *_ = states.shape
@@ -187,7 +198,8 @@ class SARTransformerEncoder(hk.Module):
             # only swap first two axes
             states = einops.rearrange(states, "t b ... -> b t ...")
             actions = einops.rearrange(actions, "t b ... -> b t ...")
-            rewards = einops.rearrange(rewards, "t b ... -> b t ...")
+            if rewards is not None:
+                rewards = einops.rearrange(rewards, "t b ... -> b t ...")
             mask = einops.rearrange(mask, "t b -> b t")
 
         if self.image_obs:
@@ -195,25 +207,45 @@ class SARTransformerEncoder(hk.Module):
         else:
             state_embed = self.state_embed(states)
         action_embed = self.action_embed(actions)
-        reward_embed = self.reward_embed(rewards)
+
+        if prompt is not None:
+            prompt_embed = self.prompt_embed(prompt)
+
         timestep_embed = self.timestep_embed(jnp.arange(T)[None].repeat(B, axis=0))
+
+        if rewards is not None:
+            reward_embed = self.reward_embed(rewards)
+            reward_embed = reward_embed + timestep_embed
+
         # jax.debug.breakpoint()
 
         state_embed = state_embed + timestep_embed  # [B, T, D]
         action_embed = action_embed + timestep_embed
-        reward_embed = reward_embed + timestep_embed
 
         if self.encode_separate:
             # stack, [B, T, D] -> [B, 3, T, D]
-            # reward should be RTG
-            embeddings = jnp.stack([reward_embed, state_embed, action_embed], axis=1)
+            # reward should be RTG if available
+
+            if rewards is None:
+                embeddings = jnp.stack([state_embed, action_embed], axis=1)
+            else:
+                embeddings = jnp.stack(
+                    [reward_embed, state_embed, action_embed], axis=1
+                )
 
             # make one long sequence
             embeddings = einops.rearrange(embeddings, "b c t d -> b (t c) d")
 
+            if prompt is not None:
+                embeddings = jnp.concatenate([prompt_embed, embeddings], axis=1)
+
             # make mask
-            mask = mask[:, None, :].repeat(3, axis=1)
+            num_tokens = 3 if rewards is not None else 2
+            mask = mask[:, None, :].repeat(num_tokens, axis=1)
             mask = einops.rearrange(mask, "b c t -> b (t c)")
+            # add one for the prompt
+            if prompt is not None:
+                mask = jnp.concatenate([jnp.ones((B, 1)), mask], axis=1)
         else:
             embeddings = jnp.concatenate(
                 [state_embed, action_embed, reward_embed], axis=-1

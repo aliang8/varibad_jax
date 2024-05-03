@@ -1,3 +1,4 @@
+import jax
 import chex
 import optax
 import haiku as hk
@@ -41,9 +42,7 @@ class ActionHead(hk.Module):
             self.mean = hk.Linear(action_dim, name="mean", **init_kwargs)
             self.logvar = hk.Linear(action_dim, name="logvar", **init_kwargs)
 
-    def __call__(
-        self, h: jnp.ndarray, is_training: bool = True, gt_actions: jnp.ndarray = None
-    ) -> PolicyOutput:
+    def __call__(self, h: jnp.ndarray, is_training: bool = True) -> PolicyOutput:
         if not self.is_continuous:
             logits = self.logits(h)
             action_dist = tfd.Categorical(logits=logits)

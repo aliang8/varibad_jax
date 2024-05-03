@@ -11,24 +11,27 @@ from xminigrid.environment import EnvParamsT, EnvParams
 
 
 class GridNaviEnvParams(struct.PyTreeNode):
-    possible_goals: jnp.ndarray
     grid_size: int = 5
     max_episode_steps: int = 15
     num_actions: int = 5
     task_dim: int = 2
+    random_init: bool = False
 
 
 class State(struct.PyTreeNode):
     key: jax.Array
     step_num: jax.Array
     goal: jax.Array
+    success: jax.Array
 
 
 class GridNavi:
     """Grid navigation environment in BRAX."""
 
-    def __init__(self, **kwargs):
+    def __init__(self, random_init: bool = False, grid_size: int = 5, **kwargs):
         super().__init__()
+        self.random_init = random_init
+        self.grid_size = grid_size
 
         # always starting at the bottom right
         self.init_state = jnp.array([0, 0])
@@ -47,30 +50,52 @@ class GridNavi:
     def observation_shape(self, params: EnvParamsT):
         return (2,)
 
-    def possible_goals(self, grid_size: int):
-        possible_goals = jnp.dstack(
-            jnp.meshgrid(jnp.arange(grid_size), jnp.arange(grid_size))
-        ).reshape(-1, 2)
-        # remove (0,0), (0,1), (1,0), and (1,1)
-        possible_goals = jnp.delete(possible_goals, jnp.array([0, 1, 5, 6]), axis=0)
-        possible_goals = jnp.array(possible_goals)
-        return possible_goals
-
     def default_params(self, **kwargs) -> GridNaviEnvParams:
-        default_params = GridNaviEnvParams(possible_goals=None, grid_size=5)
+        default_params = GridNaviEnvParams(grid_size=5, random_init=False)
         return default_params.replace(**kwargs)
 
+    def xy_to_id(self, params: EnvParamsT, xy: List[int]):
+        return xy[0] + xy[1] * params.grid_size
+
     def reset(self, params: EnvParamsT, rng: jax.Array):
-        init_xy = jnp.array(self.init_state)
+        init_rng, goal_rng = jax.random.split(rng)
+        if self.random_init:
+            init_xy = jax.random.randint(init_rng, (2,), 0, params.grid_size)
+        else:
+            init_xy = jnp.array(self.init_state)
+
         obs = init_xy
 
+        if self.random_init:
+            possible_goals = jnp.dstack(
+                jnp.meshgrid(jnp.arange(self.grid_size), jnp.arange(self.grid_size))
+            ).reshape(-1, 2)
+
+            # remove init_xy
+            id_ = self.xy_to_id(params, init_xy)
+            possible_goals = jnp.delete(
+                possible_goals, jnp.array([id_]), axis=0, assume_unique_indices=True
+            )
+        else:
+            possible_goals = jnp.dstack(
+                jnp.meshgrid(jnp.arange(self.grid_size), jnp.arange(self.grid_size))
+            ).reshape(-1, 2)
+            # remove (0,0), (0,1), (1,0), and (1,1)
+            possible_goals = jnp.delete(
+                possible_goals,
+                jnp.array([0, 1, 5, 6]),
+                axis=0,
+                assume_unique_indices=True,
+            )
+
+        possible_goals = jnp.array(possible_goals)
+
         # sample a random goal
-        possible_goals = params.possible_goals
-        indx = jax.random.randint(rng, (1,), 0, len(possible_goals))[0]
+        indx = jax.random.randint(goal_rng, (1,), 0, len(possible_goals))[0]
         goal = possible_goals[indx]
 
         # sample a new task from num_cells
-        state = State(key=rng, step_num=jnp.array(0), goal=goal)
+        state = State(key=rng, step_num=jnp.array(0), goal=goal, success=jnp.array(0))
         timestep = TimeStep(
             state=state,
             step_type=StepType.FIRST,
@@ -99,6 +124,7 @@ class GridNavi:
 
         new_state = timestep.state.replace(
             step_num=timestep.state.step_num + 1,
+            success=reached_goal | timestep.state.success,
         )
         terminated = False
         truncated = jnp.equal(new_state.step_num, params.max_episode_steps)

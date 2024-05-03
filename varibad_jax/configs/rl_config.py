@@ -26,7 +26,7 @@ def get_config(config_string: str = None):
                 "No image encoder config found for the given config string"
             )
 
-        image_encoder_config.embedding_dim = 8  # TODO: fix this
+        image_encoder_config.embedding_dim = 64  # TODO: fix this
     else:
         image_encoder_config = None
 
@@ -42,9 +42,9 @@ def get_config(config_string: str = None):
             pass_state_to_policy=True,
             pass_latent_to_policy=False,
             pass_belief_to_policy=False,
-            pass_task_to_policy=True,
+            pass_task_to_policy=False,
             use_hyperx_bonuses=False,
-            mlp_layers=[32, 32],
+            mlp_layers=[64, 64],
             actor_activation_function="tanh",
             algo="ppo",
             name="ppo",
@@ -61,7 +61,8 @@ def get_config(config_string: str = None):
             tau=0.95,
             max_grad_norm=0.5,
             embedding_dim=16,
-            anneal_lr=False,
+            use_lr_scheduler=False,
+            gaussian_policy=False,
         )
     )
     config.policy = policy_config
@@ -71,7 +72,7 @@ def get_config(config_string: str = None):
     config.keys_to_include = {
         "trainer": None,
         "env": ["env_name"],
-        "policy": ["algo", "pass_latent_to_policy"],
+        "policy": ["algo", "pass_latent_to_policy", "pass_task_to_policy"],
     }
 
     return config

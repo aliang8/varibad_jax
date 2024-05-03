@@ -27,7 +27,9 @@ def get_config(config_string: str = None):
                 num_processes=16,
                 normalize_rews=False,
                 image_obs=False,
-                env_kwargs=dict(grid_size=5, max_episode_steps=15, num_actions=5),
+                env_kwargs=dict(
+                    grid_size=5, max_episode_steps=15, num_actions=5, random_init=False
+                ),
             )
         ),
         "xland": ConfigDict(
@@ -35,13 +37,25 @@ def get_config(config_string: str = None):
                 env_name="xland",
                 env_kwargs=dict(view_size=5, height=9, width=9),
                 benchmark_path="/home/anthony/varibad_jax/varibad_jax/envs/xland_benchmarks/test_ruleset.pkl",
+                # preloaded_benchmark="small-1m",
                 ruleset_id=0,
                 env_id="XLand-MiniGrid-R1-9x9",
-                num_episodes_per_rollout=4,
-                steps_per_rollout=20,
+                num_episodes_per_rollout=1,
+                steps_per_rollout=30,
                 num_processes=16,
                 normalize_rews=False,
                 image_obs=True,
+                task_dim=5,  # TODO: tbd fix this
+            )
+        ),
+        "procgen": ConfigDict(
+            dict(
+                env_name="procgen",
+                env_id="bigfish",
+                num_envs=2,
+                image_obs=True,
+                gamma=0.999,
+                num_episodes_per_rollout=1,
             )
         ),
     }
@@ -81,7 +95,8 @@ def get_config(config_string: str = None):
     # where to save experiment artifacts (videos, checkpoints, etc)
     config.root_dir = "/home/anthony/varibad_jax/varibad_jax/"
     config.exp_dir = "/home/anthony/varibad_jax/varibad_jax/"
-    config.exp_name = "vb_jax"
+    config.dataset_name = ""
+    config.exp_name = ""
     config.group_name = ""
     config.ray_logdir = "ray_results"
     config.overwrite = True
@@ -94,6 +109,7 @@ def get_config(config_string: str = None):
     config.visualize_rollouts = False
     config.num_eval_rollouts_save = 3
     config.skip_first_eval = False
+    config.run_eval_rollouts = True
 
     # for saving checkpoints
     config.max_ckpt_to_keep = None

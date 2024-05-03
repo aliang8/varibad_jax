@@ -14,7 +14,20 @@ Run basic goal-conditioned RL
 python3 main.py \
     --config=configs/rl_config.py:lstm-gridworld \
     --config.smoke_test=True \
-    --config.use_wb=False
+    --config.use_wb=False \
+    --config.policy.pass_task_to_policy=True \
+    --config.env.env_kwargs.grid_size=7 \
+    --config.env.env_kwargs.max_episode_steps=20 \
+    --config.env.num_episodes_per_rollout=1 \
+    --config.env.steps_per_rollout=20 \
+    --config.env.env_kwargs.random_init=True \
+    --config.exp_name="7x7_rand_init_"
+
+python3 main.py \
+    --config=configs/rl_config.py:lstm-xland-5x5 \
+    --config.smoke_test=True \
+    --config.use_wb=True \
+    --config.visualize_rollouts=True
 ```
 
 Run VariBAD on XLand using LSTM encoder
@@ -78,4 +91,5 @@ Environments supported:
 - [x] Xland-Minigrid 
 - [ ] DM-Alchemy
 - [ ] ProcGen
+
 

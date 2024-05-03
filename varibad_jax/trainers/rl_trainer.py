@@ -60,7 +60,7 @@ class RLTrainer(BaseTrainer):
             state_dim=self.envs.observation_space.shape,
             latent_dim=0,
             belief_dim=0,
-            task_dim=self.env_params.task_dim,
+            task_dim=self.task_dim,
             action_space=self.envs.action_space,
             hidden_size=0,
             normalise_rewards=self.config.env.normalize_rews,
@@ -74,13 +74,19 @@ class RLTrainer(BaseTrainer):
         xtimestep = self.jit_reset(self.env_params, reset_rng)
         state = xtimestep.timestep.observation
         state = state.astype(np.float32)
-        task = xtimestep.timestep.state.goal
+        if self.config.policy.pass_task_to_policy:
+            if self.config.env.env_name == "gridworld":
+                task = xtimestep.timestep.state.goal
+            elif self.config.env.env_name == "xland":
+                task = xtimestep.timestep.state.goal_encoding
+
+            if len(task.shape) == 1:
+                task = task[np.newaxis]
+        else:
+            task = None
 
         if len(state.shape) == 1:  # add extra dimension
             state = state[..., np.newaxis]
-
-        if len(task.shape) == 1:
-            task = task[np.newaxis]
 
         self.policy_storage.prev_state[0] = state
 
@@ -101,6 +107,17 @@ class RLTrainer(BaseTrainer):
             rew_raw = xtimestep.timestep.reward
             done = xtimestep.timestep.last()
             rew_norm = rew_raw
+
+            if self.config.policy.pass_task_to_policy:
+                if self.config.env.env_name == "gridworld":
+                    task = xtimestep.timestep.state.goal
+                elif self.config.env.env_name == "xland":
+                    task = xtimestep.timestep.state.goal_encoding
+
+                if len(task.shape) == 1:
+                    task = task[np.newaxis]
+            else:
+                task = None
 
             # add extra dimension
             if len(next_state.shape) == 1:
@@ -265,7 +282,7 @@ class RLTrainer(BaseTrainer):
                     )
                     # save to pickle
                     self.save_model(
-                        self.agent.save_dict, eval_metrics, iter_idx=self.iter_idx
+                        self.agent.save_dict, eval_metrics, iter=self.iter_idx
                     )
 
                     if self.wandb_run is not None:

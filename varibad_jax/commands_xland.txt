@@ -1,0 +1,55 @@
+# Commands for xland experiments 
+
+python3 main.py \
+    --config=configs/rl_config.py:lstm-xland-5x5 \
+    --config.smoke_test=True \
+    --config.use_wb=True \
+    --config.env.num_episodes_per_rollout=1 \
+    --config.env.steps_per_rollout=50 \
+    --config.exp_name="9x9_50_steps" \
+    --config.visualize_rollouts=True \
+    --config.policy.entropy_coeff=0.05
+
+python3 scripts/train_xland_oracle.py
+
+# Generate expert data
+python3 scripts/generate_data_from_policy.py \
+    --config=configs/offline_config.py:xland \
+    --config.model_ckpt_dir=results/9x9_en-xland_alg-ppo_pltp-False_pttp-False_t-rl \
+    --config.dataset_name=9x9
+
+
+# train LAM 
+CUDA_VISIBLE_DEVICES=7 python3 main.py \
+    --config=configs/offline_config.py:lam-xland-5x5 \
+    --config.smoke_test=True \
+    --config.exp_name="transformer_encoder_4_codes" \
+    --config.use_wb=True \
+    --config.model.idm.beta=0.25 \
+    --config.model.idm.num_codes=20 \
+    --config.dataset_name=9x9 \
+    --config.env.num_episodes_per_rollout=1 \
+    --config.model.idm.use_transformer=True \
+    --config.model.fdm.use_transformer_idm=True 
+
+# train latent action -> GT Action decoder 
+CUDA_VISIBLE_DEVICES=4 python3 main.py \
+    --config=configs/offline_config.py:latent_action_decoder-xland-5x5 \
+    --config.smoke_test=True \
+    --config.use_wb=False \
+    --config.num_trajs=1000 \
+    --config.train_frac=0.5 \
+    --config.overwrite=True \
+    --config.dataset_name=9x9 \
+    --config.env.num_episodes_per_rollout=1 
+
+# train LA policy
+CUDA_VISIBLE_DEVICES=4 python3 main.py \
+    --config=configs/offline_config.py:lam_agent-gridworld \
+    --config.smoke_test=True \
+    --config.use_wb=True \
+    --config.overwrite=True \
+    --config.dataset_name=5x5 \
+    --config.env.num_episodes_per_rollout=1 \
+    --config.env.env_kwargs.random_init=True \
+    --config.run_eval_rollouts=True

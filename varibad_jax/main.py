@@ -96,7 +96,7 @@ def train_model_fn(config):
     if config.mode == "train":
         trainer.train()
     elif config.mode == "eval":
-        trainer.eval()
+        trainer.eval(epoch=0)
 
 
 def update(source, overrides):
@@ -116,7 +116,7 @@ def update(source, overrides):
 
 
 def create_exp_name(param_space, config):
-    trial_str = ""
+    trial_str = config["exp_name"] + "_"
 
     for k, override in param_space.items():
         if k in config:

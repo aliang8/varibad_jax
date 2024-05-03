@@ -1,5 +1,6 @@
 from typing import Any, Optional, Tuple
 
+import einops
 import chex
 import flax.linen as nn
 import haiku as hk
@@ -87,6 +88,7 @@ class ActorCritic(hk.Module):
         is_training: bool = True,
     ):
         if self.image_obs:
+            state = einops.rearrange(state, "... h w c -> ... c h w")
             state_embed = self.state_embed(state, is_training=is_training)
         else:
             state_embed = self.state_embed(state)
@@ -109,6 +111,6 @@ class ActorCritic(hk.Module):
         value = self.critic_mlp(policy_input)
 
         h = self.action_pred(policy_input)
-        policy_output = self.action_head(h)
+        policy_output = self.action_head(h, is_training=is_training)
         policy_output.value = value
         return policy_output

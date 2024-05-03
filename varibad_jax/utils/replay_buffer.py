@@ -329,7 +329,10 @@ class OnlineStorage:
         else:
             latent = None
 
-        task = self.tasks[:-1]
+        if self.task_dim > 0:
+            task = self.tasks[:-1]
+        else:
+            task = None
 
         policy_output, policy_state = agent.get_action(
             rng_key,
@@ -338,6 +341,7 @@ class OnlineStorage:
             task=task,
             is_training=True,
         )
+
         log_probs = policy_output.dist.log_prob(self.actions.astype(np.int32).squeeze())
         self.action_log_probs = log_probs
         # [T, B]

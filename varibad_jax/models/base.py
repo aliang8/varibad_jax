@@ -1,5 +1,6 @@
 from absl import logging
 from typing import Tuple
+import json
 import jax
 import optax
 import pickle
@@ -30,6 +31,7 @@ class BaseModel:
         model_key: str = "",
         load_from_ckpt: bool = False,
         ckpt_file: str = "",
+        ckpt_dir: str = "",
     ):
         self.config = config
         self.is_continuous = continuous_actions
@@ -44,6 +46,12 @@ class BaseModel:
         self._opt_state = None
 
         if load_from_ckpt:
+            if ckpt_dir:
+                ckpt_dir = Path(ckpt_dir) / "model_ckpts"
+                # search and sort by epoch
+                ckpt_files = sorted(ckpt_dir.glob("*.pkl"), reverse=True)
+                ckpt_file = ckpt_files[0]
+            assert ckpt_file, "ckpt_file not provided"
             logging.info(f"loading {config.name} from checkpoint {ckpt_file}")
             with open(ckpt_file, "rb") as f:
                 ckpt = pickle.load(f)
@@ -66,26 +74,34 @@ class BaseModel:
 
     def _init_opt(self) -> None:
         """Initialize Adam optimizer for training."""
-        if self.config.anneal_lr:
-            lr = optax.polynomial_schedule(
-                init_value=self._learning_rate_start,
-                end_value=self._learning_rate_end,
-                power=1,  # 1: Linear decay
-                transition_steps=self._learning_rate_decay_steps,
-            )
-        else:
-            lr = self.config.lr
+        # if self.config.use_lr_scheduler:
+        #     # lr = optax.polynomial_schedule(
+        #     #     init_value=self._learning_rate_start,
+        #     #     end_value=self._learning_rate_end,
+        #     #     power=1,  # 1: Linear decay
+        #     #     transition_steps=self._learning_rate_decay_steps,
+        #     # )
+        #     lr = optax.piecewise_interpolate_schedule(
+        #         interpolate_type="linear",
+        #         init_value=0.1 * self.config.lr,
+        #         boundaries_and_scales={
+        #             50 * 50: 10,
+        #             50_000: 0.01,
+        #         },
+        #     )
+        # else:
+        lr = self.config.lr
         self.opt = optimizer(lr, self.config.eps)
         self._opt_state = self.opt.init(self._params)
 
-    @partial(jax.jit, static_argnums=(0, 5))
-    def update_model(self, params, state, rng, batch, update_model):
+    @partial(jax.jit, static_argnums=(0, 6))
+    def update_model(self, params, state, opt_state, rng, batch, update_model):
         logging.info("updating model")
         (loss, (metrics, state)), grads = jax.value_and_grad(
             self.loss_fn, has_aux=True
         )(params, state, rng, batch)
         if update_model:
-            grads, opt_state = self.opt.update(grads, self._opt_state)
+            grads, opt_state = self.opt.update(grads, opt_state)
             params = optax.apply_updates(params, grads)
         else:
             opt_state = self._opt_state
@@ -93,7 +109,7 @@ class BaseModel:
 
     def update(self, rng, batch, update_model=True):
         self._params, self._state, self._opt_state, metrics = self.update_model(
-            self._params, self._state, rng, batch, update_model
+            self._params, self._state, self._opt_state, rng, batch, update_model
         )
         return metrics
 

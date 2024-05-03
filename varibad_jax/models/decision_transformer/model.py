@@ -14,6 +14,7 @@ class DecisionTransformer(hk.Module):
         image_obs: bool,
         action_dim: int,
         is_continuous: bool = False,
+        gaussian_policy: bool = False,
         w_init=hk.initializers.VarianceScaling(scale=2.0),
         b_init=hk.initializers.Constant(0.0),
         **kwargs
@@ -33,27 +34,47 @@ class DecisionTransformer(hk.Module):
             w_init=w_init,
             b_init=b_init
         )
-        self.action_head = ActionHead(is_continuous, action_dim, w_init, b_init)
+        self.action_head = ActionHead(
+            gaussian_policy=gaussian_policy,
+            is_continuous=is_continuous,
+            action_dim=action_dim,
+            w_init=w_init,
+            b_init=b_init,
+        )
 
     def __call__(
         self,
         states: jax.Array,  # [B, T, D]
         actions: jax.Array,  # [B, T, D]
-        rewards: jax.Array,  # [B, T, 1]
         mask: jax.Array,  # [B, T]
+        rewards: jax.Array = None,  # [B, T, 1]
+        prompt: jax.Array = None,
         is_training: bool = True,
         **kwargs
     ) -> jax.Array:
         # [B, T*3, D]
         embeddings = self.transformer(
-            states, actions, rewards, mask, is_training=is_training
+            states=states,
+            actions=actions,
+            rewards=rewards,
+            mask=mask,
+            prompt=prompt,
+            is_training=is_training,
         )
 
         # reshape embeddings to [B, T, 3, D]
-        embeddings = einops.rearrange(embeddings, "b (t c) d -> b c t d", c=3)
+        num_tokens = 3 if rewards is not None else 2
+        if prompt is not None:
+            prompt_embedding = embeddings[:, 0]
+            embeddings = embeddings[:, 1:]
+
+        embeddings = einops.rearrange(embeddings, "b (t c) d -> b c t d", c=num_tokens)
 
         # predict actions from the state embedding
-        state_embed = embeddings[:, 1]
+        if rewards is None:
+            state_embed = embeddings[:, 0]
+        else:
+            state_embed = embeddings[:, 1]
 
         policy_output = self.action_head(state_embed, is_training=is_training)
         return policy_output

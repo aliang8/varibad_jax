@@ -33,26 +33,49 @@
 - TODO: 
     - [x] Implement latent BC policy ($\mathcal{O} \rightarrow \mathcal{Z}$)
     - [x] Implement decoder to predict ground truth actions from latent actions
+    - [ ] Debug the full pipeline
+        - [ ] Reconstruction for LAPO model is not great, removing final activation and increasing the VQVAE commitment loss, also normalizing my input
+        - [ ] 
+- For procgen, the input is a 64x64x3 image
 
 ## Usage
 ```
 Train LAPO Model
-CUDA_VISIBLE_DEVICES=4 python3 main.py \
+CUDA_VISIBLE_DEVICES=5 python3 main.py \
     --config=configs/offline_config.py:lapo-xland-5x5 \
     --config.smoke_test=True \
-    --config.use_wb=True
+    --config.use_wb=True \
+    --config.overwrite=False \
+    --config.model.idm.beta=0.25
 
 Train LAPO BC Agent
 CUDA_VISIBLE_DEVICES=4 python3 main.py \
     --config=configs/offline_config.py:lapo_agent-xland-5x5 \
     --config.smoke_test=True \
-    --config.use_wb=False \
-    --config.overwrite=False
+    --config.use_wb=True \
+    --config.run_eval_rollouts=False \
+    --config.overwrite=True
 
 Train LAPO Action Decoder with small amount of labelled data
 CUDA_VISIBLE_DEVICES=4 python3 main.py \
     --config=configs/offline_config.py:lapo_action_decoder-xland-5x5 \
     --config.smoke_test=True \
     --config.use_wb=False \
-    --config.overwrite=False
+    --config.num_trajs=500 \
+    --config.overwrite=True
+
+Evaluate LAPO BC Agent
+CUDA_VISIBLE_DEVICES=5 python3 main.py \
+    --config=configs/offline_config.py:lapo_bc_agent-xland-5x5 \
+    --config.smoke_test=True \
+    --config.mode="eval"
 ```
+
+CUDA_VISIBLE_DEVICES=8 python3 main.py \
+    --config=configs/offline_config.py:lapo-procgen-64x64 \
+    --config.smoke_test=True \
+    --config.use_wb=False \
+    --config.overwrite=False \
+    --config.model.idm.beta=0.05 \
+    --config.model.idm.ema_decay=0.999 \
+    --config.model.use_lr_scheduler=True
