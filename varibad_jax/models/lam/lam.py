@@ -236,13 +236,27 @@ class LatentActionDecoder(BaseModel):
 
 
 class LatentActionBaseAgent(BaseAgent):
-    def __init__(self, *args, **kwargs):
-        # TODO: fix this, probably not a good idea
-        kwargs["action_dim"] = kwargs["config"].latent_action_dim
-        kwargs["input_action_dim"] = kwargs["config"].latent_action_dim
-        kwargs["continuous_actions"] = True
-
-        super().__init__(*args, **kwargs)
+    def __init__(
+        self,
+        config,
+        key: jax.random.PRNGKey,
+        observation_shape: Tuple,
+        action_dim: int,
+        input_action_dim: int,
+        continuous_actions: bool,
+        *args,
+        **kwargs,
+    ):
+        super().__init__(
+            config,
+            key,
+            observation_shape,
+            config.latent_action_dim,
+            config.latent_action_dim,
+            continuous_actions=True,
+            *args,
+            **kwargs,
+        )
 
         # load pretrained IDM/FDM for predicting the latent actions from observations
         config = Path(self.config.lam_ckpt) / "config.json"
@@ -250,10 +264,10 @@ class LatentActionBaseAgent(BaseAgent):
             self.lam_cfg = ConfigDict(json.load(f))
 
         extra_kwargs = dict(
-            observation_shape=self.observation_shape,
-            action_dim=self.action_dim,
-            input_action_dim=self.input_action_dim,
-            continuous_actions=self.is_continuous,
+            observation_shape=observation_shape,
+            action_dim=action_dim,
+            input_action_dim=input_action_dim,
+            continuous_actions=continuous_actions,
         )
 
         lam_key, decoder_key = jax.random.split(self._init_key, 2)
@@ -281,6 +295,32 @@ class LatentActionBaseAgent(BaseAgent):
                 ckpt_dir=Path(self.config.latent_action_decoder_ckpt),
                 **extra_kwargs,
             )
+
+    @partial(jax.jit, static_argnames=("self", "is_training"))
+    def get_action_jit(self, params, state, rng, env_state, tasks=None, **kwargs):
+        logging.info("inside get action for LatentActionAgent")
+        la_key, decoder_key = jax.random.split(rng, 2)
+
+        if self.config.image_obs:
+            env_state = einops.rearrange(env_state, "b h w c -> b c h w")
+
+        # predict latent action and then use pretrained action decoder
+        la_output, _ = self.model.apply(
+            params, state, la_key, self, env_state, tasks, **kwargs
+        )
+        latent_actions = la_output.action
+
+        # decode latent action
+        action_output, _ = self.latent_action_decoder.model.apply(
+            self.latent_action_decoder._params,
+            self.latent_action_decoder._state,
+            decoder_key,
+            self.latent_action_decoder,
+            latent_actions=latent_actions,
+            is_training=False,
+        )
+        action_output.latent_action = latent_actions
+        return action_output, state
 
 
 class LatentActionAgent(LatentActionBaseAgent):
@@ -360,29 +400,3 @@ class LatentActionAgent(LatentActionBaseAgent):
 
         metrics = {"bc_loss": loss}
         return loss, (metrics, state)
-
-    @partial(jax.jit, static_argnames=("self", "is_training"))
-    def get_action_jit(self, params, state, rng, env_state, tasks, **kwargs):
-        logging.info("inside get action for LatentActionAgent")
-
-        la_key, decoder_key = jax.random.split(rng, 2)
-
-        if self.config.image_obs:
-            env_state = einops.rearrange(env_state, "b h w c -> b c h w")
-
-        # predict latent action and then use pretrained action decoder
-        la_output, _ = self.model.apply(
-            params, state, la_key, self, env_state, tasks, **kwargs
-        )
-        latent_actions = la_output.action
-
-        # decode latent action
-        action_output, _ = self.latent_action_decoder.model.apply(
-            self.latent_action_decoder._params,
-            self.latent_action_decoder._state,
-            decoder_key,
-            self.latent_action_decoder,
-            latent_actions=latent_actions,
-            is_training=False,
-        )
-        return action_output, state

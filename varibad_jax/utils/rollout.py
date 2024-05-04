@@ -51,7 +51,7 @@ def run_rollouts(
 
     if config.trainer == "vae":
         rollout_fn = eval_rollout_with_belief_model
-    elif config.trainer == "offline" and config.model.name == "dt":
+    elif "dt" in config.model.name:
         rollout_fn = eval_rollout_dt
     else:
         rollout_fn = eval_rollout
@@ -110,7 +110,7 @@ def eval_rollout_dt(
     **kwargs,
 ) -> RolloutStats:
     rng, reset_rng = jax.random.split(rng, 2)
-    if config.model.demo_conditioning and prompt is not None:
+    if config.model.policy.demo_conditioning and prompt is not None:
         # set the goal to be the same as the one in the prompt
         desired_goal = prompt["tasks"][0]
 
@@ -125,7 +125,7 @@ def eval_rollout_dt(
     done = False
     start_index = 0
 
-    if config.model.task_conditioning:
+    if config.model.policy.task_conditioning:
         if config.env.env_name == "gridworld":
             task = xtimestep.timestep.state.goal
         elif config.env.env_name == "xland":
@@ -133,14 +133,22 @@ def eval_rollout_dt(
 
         task = task.reshape(1, 1, -1)
         prompt = task
-    elif config.model.demo_conditioning:
+    elif config.model.policy.demo_conditioning:
         logging.info("adding prompt info before trajectory")
         # prepend prompt into the input tokens
         num_prompt_steps = prompt["observations"].shape[0]
         observations = jnp.concatenate(
             [prompt["observations"][jnp.newaxis], observations], axis=1
         )
-        actions = jnp.concatenate([prompt["actions"][jnp.newaxis], actions], axis=1)
+        if "lam" in config.model.name:
+            rng, latent_rng = jax.random.split(rng)
+            # relabel demo trajectory with latent actions
+            latent_actions = agent.label_trajectory_with_actions(
+                latent_rng, prompt["observations"][jnp.newaxis]
+            )
+            actions = jnp.concatenate([latent_actions, actions], axis=1)
+        else:
+            actions = jnp.concatenate([prompt["actions"][jnp.newaxis], actions], axis=1)
         rewards = jnp.concatenate(
             [prompt["rewards"].reshape(1, -1, 1), rewards], axis=1
         )
@@ -184,7 +192,7 @@ def eval_rollout_dt(
             env_state=None,
             states=observations,
             actions=actions,
-            rewards=rewards if config.model.use_rtg else None,
+            rewards=rewards if config.model.policy.use_rtg else None,
             mask=mask,
             prompt=prompt,
             is_training=False,
@@ -205,6 +213,9 @@ def eval_rollout_dt(
         action = action.reshape(1).astype(jnp.float32)
         reward = reward.reshape(1)
 
+        if "lam" in config.model.name:
+            action = policy_output.latent_action[0, stats.length]
+
         actions = actions.at[0, stats.length].set(action)
 
         # return to go is the previous return minus rewad
@@ -217,6 +228,9 @@ def eval_rollout_dt(
             length=stats.length + 1,
         )
 
+        if action.shape[-1] == 1:
+            action = action.squeeze(axis=-1)
+
         return (
             rng,
             stats,
@@ -227,7 +241,7 @@ def eval_rollout_dt(
             rtg,
             mask,
             done,
-        ), (timestep, action.squeeze(axis=-1))
+        ), (timestep, action)
 
     init_carry = (
         rng,

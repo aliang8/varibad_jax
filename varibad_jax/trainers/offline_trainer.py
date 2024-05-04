@@ -157,7 +157,10 @@ class OfflineTrainer(BaseTrainer):
         for k, v in eval_metrics.items():
             eval_metrics[k] = jnp.mean(jnp.array(v))
 
-        if self.config.model.name == "dt" and self.config.model.demo_conditioning:
+        if (
+            "dt" in self.config.model.name
+            and self.config.model.policy.demo_conditioning
+        ):
             # sample a couple of demo prompts
             num_trajs = self.eval_dataset["observations"].shape[0]
             prompt_idxs = npr.choice(
@@ -174,7 +177,7 @@ class OfflineTrainer(BaseTrainer):
                 agent=self.model,
                 env=self.eval_envs,
                 config=self.config,
-                action_dim=self.input_action_dim,
+                action_dim=self.model.input_action_dim,
                 steps_per_rollout=self.steps_per_rollout,
                 wandb_run=self.wandb_run,
                 prompts=prompts,

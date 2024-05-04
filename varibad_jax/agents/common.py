@@ -17,6 +17,7 @@ class PolicyOutput:
     entropy: Optional[jnp.ndarray] = None
     dist: Optional[tfd.Distribution] = None
     logits: Optional[jnp.ndarray] = None
+    latent_action: Optional[jnp.ndarray] = None
 
 
 class ActionHead(hk.Module):

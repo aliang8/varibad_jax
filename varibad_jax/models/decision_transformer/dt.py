@@ -126,6 +126,45 @@ class LatentDTAgent(LatentActionBaseAgent, DecisionTransformerAgent):
     def _init_model(self):
         DecisionTransformerAgent._init_model(self)
 
+    def label_trajectory_with_actions(self, rng, observations):
+        b = observations.shape[0]
+        # we need to unfold the observations to feed into
+        # the latent action model
+        if not self.lam_cfg.model.idm.use_transformer:
+            windows = []
+            window_size = 2 + self.lam_cfg.model.context_len
+            for i in range(observations.shape[1] - window_size + 1):
+                window = observations[:, i : i + window_size]
+                windows.append(window)
+
+            windows = jnp.stack(windows, axis=1)
+            observations = einops.rearrange(windows, "b t ... -> (b t) ...")
+
+        lam_output, _ = self.lam.model.apply(
+            self.lam._params,
+            self.lam._state,
+            rng,
+            self.lam,
+            states=observations,
+            is_training=False,
+        )
+
+        latent_actions = lam_output.quantize
+
+        if not self.lam_cfg.model.idm.use_transformer:
+            # need to reshape it back, squeeze because the lam predicts a single action
+            latent_actions = einops.rearrange(
+                latent_actions, "(b t) ... -> b t ...", b=b
+            )
+
+            # we're going to be missing the last action
+            # just repeat it for now
+            latent_actions = jnp.concatenate(
+                [latent_actions, latent_actions[:, -2:-1]], axis=1
+            )
+
+        return latent_actions
+
     def loss_fn(
         self, params: hk.Params, state: hk.State, rng: jax.random.PRNGKey, batch: Tuple
     ):
@@ -146,46 +185,10 @@ class LatentDTAgent(LatentActionBaseAgent, DecisionTransformerAgent):
             observations = batch.observations
 
         observations = observations.astype(jnp.float32)
-
-        if not self.lam_cfg.model.idm.use_transformer:
-            # we need to unfold the observations to feed into
-            # the latent action model
-            windows = []
-            window_size = 2 + self.lam_cfg.model.context_len
-            for i in range(observations.shape[1] - window_size + 1):
-                window = observations[:, i : i + window_size]
-                windows.append(window)
-
-            windows = jnp.stack(windows, axis=1)
-            observations = einops.rearrange(windows, "b t ... -> (b t) ...")
-            logging.info(f"reshaped observations: {observations.shape}")
-
-        lam_output, _ = self.lam.model.apply(
-            self.lam._params,
-            self.lam._state,
-            lam_key,
-            self.lam,
-            states=observations,
-            is_training=False,
-        )
-
-        latent_actions = lam_output.quantize
-
-        if not self.lam_cfg.model.idm.use_transformer:
-            # need to reshape it back, squeeze because the lam predicts a single action
-            latent_actions = einops.rearrange(
-                latent_actions, "(b t) ... -> b t ...", b=batch.observations.shape[0]
-            ).squeeze()
-
-            # we're going to be missing the last action
-            # just repeat it for now
-            latent_actions = jnp.concatenate(
-                [latent_actions, latent_actions[:, -2:-1]], axis=1
-            )
-
+        latent_actions = self.label_trajectory_with_actions(lam_key, observations)
         batch.actions = latent_actions
 
         # import ipdb
 
         # ipdb.set_trace()
-        return DecisionTransformerAgent.loss_fn(self, params, state, rng, batch)
+        return DecisionTransformerAgent.loss_fn(self, params, state, policy_key, batch)
