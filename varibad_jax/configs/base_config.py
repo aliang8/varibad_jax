@@ -95,7 +95,6 @@ def get_config(config_string: str = None):
     # where to save experiment artifacts (videos, checkpoints, etc)
     config.root_dir = "/home/anthony/varibad_jax/varibad_jax/"
     config.exp_dir = "/home/anthony/varibad_jax/varibad_jax/"
-    config.dataset_name = ""
     config.exp_name = ""
     config.group_name = ""
     config.ray_logdir = "ray_results"

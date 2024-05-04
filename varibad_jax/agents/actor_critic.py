@@ -58,7 +58,7 @@ class ActorCritic(hk.Module):
             )
 
         self.critic_mlp = hk.nets.MLP(
-            list(self.config.mlp_layers) + [1],
+            list(self.config.mlp_layer_sizes) + [1],
             activation=nn.gelu,
             activate_final=False,
             name="critic",
@@ -66,7 +66,7 @@ class ActorCritic(hk.Module):
         )
 
         self.action_pred = hk.nets.MLP(
-            list(self.config.mlp_layers),
+            list(self.config.mlp_layer_sizes),
             activation=nn.gelu,
             activate_final=True,
             name="action_pred",

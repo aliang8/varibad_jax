@@ -114,13 +114,15 @@ class LatentFDM(hk.Module):
                 )
         else:
             # flatten the last two dimensions
-            prev_states = einops.rearrange(prev_states, "b t d -> b (t d)")
-            prev_state_embed = self.state_embed(prev_states)
-            action_embed = self.action_embed(actions)
-            model_input = jnp.concatenate([prev_state_embed, action_embed], axis=-1)
+            context = einops.rearrange(context, "b t d -> b (t d)")
+            # context_embed = self.state_embed(context)
+            # action_embed = self.action_embed(actions)
+            # model_input = jnp.concatenate([context_embed, action_embed], axis=-1)
+
+            model_input = jnp.concatenate([context, actions], axis=-1)
 
             # predict next state
-            next_state_pred = self.state_decoder(nn.gelu(model_input))
+            next_state_pred = self.state_decoder(model_input)
 
         return next_state_pred
 

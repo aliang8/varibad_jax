@@ -16,19 +16,27 @@ def get_config(config_string: str = None):
     config.tags = ["offline_rl", "jax"]
     config.keys_to_include = {"trainer": None, "env": ["env_name"], "model": ["name"]}
 
-    config.data_dir = "datasets"
-    config.batch_size = 128
+    config.data = ConfigDict(
+        dict(
+            data_dir="datasets",
+            batch_size=128,
+            dataset_name="5x5",
+            num_trajs=-1,
+            train_frac=0.95,
+            data_type="trajectories",
+            # for training LAPO
+            context_len=1,
+            # ICL - Raparthy et. al hyperparameters
+            num_trajs_per_batch=1,
+            burstiness=0.5,
+        )
+    )
+
     config.num_epochs = 1000
-    config.train_frac = 1.0
     config.eval_interval = 50
-    config.num_trajs = -1
     # config.save_key = ""
 
     config.embedding_dim = 64
-
-    # ICL - Raparthy et. al hyperparameters
-    config.num_traj_per_batch = 3  # number of different trajectories
-    config.burstiness = 0.5  # at least two trajectories are from the same MDP / level
 
     transformer_config.embedding_dim = config.get_ref("embedding_dim")
 
@@ -50,19 +58,37 @@ def get_config(config_string: str = None):
         image_encoder_config = None
         image_decoder_config = None
 
+    dt_config = ConfigDict(
+        dict(
+            name="dt",
+            transformer_config=transformer_config,
+            image_encoder_config=image_encoder_config,
+            batch_first=True,
+            use_rtg=False,
+            image_obs=config.env.get_ref("image_obs"),
+            task_conditioning=False,
+            demo_conditioning=True,
+        )
+    )
+    bc_config = ConfigDict(
+        dict(
+            image_obs=config.env.get_ref("image_obs"),
+            pass_latent_to_policy=False,
+            pass_task_to_policy=True,
+            embedding_dim=config.get_ref("embedding_dim"),
+            mlp_layer_sizes=[128, 128],
+            gaussian_policy=False,
+        )
+    )
+
+    lam_ckpt = "/home/anthony/varibad_jax/varibad_jax/results/lam/en-gridworld/pn-lam/t-offline"
+    latent_action_decoder_ckpt = "/home/anthony/varibad_jax/varibad_jax/results/action_decoder/en-gridworld/pn-latent_action_decoder/t-offline"
+
     models = {
-        "dt": ConfigDict(
-            dict(
-                name="dt",
-                transformer_config=transformer_config,
-                image_encoder_config=image_encoder_config,
-                batch_first=True,
-                use_rtg=False,
-                image_obs=config.env.get_ref("image_obs"),
-                task_conditioning=False,
-                demo_conditioning=True,
-            )
+        "bc": ConfigDict(
+            dict(name="bc", image_obs=config.env.get_ref("image_obs"), policy=bc_config)
         ),
+        "dt": dt_config,
         "lam": ConfigDict(
             dict(
                 name="lam",
@@ -82,7 +108,7 @@ def get_config(config_string: str = None):
                     code_dim=16,
                     beta=0.25,
                     ema_decay=0.99,
-                    layer_sizes=[64, 64],
+                    layer_sizes=[32, 32],
                 ),
                 fdm=dict(
                     image_obs=config.env.get_ref("image_obs"),
@@ -93,33 +119,40 @@ def get_config(config_string: str = None):
                     use_transformer_idm=False,
                 ),
                 beta_loss_weight=1.0,
-                num_context=0,
+                context_len=config.data.get_ref("context_len"),
             )
         ),
         "latent_action_decoder": ConfigDict(
             dict(
                 name="latent_action_decoder",
                 image_obs=config.env.get_ref("image_obs"),
-                lam_ckpt="/home/anthony/varibad_jax/varibad_jax/results/transformer_encoder_en-xland_pn-lam_t-offline",
+                lam_ckpt=lam_ckpt,
                 latent_action_dim=16,
-                num_context=0,
+                context_len=config.data.get_ref("context_len"),
                 mlp_layer_sizes=[128, 128],
             )
         ),
-        "lapo_agent": ConfigDict(
+        "lam_agent": ConfigDict(
             dict(
-                name="lapo_bc_agent",
+                name="lam_agent",
                 image_obs=config.env.get_ref("image_obs"),
-                pass_latent_to_policy=False,
-                pass_task_to_policy=True,
+                policy=bc_config,
                 image_encoder_config=image_encoder_config,
-                embedding_dim=config.get_ref("embedding_dim"),
-                mlp_layers=[64, 64, 64],
                 latent_action_dim=16,
-                gaussian_policy=False,
-                num_context=0,
-                lam_ckpt="/home/anthony/varibad_jax/varibad_jax/results/transformer_encoder_en-xland_pn-lam_t-offline",
-                latent_action_decoder_ckpt="/home/anthony/varibad_jax/varibad_jax/results/en-xland_pn-lapo_action_decoder_t-offline",
+                context_len=config.data.get_ref("context_len"),
+                lam_ckpt=lam_ckpt,
+                latent_action_decoder_ckpt=latent_action_decoder_ckpt,
+            )
+        ),
+        "dt_lam_agent": ConfigDict(
+            dict(
+                name="dt_lam_agent",
+                policy=dt_config,
+                image_obs=config.env.get_ref("image_obs"),
+                image_encoder_config=image_encoder_config,
+                latent_action_dim=16,
+                lam_ckpt=lam_ckpt,
+                latent_action_decoder_ckpt=latent_action_decoder_ckpt,
             )
         ),
     }

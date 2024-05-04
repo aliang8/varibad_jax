@@ -57,43 +57,62 @@ class GridNavi:
     def xy_to_id(self, params: EnvParamsT, xy: List[int]):
         return xy[0] + xy[1] * params.grid_size
 
-    def reset(self, params: EnvParamsT, rng: jax.Array):
+    def reset(self, params: EnvParamsT, rng: jax.Array, desired_goal: jax.Array = None):
         init_rng, goal_rng = jax.random.split(rng)
-        if self.random_init:
-            init_xy = jax.random.randint(init_rng, (2,), 0, params.grid_size)
+
+        possible_states = jnp.dstack(
+            jnp.meshgrid(jnp.arange(self.grid_size), jnp.arange(self.grid_size))
+        ).reshape(-1, 2)
+
+        if desired_goal is not None:
+            if self.random_init:
+                id_ = self.xy_to_id(params, desired_goal)
+
+                # sample random init state that is not the goal
+                possible_init_states = jnp.delete(
+                    possible_states,
+                    jnp.array([id_]),
+                    axis=0,
+                    assume_unique_indices=True,
+                )
+                indx = jax.random.randint(init_rng, (1,), 0, len(possible_init_states))[
+                    0
+                ]
+                init_xy = possible_init_states[indx]
+            else:
+                init_xy = jnp.array(self.init_state)
+
+            goal = desired_goal
         else:
-            init_xy = jnp.array(self.init_state)
+            if self.random_init:
+                init_xy = jax.random.randint(init_rng, (2,), 0, params.grid_size)
+
+                # remove init_xy
+                id_ = self.xy_to_id(params, init_xy)
+                possible_states = jnp.delete(
+                    possible_states,
+                    jnp.array([id_]),
+                    axis=0,
+                    assume_unique_indices=True,
+                )
+            else:
+                init_xy = jnp.array(self.init_state)
+
+                # remove (0,0), (0,1), (1,0), and (1,1)
+                possible_states = jnp.delete(
+                    possible_states,
+                    jnp.array([0, 1, 5, 6]),
+                    axis=0,
+                    assume_unique_indices=True,
+                )
+
+            possible_states = jnp.array(possible_states)
+
+            # sample a random goal
+            indx = jax.random.randint(goal_rng, (1,), 0, len(possible_states))[0]
+            goal = possible_states[indx]
 
         obs = init_xy
-
-        if self.random_init:
-            possible_goals = jnp.dstack(
-                jnp.meshgrid(jnp.arange(self.grid_size), jnp.arange(self.grid_size))
-            ).reshape(-1, 2)
-
-            # remove init_xy
-            id_ = self.xy_to_id(params, init_xy)
-            possible_goals = jnp.delete(
-                possible_goals, jnp.array([id_]), axis=0, assume_unique_indices=True
-            )
-        else:
-            possible_goals = jnp.dstack(
-                jnp.meshgrid(jnp.arange(self.grid_size), jnp.arange(self.grid_size))
-            ).reshape(-1, 2)
-            # remove (0,0), (0,1), (1,0), and (1,1)
-            possible_goals = jnp.delete(
-                possible_goals,
-                jnp.array([0, 1, 5, 6]),
-                axis=0,
-                assume_unique_indices=True,
-            )
-
-        possible_goals = jnp.array(possible_goals)
-
-        # sample a random goal
-        indx = jax.random.randint(goal_rng, (1,), 0, len(possible_goals))[0]
-        goal = possible_goals[indx]
-
         # sample a new task from num_cells
         state = State(key=rng, step_num=jnp.array(0), goal=goal, success=jnp.array(0))
         timestep = TimeStep(

@@ -49,6 +49,7 @@ class LatentActionModel(BaseModel):
 
         # [B, C, H, W] or [B, T, C, H, W]
         next_state_pred = fdm(context, latent_action, is_training=is_training)
+        logging.info(f"next_state_pred: {next_state_pred.shape}")
 
         return LAMOutput(
             next_obs_pred=next_state_pred,
@@ -59,7 +60,7 @@ class LatentActionModel(BaseModel):
         )
 
     def _init_model(self):
-        t, bs = 2 + self.config.num_context, 2
+        t, bs = 2 + self.config.context_len, 2
         dummy_states = np.zeros((bs, t, *self.observation_shape), dtype=np.float32)
 
         self._params, self._state = self.model.init(
@@ -106,6 +107,9 @@ class LatentActionModel(BaseModel):
                 gt_next_obs = batch.observations[:, -1]
                 recon_loss = optax.squared_error(next_obs_pred, gt_next_obs)
                 recon_loss = jnp.mean(recon_loss)
+        else:
+            recon_loss = optax.squared_error(next_obs_pred, batch.observations[:, -1])
+            recon_loss = jnp.mean(recon_loss)
 
         metrics = {
             "recon_loss": recon_loss,
@@ -201,11 +205,13 @@ class LatentActionDecoder(BaseModel):
             is_training=True,
         )
 
+        # jax.debug.breakpoint()
+
         if self.lam_cfg.model.idm.use_transformer:
             gt_actions = batch.actions[:, :-1]
         else:
             # TODO: make sure i'm predicting the right action
-            gt_actions = batch.actions[:, -self.config.num_context]
+            gt_actions = batch.actions[:, -2]
 
         if self.is_continuous:
             loss = optax.squared_error(action_pred.action, gt_actions)
@@ -229,12 +235,13 @@ class LatentActionDecoder(BaseModel):
         return loss, (metrics, state)
 
 
-class LatentActionAgent(BaseAgent):
-    """
-    BC Agent that maps observations to latent actions using a pretrained IDM
-    """
-
+class LatentActionBaseAgent(BaseAgent):
     def __init__(self, *args, **kwargs):
+        # TODO: fix this, probably not a good idea
+        kwargs["action_dim"] = kwargs["config"].latent_action_dim
+        kwargs["input_action_dim"] = kwargs["config"].latent_action_dim
+        kwargs["continuous_actions"] = True
+
         super().__init__(*args, **kwargs)
 
         # load pretrained IDM/FDM for predicting the latent actions from observations
@@ -249,12 +256,12 @@ class LatentActionAgent(BaseAgent):
             continuous_actions=self.is_continuous,
         )
 
-        lapo_key, decoder_key = jax.random.split(self._init_key, 2)
+        lam_key, decoder_key = jax.random.split(self._init_key, 2)
 
         # TODO(anthony): hard-coding the checkpoint now, fix this
-        self.lapo_model = LatentActionModel(
+        self.lam = LatentActionModel(
             self.lam_cfg.model,
-            key=lapo_key,
+            key=lam_key,
             load_from_ckpt=True,
             ckpt_dir=Path(self.config.lam_ckpt),
             **extra_kwargs,
@@ -266,8 +273,8 @@ class LatentActionAgent(BaseAgent):
             with open(config_file, "r") as f:
                 self.latent_action_decoder_cfg = ConfigDict(json.load(f))
 
-            self.lapo_action_decoder = LatentActionDecoder(
-                lapo_model=self.lapo_model,
+            self.latent_action_decoder = LatentActionDecoder(
+                lam=self.lam,
                 config=self.latent_action_decoder_cfg.model,
                 key=decoder_key,
                 load_from_ckpt=True,
@@ -275,12 +282,18 @@ class LatentActionAgent(BaseAgent):
                 **extra_kwargs,
             )
 
+
+class LatentActionAgent(LatentActionBaseAgent):
+    """
+    BC Agent that maps observations to latent actions using a pretrained IDM
+    """
+
     @hk.transform_with_state
     def model(self, states, tasks=None, is_training=True, **kwargs):
         # predicts the latent action
         policy = ActorCritic(
-            self.config,
-            is_continuous=True,  # we are predicting latent actions which are continuous vectors
+            self.config.policy,
+            is_continuous=self.is_continuous,  # we are predicting latent actions which are continuous vectors
             action_dim=self.config.latent_action_dim,
         )
         policy_output = policy(states, task=tasks, is_training=is_training)
@@ -292,7 +305,7 @@ class LatentActionAgent(BaseAgent):
         if self.config.image_obs:
             dummy_state = einops.rearrange(dummy_state, "b t h w c -> b t c h w")
 
-        if self.config.pass_task_to_policy:
+        if self.config.policy.pass_task_to_policy:
             dummy_task = np.zeros((bs, t, self.task_dim), dtype=np.float32)
         else:
             dummy_task = None
@@ -308,15 +321,15 @@ class LatentActionAgent(BaseAgent):
     def loss_fn(
         self, params: hk.Params, state: hk.State, rng: jax.random.PRNGKey, batch: Tuple
     ):
-        logging.info(f"lapo loss function, observations: {batch.observations.shape}")
+        logging.info(f"lam loss function, observations: {batch.observations.shape}")
 
-        lapo_key, policy_key = jax.random.split(rng, 2)
+        lam_key, policy_key = jax.random.split(rng, 2)
 
         # predict the latent action from observations with pretrained model
         lam_output, _ = self.lam.model.apply(
             self.lam._params,
             self.lam._state,
-            lapo_key,
+            lam_key,
             self.lam,
             states=batch.observations.astype(jnp.float32),
             is_training=False,
@@ -338,8 +351,8 @@ class LatentActionAgent(BaseAgent):
             state,
             policy_key,
             self,
-            states=observations[:, -self.config.num_context].astype(jnp.float32),
-            tasks=batch.tasks[:, -self.config.num_context],
+            states=observations[:, -2].astype(jnp.float32),
+            tasks=batch.tasks[:, -2],
             is_training=True,
         )
         loss = optax.squared_error(action_output.action, latent_actions)
@@ -349,7 +362,7 @@ class LatentActionAgent(BaseAgent):
         return loss, (metrics, state)
 
     @partial(jax.jit, static_argnames=("self", "is_training"))
-    def get_action_jit(self, params, state, rng, env_state, task, **kwargs):
+    def get_action_jit(self, params, state, rng, env_state, tasks, **kwargs):
         logging.info("inside get action for LatentActionAgent")
 
         la_key, decoder_key = jax.random.split(rng, 2)
@@ -359,7 +372,7 @@ class LatentActionAgent(BaseAgent):
 
         # predict latent action and then use pretrained action decoder
         la_output, _ = self.model.apply(
-            params, state, la_key, self, env_state, task, **kwargs
+            params, state, la_key, self, env_state, tasks, **kwargs
         )
         latent_actions = la_output.action
 

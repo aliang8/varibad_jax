@@ -110,8 +110,11 @@ def eval_rollout_dt(
     **kwargs,
 ) -> RolloutStats:
     rng, reset_rng = jax.random.split(rng, 2)
-    xtimestep = env.reset(env.env_params, reset_rng)
+    if config.model.demo_conditioning and prompt is not None:
+        # set the goal to be the same as the one in the prompt
+        desired_goal = prompt["tasks"][0]
 
+    xtimestep = env.reset(env.env_params, reset_rng, desired_goal=desired_goal)
     observation_shape = xtimestep.timestep.observation.shape
 
     # first dimension is batch
@@ -132,7 +135,7 @@ def eval_rollout_dt(
         prompt = task
     elif config.model.demo_conditioning:
         logging.info("adding prompt info before trajectory")
-        # prepend prompt into the observations
+        # prepend prompt into the input tokens
         num_prompt_steps = prompt["observations"].shape[0]
         observations = jnp.concatenate(
             [prompt["observations"][jnp.newaxis], observations], axis=1
@@ -147,6 +150,8 @@ def eval_rollout_dt(
         prompt = None
     else:
         prompt = None
+
+    # jax.debug.breakpoint()
 
     stats = RolloutStats(episode_return=0, length=start_index)
 
@@ -267,6 +272,8 @@ def eval_rollout(
     if len(task.shape) == 1:
         task = task[jnp.newaxis]
 
+    task = task.astype(jnp.float32)
+
     prev_action = jnp.zeros((1, action_dim))
     prev_reward = jnp.zeros((1, 1))
     done = False
@@ -294,13 +301,12 @@ def eval_rollout(
         if len(task.shape) == 1:
             task = task[jnp.newaxis]
 
-        # import ipdb
+        task = task.astype(jnp.float32)
 
-        # ipdb.set_trace()
         policy_output, _ = agent.get_action(
             policy_rng,
             env_state=observation,
-            task=task,
+            tasks=task,
             is_training=False,
         )
         action = policy_output.action

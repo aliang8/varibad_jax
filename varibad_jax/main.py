@@ -116,28 +116,28 @@ def update(source, overrides):
 
 
 def create_exp_name(param_space, config):
-    trial_str = config["exp_name"] + "_"
+    trial_str = config["exp_name"] + ","
 
     for k, override in param_space.items():
         if k in config:
             if isinstance(override, dict) and "grid_search" not in override:
                 for k2 in override.keys():
                     if k2 in config[k]:
-                        trial_str += f"{psh[k][k2]}-{config[k][k2]}_"
+                        trial_str += f"{psh[k][k2]}-{config[k][k2]},"
             else:
-                trial_str += f"{psh[k]}-{config[k]}_"
+                trial_str += f"{psh[k]}-{config[k]},"
 
     # also add keys to include
     for k, v in config["keys_to_include"].items():
         if v is None:
             if k not in param_space:
-                trial_str += f"{psh[k]}-{config[k]}_"
+                trial_str += f"{psh[k]}-{config[k]},"
         else:
             for k2 in v:
                 if k not in param_space or (
                     k in param_space and k2 not in param_space[k]
                 ):
-                    trial_str += f"{psh[k][k2]}-{config[k][k2]}_"
+                    trial_str += f"{psh[k][k2]}-{config[k][k2]},"
 
     trial_str = trial_str[:-1]
     print("trial_str: ", trial_str)

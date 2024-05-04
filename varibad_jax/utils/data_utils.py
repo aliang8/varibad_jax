@@ -12,6 +12,7 @@ import tqdm
 import numpy.random as npr
 from ml_collections.config_dict import ConfigDict
 from collections.abc import Generator
+from torch.utils.data import Dataset, DataLoader
 
 
 @chex.dataclass
@@ -60,10 +61,7 @@ TEST_CHUNK_LEN = 4096
 
 
 def numpy_collate(batch):
-    import ipdb
-
-    ipdb.set_trace()
-    return tree_map(lambda x: x.numpy(), batch)
+    return tree_map(np.asarray, data.default_collate(batch))
 
 
 class NumpyLoader(data.DataLoader):
@@ -200,7 +198,7 @@ class DataStager:
 
 
 def load_data(config: ConfigDict, rng: npr.RandomState, steps_per_rollout: int):
-    data_dir = Path(config.root_dir) / config.data_dir
+    data_dir = Path(config.root_dir) / config.data.data_dir
 
     if config.env.env_name == "procgen":
         train_data = DataStager(
@@ -216,7 +214,7 @@ def load_data(config: ConfigDict, rng: npr.RandomState, steps_per_rollout: int):
         return train_data, eval_data
 
     # load dataset
-    dataset_name = f"{config.dataset_name}_eid-{config.env.env_id}_n-{config.num_rollouts_collect}_steps-{steps_per_rollout}"
+    dataset_name = f"{config.data.dataset_name}_eid-{config.env.env_id}_n-{config.num_rollouts_collect}_steps-{steps_per_rollout}"
     data_path = data_dir / dataset_name / "dataset.pkl"
     logging.info(f"loading data from {data_path}")
     with open(data_path, "rb") as f:
@@ -236,16 +234,20 @@ def load_data(config: ConfigDict, rng: npr.RandomState, steps_per_rollout: int):
         data["rewards"] = returns
 
     # [B, T, *], trajectory data
-    if config.num_trajs != -1:
-        indices = rng.choice(num_trajs, size=config.num_trajs, replace=False)
+    if config.data.num_trajs != -1:
+        indices = rng.choice(num_trajs, size=config.data.num_trajs, replace=False)
         for k, v in data.items():
             data[k] = v[indices]
 
     for k, v in data.items():
         logging.info(f"{k}: {v.shape}")
 
+    if config.data.data_type == "transitions":
+        for k, v in data.items():
+            data[k] = einops.rearrange(v, "B T ... -> (B T) ...")
+
     dataset_size = data["observations"].shape[0]
-    num_train = int(dataset_size * config.train_frac)
+    num_train = int(dataset_size * config.data.train_frac)
 
     # split into train and eval
     train_data = {k: v[:num_train] for k, v in data.items()}
@@ -253,57 +255,120 @@ def load_data(config: ConfigDict, rng: npr.RandomState, steps_per_rollout: int):
     return train_data, eval_data
 
 
-def create_traj_loader(data, rng, batch_size, num_traj_per_batch: int = 1):
-    num_samples = data["observations"].shape[0]
-    original_batch_size = batch_size
-    batch_size = batch_size * num_traj_per_batch
-    num_complete_batches, leftover = divmod(num_samples, batch_size)
-    num_batches = num_complete_batches + bool(leftover)
+class TransitionsDataset(Dataset):
+    def __init__(self, data, data_cfg):
+        self.data = data
+        self.data_cfg = data_cfg
 
-    def data_stream():
-        while True:
-            perm = rng.permutation(num_samples)
-            for i in range(num_complete_batches):  # only work with complete batches
-                # TODO: fix this, a hack to stitch together multiple trajectories
-                batch_idx = perm[i * batch_size : (i + 1) * batch_size]
-                batch = Batch(
-                    **{
-                        k: v[batch_idx].reshape(original_batch_size, -1, *v.shape[2:])
-                        for k, v in data.items()
-                    }
-                )
-                yield batch
+        # # subsample where only the o_t is valid
+        # mask = self.data["mask"][:, -2]
+        # for k, v in self.data.items():
+        #     self.data[k] = v[torch.where(mask > 0)]
 
-    batches = data_stream()
-    return batches, num_batches
+        self.num_samples = self.data["observations"].shape[0]
+
+    def __getitem__(self, index):
+        data = {}
+        for k, v in self.data.items():
+            data[k] = v[index]
+        return data
+
+    def __len__(self):
+        return self.num_samples
 
 
-def create_lapo_loader(data, rng, batch_size, num_context: int = 0):
-    # sample small windows of transitions in a trajectory
-    num_trajs, num_timesteps = data["observations"].shape[:2]
-    num_complete_batches, leftover = divmod(num_trajs, batch_size)
-    num_batches = num_complete_batches + bool(leftover)
+class TrajectoryDataset(Dataset):
+    def __init__(self, data, data_cfg):
+        self.data = data
+        self.data_cfg = data_cfg
+        self.num_trajectories = self.data["observations"].shape[0]
 
-    def data_stream():
-        while True:
-            perm = rng.permutation(num_trajs)
-            for i in range(num_batches):
-                batch_idx = perm[i * batch_size : (i + 1) * batch_size]
-                mask = data["mask"][batch_idx]
-                valid_ranges = mask.sum(axis=1)
+        # map from trajectory index to task index
+        self.tasks = self.data["tasks"][:, 0]
+        self.traj_to_task_id_map = {}
+        for indx, task in enumerate(self.tasks):
+            self.traj_to_task_id_map[indx] = task
 
-                # sample time_idx that is valid for each trajectory in the batch
-                time_idx = rng.randint(valid_ranges)
+        self.task_id_to_traj_map = {}
+        for indx, task in enumerate(self.tasks):
+            if tuple(task) not in self.task_id_to_traj_map:
+                self.task_id_to_traj_map[tuple(task)] = []
+            self.task_id_to_traj_map[tuple(task)].append(indx)
 
-                batch = Batch(
-                    **{
-                        k: np.stack(
-                            [v[batch_idx, time_idx], v[batch_idx, time_idx + 1]], axis=1
-                        )
-                        for k, v in data.items()
-                    }
-                )
-                yield batch
+    def __getitem__(self, index):
+        data = {}
+        for k, v in self.data.items():
+            data[k] = v[index]
 
-    batches = data_stream()
-    return batches, num_batches
+        if self.data_cfg.num_trajs_per_batch > 1:
+            for _ in range(self.data_cfg.num_trajs_per_batch - 1):
+                task_id = data["tasks"][0]
+                traj_ids = self.task_id_to_traj_map[
+                    tuple(task_id)
+                ]  # all the trajectories with the same task
+
+                # choose a random new trajectory with the same MDP to combine
+                traj_id = np.random.choice(traj_ids)
+
+                for k, v in self.data.items():
+                    data[k] = np.concatenate([data[k], v[traj_id]], axis=0)
+
+        for k, v in data.items():
+            data[k] = torch.Tensor(v)
+
+        return data
+
+    def __len__(self):
+        return self.num_trajectories
+
+
+class LAPODataset(Dataset):
+    def __init__(self, data, data_cfg):
+        self.data = data
+        self.data_cfg = data_cfg
+
+        # restructure it to be N-step transitions
+        for k, v in self.data.items():
+            v = torch.from_numpy(v)
+
+            # unfold it so we can get N-step transitions
+            v = v.unfold(1, self.data_cfg.context_len + 2, 1).movedim(-1, 2)
+            self.data[k] = einops.rearrange(v, "B T ... -> (B T) ...")
+
+        # subsample where only the o_t is valid
+        # mask = self.data["mask"][:, -2]
+        # for k, v in self.data.items():
+        #     self.data[k] = v[torch.where(mask > 0)]
+
+        # import ipdb
+
+        # ipdb.set_trace()
+        self.num_samples = self.data["observations"].shape[0]
+
+    def __getitem__(self, index):
+        data = {}
+        for k, v in self.data.items():
+            data[k] = v[index]
+        return data
+
+    def __len__(self):
+        return self.num_samples
+
+
+def create_data_loader(data, data_cfg):
+    for k, v in data.items():
+        data[k] = np.asarray(v)
+
+    if data_cfg.data_type == "trajectories":
+        torch_dataset = TrajectoryDataset(data, data_cfg)
+    elif data_cfg.data_type == "lapo":
+        torch_dataset = LAPODataset(data, data_cfg)
+    elif data_cfg.data_type == "transitions":
+        torch_dataset = TransitionsDataset(data, data_cfg)
+
+    return NumpyLoader(
+        torch_dataset,
+        batch_size=data_cfg.batch_size,
+        shuffle=True,
+        drop_last=True,
+    )

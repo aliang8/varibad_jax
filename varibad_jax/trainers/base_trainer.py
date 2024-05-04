@@ -31,7 +31,12 @@ class BaseTrainer:
         np.random.seed(config.seed)
 
         # setup log dirs
-        self.exp_dir = Path(self.config.exp_dir)
+        # split exp_dir by ,
+        root_dir = Path(config.exp_dir).parent
+        base_name = Path(config.exp_dir).name
+        subfolders = base_name.split(",")
+
+        self.exp_dir = Path(root_dir, *subfolders)
         print("experiment dir: ", self.exp_dir)
         self.ckpt_dir = self.exp_dir / "model_ckpts"
         self.video_dir = self.exp_dir / "videos"

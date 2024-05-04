@@ -126,6 +126,7 @@ class BaseAgent(BaseModel):
     @partial(jax.jit, static_argnames=("self", "is_training"))
     def get_action_jit(self, params, state, rng, env_state, **kwargs):
         logging.info("inside get action")
+        logging.info(kwargs)
         # jax.debug.print("{x}", x=params["ActorCritic/~/task_embed"]["w"].mean())
         return self.model.apply(params, state, rng, self, env_state, **kwargs)
 

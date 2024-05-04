@@ -22,13 +22,13 @@ from varibad_jax.utils.rollout import run_rollouts
 
 from varibad_jax.trainers.base_trainer import BaseTrainer
 import varibad_jax.utils.general_utils as gutl
-from varibad_jax.utils.data_utils import (
-    load_data,
-    create_traj_loader,
-    create_lapo_loader,
-)
+from varibad_jax.utils.data_utils import load_data, create_data_loader, Batch
 
-from varibad_jax.models.decision_transformer.dt import DecisionTransformerAgent
+from varibad_jax.models.bc.bc import BCAgent
+from varibad_jax.models.decision_transformer.dt import (
+    DecisionTransformerAgent,
+    LatentDTAgent,
+)
 from varibad_jax.models.lam.lam import (
     LatentActionModel,
     LatentActionAgent,
@@ -63,35 +63,28 @@ class OfflineTrainer(BaseTrainer):
             self.num_train_batches = 50
             self.num_eval_batches = 2
         else:
-            loader = partial(
-                create_traj_loader, num_traj_per_batch=config.num_traj_per_batch
+            self.train_dataloader = create_data_loader(
+                train_dataset, data_cfg=config.data
             )
-
-            if "lapo" in self.config.exp_name:
-                loader = create_lapo_loader
-
-            self.train_dataloader, self.num_train_batches = loader(
-                train_dataset, rng, batch_size=config.batch_size
+            self.eval_dataloader = create_data_loader(
+                eval_dataset, data_cfg=config.data
             )
-            self.eval_dataloader, self.num_eval_batches = loader(
-                eval_dataset, rng, batch_size=config.batch_size
-            )
-
             logging.info(
-                f"num_train_batches: {self.num_train_batches}, num_eval_batches: {self.num_eval_batches}"
+                f"num train batches: {len(self.train_dataloader)}, num eval batches: {len(self.eval_dataloader)}"
             )
 
         # test dataloader
-        batch = next(self.train_dataloader)
+        batch = next(iter(self.train_dataloader))
+
         for k, v in batch.items():
             logging.info(f"{k}: {v.shape}")
 
-        # batch = next(self.eval_dataloader)
-        # for k, v in batch.items():
-        #     logging.info(f"{k}: {v.shape}")
-
-        if self.config.model.name == "dt":
+        if self.config.model.name == "bc":
+            model_cls = BCAgent
+        elif self.config.model.name == "dt":
             model_cls = DecisionTransformerAgent
+        elif self.config.model.name == "dt_lam_agent":
+            model_cls = LatentDTAgent
         elif self.config.model.name == "lam":
             model_cls = LatentActionModel
         elif self.config.model.name == "latent_action_decoder":
@@ -125,8 +118,8 @@ class OfflineTrainer(BaseTrainer):
             # iterate over batches of data
             start_time = time.time()
             epoch_metrics = dd(list)
-            for _ in range(self.num_train_batches):
-                batch = next(self.train_dataloader)
+            for batch in self.train_dataloader:
+                batch = Batch(**batch)
                 metrics = self.model.update(next(self.rng_seq), batch)
                 for k, v in metrics.items():
                     epoch_metrics[k].append(v)
@@ -155,10 +148,9 @@ class OfflineTrainer(BaseTrainer):
         eval_metrics = dd(list)
 
         # run on eval batches
-        for _ in range(self.num_eval_batches):
-            metrics = self.model.update(
-                next(self.rng_seq), next(self.eval_dataloader), update_model=False
-            )
+        for batch in self.eval_dataloader:
+            batch = Batch(**batch)
+            metrics = self.model.update(next(self.rng_seq), batch, update_model=False)
             for k, v in metrics.items():
                 eval_metrics[k].append(v)
 

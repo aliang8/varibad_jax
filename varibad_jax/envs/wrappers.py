@@ -43,8 +43,8 @@ class BAMDPWrapper(Wrapper):
         except:
             self.bamdp_horizon = steps_per_rollout * num_episodes_per_rollout
 
-    def reset(self, env_params: EnvParamsT, rng: PRNGKey):
-        timestep = self.env.reset(env_params, rng)
+    def reset(self, env_params: EnvParamsT, rng: PRNGKey, **kwargs):
+        timestep = self.env.reset(env_params, rng, **kwargs)
 
         xtimestep = TimestepInfo(
             timestep=timestep,
@@ -59,11 +59,13 @@ class BAMDPWrapper(Wrapper):
         )
         return xtimestep
 
-    def __auto_reset(self, env_params: EnvParamsT, timestep: TimeStep, key: PRNGKey):
+    def __auto_reset(
+        self, env_params: EnvParamsT, timestep: TimeStep, key: PRNGKey, **kwargs
+    ):
         # key, _ = jax.random.split(timestep.state.key)
         # always reset to the same initial state after a trial is complete
         # TODO: not sure if this is always correct
-        reset_timestep = self._env.reset(env_params, key)
+        reset_timestep = self._env.reset(env_params, key, **kwargs)
 
         timestep = timestep.replace(
             state=reset_timestep.state,
@@ -71,7 +73,13 @@ class BAMDPWrapper(Wrapper):
         )
         return timestep
 
-    def step(self, env_params: EnvParamsT, xtimestep: TimestepInfo, action: jax.Array):
+    def step(
+        self,
+        env_params: EnvParamsT,
+        xtimestep: TimestepInfo,
+        action: jax.Array,
+        **kwargs
+    ):
         timestep = self.env.step(env_params, xtimestep.timestep, action)
 
         # ignore environment done
@@ -84,7 +92,9 @@ class BAMDPWrapper(Wrapper):
         # when the MDP is done, we reset back to initial timestep, but keep the same task
         timestep = jax.lax.cond(
             done_mdp,
-            lambda: self.__auto_reset(env_params, timestep, xtimestep.init_key),
+            lambda: self.__auto_reset(
+                env_params, timestep, xtimestep.init_key, **kwargs
+            ),
             lambda: timestep,
         )
 
