@@ -29,6 +29,7 @@ def get_config(config_string: str = None):
             # ICL - Raparthy et. al hyperparameters
             num_trajs_per_batch=1,
             burstiness=0.5,
+            holdout_tasks=False,
         )
     )
 
@@ -73,6 +74,7 @@ def get_config(config_string: str = None):
     bc_config = ConfigDict(
         dict(
             image_obs=config.env.get_ref("image_obs"),
+            image_encoder_config=image_encoder_config,
             pass_latent_to_policy=False,
             pass_task_to_policy=True,
             embedding_dim=config.get_ref("embedding_dim"),

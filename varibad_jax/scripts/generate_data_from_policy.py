@@ -74,7 +74,7 @@ def main(_):
         belief_model = None
 
     agent = PPOAgent(
-        config=config_p.policy,
+        config=config_p.model,
         observation_shape=envs.observation_space.shape,
         action_dim=action_dim,
         input_action_dim=input_action_dim,
@@ -107,7 +107,7 @@ def main(_):
     data_dir = (
         Path(config.root_dir)
         / "datasets"
-        / f"{config.dataset_name}_eid-{config.env.env_id}_n-{config.num_rollouts_collect}_steps-{steps_per_rollout}"
+        / f"{config.data.dataset_name}_eid-{config.env.env_id}_n-{config.num_rollouts_collect}_steps-{steps_per_rollout}"
     )
     data_dir.mkdir(exist_ok=True, parents=True)
     data_file = data_dir / "dataset.pkl"

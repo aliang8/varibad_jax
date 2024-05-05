@@ -44,7 +44,7 @@ def get_config(config_string: str = None):
             pass_belief_to_policy=False,
             pass_task_to_policy=False,
             use_hyperx_bonuses=False,
-            mlp_layers=[64, 64],
+            mlp_layer_sizes=[64, 64],
             actor_activation_function="tanh",
             algo="ppo",
             name="ppo",
@@ -65,14 +65,14 @@ def get_config(config_string: str = None):
             gaussian_policy=False,
         )
     )
-    config.policy = policy_config
+    config.model = policy_config
 
     config.notes = "RL"
     config.tags = ["rl", "jax"]
     config.keys_to_include = {
         "trainer": None,
         "env": ["env_name"],
-        "policy": ["algo", "pass_latent_to_policy", "pass_task_to_policy"],
+        "model": ["algo", "pass_latent_to_policy", "pass_task_to_policy"],
     }
 
     return config

@@ -105,7 +105,7 @@ def get_config(config_string: str = None):
     config.num_eval_rollouts = 10
 
     # number of eval rollout videos to save
-    config.visualize_rollouts = False
+    config.visualize_rollouts = True
     config.num_eval_rollouts_save = 3
     config.skip_first_eval = False
     config.run_eval_rollouts = True

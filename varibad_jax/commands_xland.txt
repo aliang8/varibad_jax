@@ -3,53 +3,85 @@
 python3 main.py \
     --config=configs/rl_config.py:lstm-xland-5x5 \
     --config.smoke_test=True \
-    --config.use_wb=True \
+    --config.use_wb=False \
+    --config.exp_name="oracle" \
     --config.env.num_episodes_per_rollout=1 \
     --config.env.steps_per_rollout=50 \
-    --config.exp_name="9x9_50_steps" \
     --config.visualize_rollouts=True \
-    --config.policy.entropy_coeff=0.05
+    --config.model.entropy_coeff=0.05
 
 python3 scripts/train_xland_oracle.py
 
 # Generate expert data
 python3 scripts/generate_data_from_policy.py \
-    --config=configs/offline_config.py:xland \
-    --config.model_ckpt_dir=results/9x9_en-xland_alg-ppo_pltp-False_pttp-False_t-rl \
-    --config.dataset_name=9x9
+    --config=configs/offline_config.py:xland-5x5 \
+    --config.model_ckpt_dir=results/oracle/en-xland/alg-ppo/pltp-False/pttp-False/t-rl/ \
+    --config.data.dataset_name=9x9
 
+# train regular BC policy
+CUDA_VISIBLE_DEVICES=7 python3 main.py \
+    --config=configs/offline_config.py:bc-xland-5x5 \
+    --config.smoke_test=True \
+    --config.exp_name="bc" \
+    --config.use_wb=False \
+    --config.data.dataset_name=9x9 \
+    --config.env.num_episodes_per_rollout=1 \
+    --config.data.data_type="transitions" \
+    --config.env.steps_per_rollout=50 \
+    --config.model.policy.pass_task_to_policy=False \
+    --config.embedding_dim=32 \
+    --config.eval_interval=5 \
+    --config.num_epochs=100
 
 # train LAM 
-CUDA_VISIBLE_DEVICES=7 python3 main.py \
+CUDA_VISIBLE_DEVICES=8 python3 main.py \
     --config=configs/offline_config.py:lam-xland-5x5 \
     --config.smoke_test=True \
-    --config.exp_name="transformer_encoder_4_codes" \
+    --config.exp_name="lam" \
     --config.use_wb=True \
     --config.model.idm.beta=0.25 \
     --config.model.idm.num_codes=20 \
-    --config.dataset_name=9x9 \
+    --config.model.idm.code_dim=32 \
+    --config.data.dataset_name=9x9 \
     --config.env.num_episodes_per_rollout=1 \
-    --config.model.idm.use_transformer=True \
-    --config.model.fdm.use_transformer_idm=True 
+    --config.env.steps_per_rollout=50 \
+    --config.model.idm.use_transformer=False \
+    --config.model.fdm.use_transformer_idm=False \
+    --config.data.data_type="lapo" \
+    --config.data.context_len=0 \
+    --config.num_epochs=100 \
+    --config.eval_interval=5
 
 # train latent action -> GT Action decoder 
 CUDA_VISIBLE_DEVICES=4 python3 main.py \
     --config=configs/offline_config.py:latent_action_decoder-xland-5x5 \
     --config.smoke_test=True \
-    --config.use_wb=False \
-    --config.num_trajs=1000 \
-    --config.train_frac=0.5 \
-    --config.overwrite=True \
-    --config.dataset_name=9x9 \
-    --config.env.num_episodes_per_rollout=1 
+    --config.exp_name="action_decoder" \
+    --config.use_wb=True \
+    --config.data.num_trajs=200 \
+    --config.data.train_frac=0.5 \
+    --config.data.dataset_name=9x9 \
+    --config.env.num_episodes_per_rollout=1 \
+    --config.data.context_len=0 \
+    --config.data.data_type="lapo" \
+    --config.model.latent_action_dim=32 \
+    --config.model.lam_ckpt="/home/anthony/varibad_jax/varibad_jax/results/lam/en-xland/pn-lam/t-offline"
+
 
 # train LA policy
 CUDA_VISIBLE_DEVICES=4 python3 main.py \
-    --config=configs/offline_config.py:lam_agent-gridworld \
+    --config=configs/offline_config.py:lam_agent-xland-5x5 \
     --config.smoke_test=True \
+    --config.exp_name="lam_agent" \
     --config.use_wb=True \
-    --config.overwrite=True \
-    --config.dataset_name=5x5 \
+    --config.data.dataset_name=9x9 \
     --config.env.num_episodes_per_rollout=1 \
-    --config.env.env_kwargs.random_init=True \
-    --config.run_eval_rollouts=True
+    --config.env.steps_per_rollout=50 \
+    --config.run_eval_rollouts=True \
+    --config.data.context_len=0 \
+    --config.data.data_type="lapo" \
+    --config.model.policy.pass_task_to_policy=False \
+    --config.model.lam_ckpt="/home/anthony/varibad_jax/varibad_jax/results/lam/en-xland/pn-lam/t-offline" \
+    --config.model.latent_action_decoder_ckpt="/home/anthony/varibad_jax/varibad_jax/results/action_decoder/en-xland/pn-latent_action_decoder/t-offline" \
+    --config.num_epochs=100 \
+    --config.eval_interval=5

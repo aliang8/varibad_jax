@@ -43,7 +43,7 @@ class RLTrainer(BaseTrainer):
         logging.info(f"action_dim = {self.action_dim}")
 
         self.agent = PPOAgent(
-            config=config.policy,
+            config=config.model,
             observation_shape=self.envs.observation_space.shape,
             action_dim=self.action_dim,
             input_action_dim=self.input_action_dim,
@@ -74,7 +74,7 @@ class RLTrainer(BaseTrainer):
         xtimestep = self.jit_reset(self.env_params, reset_rng)
         state = xtimestep.timestep.observation
         state = state.astype(np.float32)
-        if self.config.policy.pass_task_to_policy:
+        if self.config.model.pass_task_to_policy:
             if self.config.env.env_name == "gridworld":
                 task = xtimestep.timestep.state.goal
             elif self.config.env.env_name == "xland":
@@ -108,7 +108,7 @@ class RLTrainer(BaseTrainer):
             done = xtimestep.timestep.last()
             rew_norm = rew_raw
 
-            if self.config.policy.pass_task_to_policy:
+            if self.config.model.pass_task_to_policy:
                 if self.config.env.env_name == "gridworld":
                     task = xtimestep.timestep.state.goal
                 elif self.config.env.env_name == "xland":
@@ -169,8 +169,8 @@ class RLTrainer(BaseTrainer):
         self.policy_storage.compute_returns(
             next_value=next_value,
             use_gae=True,
-            gamma=self.config.policy.gamma,
-            tau=self.config.policy.tau,
+            gamma=self.config.model.gamma,
+            tau=self.config.model.tau,
             use_proper_time_limits=False,
         )
         logging.debug("done collecting rollouts")

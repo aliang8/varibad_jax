@@ -52,13 +52,12 @@ psh = {
         "decode_rewards": "dec_r",
         "decode_states": "dec_s",
     },
-    "policy": {
+    "model": {
         "pass_latent_to_policy": "pltp",
         "pass_task_to_policy": "pttp",
         "name": "pn",
         "algo": "alg",
     },
-    "model": {"name": "pn"},
 }
 
 # run with ray tune

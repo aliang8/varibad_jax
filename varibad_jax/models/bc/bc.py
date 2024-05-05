@@ -41,8 +41,6 @@ class BCAgent(BaseAgent):
     def _init_model(self):
         t, bs = 2, 2
         dummy_state = np.zeros((bs, t, *self.observation_shape), dtype=np.float32)
-        if self.config.image_obs:
-            dummy_state = einops.rearrange(dummy_state, "b t h w c -> b t c h w")
 
         if self.config.policy.pass_task_to_policy:
             dummy_task = np.zeros((bs, t, self.task_dim), dtype=np.float32)

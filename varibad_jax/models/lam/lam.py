@@ -16,10 +16,23 @@ from functools import partial
 from pathlib import Path
 from ml_collections.config_dict import ConfigDict
 
+# from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+
+
 from varibad_jax.models.base import BaseModel, BaseAgent
 from varibad_jax.agents.actor_critic import ActorCritic
 from varibad_jax.models.lam.model import LatentFDM, LatentActionIDM
 from varibad_jax.agents.common import ActionHead
+
+
+@partial(jax.jit, static_argnames=("n"))
+def confusion_matrix(labels, predictions, n):
+    cm, _ = jax.lax.scan(
+        lambda carry, pair: (carry.at[pair].add(1), None),
+        jnp.zeros((n, n), dtype=jnp.uint32),
+        (labels, predictions),
+    )
+    return cm
 
 
 @chex.dataclass
@@ -184,7 +197,7 @@ class LatentActionDecoder(BaseModel):
 
         agent_key, decoder_key = jax.random.split(rng, 2)
 
-        model_output, _ = self.lam.model.apply(
+        model_output, lam_state = self.lam.model.apply(
             self.lam._params,
             self.lam._state,
             agent_key,
@@ -216,11 +229,16 @@ class LatentActionDecoder(BaseModel):
         if self.is_continuous:
             loss = optax.squared_error(action_pred.action, gt_actions)
             acc = 0.0
+            # cm_plot = None
         else:
             loss = optax.softmax_cross_entropy_with_integer_labels(
                 action_pred.logits, gt_actions.squeeze().astype(jnp.int32)
             )
             acc = action_pred.action == gt_actions.squeeze()
+            # cm = confusion_matrix(gt_actions.squeeze(), action_pred.action, 6)
+            # cm = confusion_matrix(gt_actions.squeeze(), action_pred.action)
+            # disp = ConfusionMatrixDisplay(confusion_matrix=cm)
+            # cm_plot = disp.plot()
 
         if self.lam_cfg.model.idm.use_transformer:
             # jax.debug.breakpoint()
@@ -301,8 +319,8 @@ class LatentActionBaseAgent(BaseAgent):
         logging.info("inside get action for LatentActionAgent")
         la_key, decoder_key = jax.random.split(rng, 2)
 
-        if self.config.image_obs:
-            env_state = einops.rearrange(env_state, "b h w c -> b c h w")
+        # if self.config.image_obs:
+        #     env_state = einops.rearrange(env_state, "b h w c -> b c h w")
 
         # predict latent action and then use pretrained action decoder
         la_output, _ = self.model.apply(
@@ -342,8 +360,6 @@ class LatentActionAgent(LatentActionBaseAgent):
     def _init_model(self):
         t, bs = 2, 2
         dummy_state = np.zeros((bs, t, *self.observation_shape), dtype=np.float32)
-        if self.config.image_obs:
-            dummy_state = einops.rearrange(dummy_state, "b t h w c -> b t c h w")
 
         if self.config.policy.pass_task_to_policy:
             dummy_task = np.zeros((bs, t, self.task_dim), dtype=np.float32)
@@ -376,12 +392,12 @@ class LatentActionAgent(LatentActionBaseAgent):
         )
         latent_actions = lam_output.quantize
 
-        if self.config.image_obs:
-            observations = einops.rearrange(
-                batch.observations, "b t h w c -> b t c h w"
-            )
-        else:
-            observations = batch.observations
+        # if self.config.image_obs:
+        #     observations = einops.rearrange(
+        #         batch.observations, "b t h w c -> b t c h w"
+        #     )
+        # else:
+        observations = batch.observations
 
         # only the middle observation matters here
         # not a recurrent policy

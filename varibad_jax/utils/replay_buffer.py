@@ -71,7 +71,7 @@ class OnlineStorage:
         # inputs to the policy
         # this will include s_0 when state was reset (hence num_steps+1)
         self.prev_state = np.zeros((num_steps + 1, num_processes, *self.state_dim))
-        if self.args.policy.pass_latent_to_policy:
+        if self.args.model.pass_latent_to_policy:
             # latent variables (of VAE)
             self.latent_dim = latent_dim
             self.latent_samples = []
@@ -87,7 +87,7 @@ class OnlineStorage:
         # next_state will include s_N when state was reset, skipping s_0
         # (only used if we need to re-compute embeddings after backpropagating RL loss through encoder)
         self.next_state = np.zeros((num_steps, num_processes, *self.state_dim))
-        if self.args.policy.pass_belief_to_policy:
+        if self.args.model.pass_belief_to_policy:
             self.beliefs = np.zeros((num_steps + 1, num_processes, belief_dim))
         else:
             self.beliefs = None
@@ -97,7 +97,7 @@ class OnlineStorage:
         # rewards and end of episodes
         self.rewards_raw = np.zeros((num_steps, num_processes, 1))
         self.rewards_normalised = np.zeros((num_steps, num_processes, 1))
-        if self.args.policy.use_hyperx_bonuses:
+        if self.args.model.use_hyperx_bonuses:
             self.hyperx_bonuses = np.zeros((num_steps, num_processes, 1))
             self.vae_recon_bonuses = np.zeros((num_steps, num_processes, 1))
         else:
@@ -173,11 +173,11 @@ class OnlineStorage:
             level_seeds (np.ndarray)
         """
         self.prev_state[self.step + 1] = state
-        if self.args.policy.pass_belief_to_policy:
+        if self.args.model.pass_belief_to_policy:
             self.beliefs[self.step + 1] = belief
-        if self.args.policy.pass_task_to_policy:
+        if self.args.model.pass_task_to_policy:
             self.tasks[self.step + 1] = task
-        if self.args.policy.pass_latent_to_policy:
+        if self.args.model.pass_latent_to_policy:
             self.latent_samples.append(latent_sample.copy())
             self.latent_mean.append(latent_mean.copy())
             self.latent_logvar.append(latent_logvar.copy())
@@ -185,7 +185,7 @@ class OnlineStorage:
         self.actions[self.step] = actions.copy()
         self.rewards_raw[self.step] = rewards_raw
         self.rewards_normalised[self.step] = rewards_normalised
-        if self.args.policy.use_hyperx_bonuses:
+        if self.args.model.use_hyperx_bonuses:
             self.hyperx_bonuses[self.step] = hyperx_bonuses
             self.vae_recon_bonuses[self.step] = vae_recon_bonuses
 
@@ -203,11 +203,11 @@ class OnlineStorage:
         Copy the last state of the buffer to the first state.
         """
         self.prev_state[0] = self.prev_state[-1]
-        if self.args.policy.pass_belief_to_policy:
+        if self.args.model.pass_belief_to_policy:
             self.beliefs[0] = self.beliefs[-1]
-        if self.args.policy.pass_task_to_policy:
+        if self.args.model.pass_task_to_policy:
             self.tasks[0] = self.tasks[-1]
-        if self.args.policy.pass_latent_to_policy:
+        if self.args.model.pass_latent_to_policy:
             self.latent_samples = []
             self.latent_mean = []
             self.latent_logvar = []
@@ -244,7 +244,7 @@ class OnlineStorage:
             else self.rewards_raw.copy()
         )
 
-        if self.args.policy.use_hyperx_bonuses:
+        if self.args.model.use_hyperx_bonuses:
             rewards += self.hyperx_bonuses
             rewards += self.vae_recon_bonuses
 

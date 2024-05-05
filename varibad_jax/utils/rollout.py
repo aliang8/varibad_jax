@@ -13,6 +13,7 @@ import einops
 import functools
 from ml_collections import ConfigDict
 import jax.tree_util as jtu
+import matplotlib.pyplot as plt
 from xminigrid.experimental.img_obs import TILE_W_AGENT_CACHE, TILE_CACHE, TILE_SIZE
 from xminigrid.core.constants import NUM_COLORS, TILES_REGISTRY, Tiles
 
@@ -60,7 +61,9 @@ def run_rollouts(
     if prompts is not None:
         logging.info("using prompts")
         eval_metrics, (transitions, actions) = jax.vmap(
-            functools.partial(rollout_fn, **rollout_kwargs)
+            lambda rng, prompt: functools.partial(rollout_fn, **rollout_kwargs)(
+                rng=rng, prompt=prompt
+            )
         )(rng_keys, prompts)
     else:
         eval_metrics, (transitions, actions) = jax.vmap(
@@ -79,34 +82,86 @@ def run_rollouts(
 
     # visualize the rollouts
     if wandb_run is not None and config.visualize_rollouts:
-        # imgs is N x T x H x W x C
-        # we want N x T x C x H x W
 
-        # generate the images
-        videos = []
-        for rollout_indx in range(config.num_eval_rollouts):
-            images = []
-            for step in range(steps_per_rollout):
-                timestep = jtu.tree_map(lambda x: x[rollout_indx][step], transitions)
-                images.append(env.render(env.env_params, timestep))
-            videos.append(images)
+        if config.env.env_name == "gridworld":
+            trajectories = transitions.observation
+            goals = transitions.state.goal
 
-        videos = np.array(videos)
+            fig, axes = plt.subplots(figsize=(12, 12), nrows=3, ncols=3)
+            grid_size = env.env_params.grid_size
 
-        videos = einops.rearrange(videos, "n t h w c -> n t c h w")
-        wandb_run.log({"eval_rollouts": wandb.Video(np.array(videos), fps=5)})
+            for traj_indx, ax in enumerate(axes.flatten()):
+                for i in range(grid_size):
+                    for j in range(grid_size):
+                        # add square with border
+                        ax.add_patch(
+                            plt.Rectangle((i, j), 1, 1, fill=None, edgecolor="black")
+                        )
+
+                trajectory = trajectories[traj_indx]
+                start_location = trajectory[0]
+                ax.plot(start_location[0] + 0.5, start_location[1] + 0.5, "ro")
+
+                # show trajectory with a blue line
+                # remove the last point because it just got reset
+                for i in range(len(trajectory) - 2):
+                    start = trajectory[i]
+                    end = trajectory[i + 1]
+                    ax.plot(
+                        [start[0] + 0.5, end[0] + 0.5],
+                        [start[1] + 0.5, end[1] + 0.5],
+                        color=(0, i / len(trajectory), 0),
+                        linewidth=3,
+                    )
+
+                # mark goal with a green
+                goal_location = goals[traj_indx][0]
+                ax.plot(
+                    goal_location[0] + 0.5, goal_location[1] + 0.5, "gx", markersize=10
+                )
+                ax.axis("off")
+
+                # label side of grid with numbers
+                for i in range(grid_size):
+                    ax.text(i + 0.5, -0.5, str(i), ha="center", va="center")
+                    ax.text(-0.5, i + 0.5, str(i), ha="center", va="center")
+
+            plt.subplots_adjust(wspace=0.1, hspace=0.1)
+
+            # add the image to wandb
+            wandb_run.log({f"eval_rollouts/trajectory": wandb.Image(fig)})
+
+        else:
+            # imgs is N x T x H x W x C
+            # we want N x T x C x H x W
+
+            # generate the images
+            videos = []
+            for rollout_indx in range(config.num_eval_rollouts):
+                images = []
+                for step in range(steps_per_rollout):
+                    timestep = jtu.tree_map(
+                        lambda x: x[rollout_indx][step], transitions
+                    )
+                    images.append(env.render(env.env_params, timestep))
+                videos.append(images)
+
+            videos = np.array(videos)
+
+            videos = einops.rearrange(videos, "n t h w c -> n t c h w")
+            wandb_run.log({"eval_rollouts": wandb.Video(np.array(videos), fps=5)})
 
     return eval_metrics, transitions, actions
 
 
 def eval_rollout_dt(
     rng: jax.Array,
-    prompt,
     agent,
     env: Environment,
     config: dict,
     action_dim: int,
     steps_per_rollout: int,
+    prompt=None,
     **kwargs,
 ) -> RolloutStats:
     rng, reset_rng = jax.random.split(rng, 2)
@@ -270,13 +325,21 @@ def eval_rollout(
     config: dict,
     action_dim: int,
     steps_per_rollout: int,
+    prompt=None,
     **kwargs,
 ) -> RolloutStats:
 
     stats = RolloutStats(episode_return=0, length=0)
 
     rng, reset_rng = jax.random.split(rng, 2)
-    xtimestep = env.reset(env.env_params, reset_rng)
+
+    if prompt is not None:
+        # set the goal to be the same as the one in the prompt
+        # TODO: fix this, might not be correct shape
+        desired_goal = prompt["tasks"]
+        xtimestep = env.reset(env.env_params, reset_rng, desired_goal=desired_goal)
+    else:
+        xtimestep = env.reset(env.env_params, reset_rng)
 
     if config.env.env_name == "gridworld":
         task = xtimestep.timestep.state.goal
@@ -317,10 +380,14 @@ def eval_rollout(
 
         task = task.astype(jnp.float32)
 
+        logging.info(
+            f"observation shape: {observation.shape}, task shape: {task.shape}"
+        )
+
         policy_output, _ = agent.get_action(
             policy_rng,
             env_state=observation,
-            tasks=task,
+            task=task,
             is_training=False,
         )
         action = policy_output.action
@@ -336,10 +403,16 @@ def eval_rollout(
         action = action.reshape(1, 1).astype(jnp.float32)
         reward = reward.reshape(1, 1)
 
+        if "lam" in config.model.name:
+            action = policy_output.latent_action
+
         stats = stats.replace(
             episode_return=stats.episode_return + next_timestep.reward,
             length=stats.length + 1,
         )
+
+        if action.shape[-1] == 1:
+            action = action.squeeze(axis=-1)
 
         return (
             rng,
@@ -348,7 +421,7 @@ def eval_rollout(
             action,
             reward,
             done,
-        ), (xtimestep.timestep, action.squeeze(axis=-1))
+        ), (xtimestep.timestep, action)
 
     init_carry = (
         rng,

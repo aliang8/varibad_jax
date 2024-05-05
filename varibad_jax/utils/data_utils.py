@@ -242,16 +242,41 @@ def load_data(config: ConfigDict, rng: npr.RandomState, steps_per_rollout: int):
     for k, v in data.items():
         logging.info(f"{k}: {v.shape}")
 
+    # logic for creating an unseen set of heldout tasks
+    # assuming tasks are the same over timesteps
+    if config.data.holdout_tasks:
+        tasks = data["tasks"][:, 0]
+        unique_tasks = np.unique(tasks, axis=0)
+
+        # sample a few to be heldout tasks
+        indices = rng.choice(range(len(unique_tasks)), size=4, replace=False)
+        heldout_tasks = unique_tasks[indices]
+
+        logging.info(f"heldout tasks: {heldout_tasks}")
+
+        mask = (heldout_tasks[:, None] == tasks).all(axis=2).any(axis=0)
+
+        eval_data = {k: v[mask] for k, v in data.items()}
+        train_data = {k: v[~mask] for k, v in data.items()}
+
+    else:
+        dataset_size = data["observations"].shape[0]
+        num_train = int(dataset_size * config.data.train_frac)
+
+        # split into train and eval
+        train_data = {k: v[:num_train] for k, v in data.items()}
+        eval_data = {k: v[num_train:] for k, v in data.items()}
+
     if config.data.data_type == "transitions":
-        for k, v in data.items():
-            data[k] = einops.rearrange(v, "B T ... -> (B T) ...")
+        for k, v in train_data.items():
+            train_data[k] = einops.rearrange(v, "B T ... -> (B T) ...")
 
-    dataset_size = data["observations"].shape[0]
-    num_train = int(dataset_size * config.data.train_frac)
+        for k, v in eval_data.items():
+            eval_data[k] = einops.rearrange(v, "B T ... -> (B T) ...")
 
-    # split into train and eval
-    train_data = {k: v[:num_train] for k, v in data.items()}
-    eval_data = {k: v[num_train:] for k, v in data.items()}
+    logging.info(f"num training data: {train_data['observations'].shape[0]}")
+    logging.info(f"num eval data: {eval_data['observations'].shape[0]}")
+
     return train_data, eval_data
 
 
@@ -336,9 +361,9 @@ class LAPODataset(Dataset):
             self.data[k] = einops.rearrange(v, "B T ... -> (B T) ...")
 
         # subsample where only the o_t is valid
-        # mask = self.data["mask"][:, -2]
-        # for k, v in self.data.items():
-        #     self.data[k] = v[torch.where(mask > 0)]
+        mask = self.data["mask"][:, -2]
+        for k, v in self.data.items():
+            self.data[k] = v[torch.where(mask > 0)]
 
         # import ipdb
 
