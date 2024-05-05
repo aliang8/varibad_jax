@@ -173,7 +173,7 @@ def get_config(config_string: str = None):
     # =============================================================
     # Data collection stuff
     # =============================================================
-    config.num_rollouts_collect = 10_000
+    config.num_rollouts_collect = 50_000
 
     config.cpu = 5
     config.gpu = 1.0  # needs more gpu here

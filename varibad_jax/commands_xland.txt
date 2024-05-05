@@ -16,8 +16,9 @@ python3 scripts/train_xland_oracle.py
 python3 scripts/generate_data_from_policy.py \
     --config=configs/offline_config.py:xland-5x5 \
     --config.model_ckpt_dir=results/oracle/en-xland/alg-ppo/pltp-False/pttp-False/t-rl/ \
-    --config.data.dataset_name=9x9
-
+    --config.data.dataset_name=9x9 \
+    --config.num_rollouts_collect=50_000
+    
 # train regular BC policy
 CUDA_VISIBLE_DEVICES=7 python3 main.py \
     --config=configs/offline_config.py:bc-xland-5x5 \
@@ -44,7 +45,7 @@ CUDA_VISIBLE_DEVICES=8 python3 main.py \
     --config.model.idm.code_dim=32 \
     --config.data.dataset_name=9x9 \
     --config.env.num_episodes_per_rollout=1 \
-    --config.env.steps_per_rollout=50 \
+    --config.env.steps_per_rollout=20 \
     --config.model.idm.use_transformer=False \
     --config.model.fdm.use_transformer_idm=False \
     --config.data.data_type="lapo" \
@@ -58,13 +59,14 @@ CUDA_VISIBLE_DEVICES=4 python3 main.py \
     --config.smoke_test=True \
     --config.exp_name="action_decoder" \
     --config.use_wb=True \
-    --config.data.num_trajs=200 \
+    --config.data.num_trajs=500 \
     --config.data.train_frac=0.5 \
     --config.data.dataset_name=9x9 \
     --config.env.num_episodes_per_rollout=1 \
     --config.data.context_len=0 \
     --config.data.data_type="lapo" \
     --config.model.latent_action_dim=32 \
+    --config.env.steps_per_rollout=20 \
     --config.model.lam_ckpt="/home/anthony/varibad_jax/varibad_jax/results/lam/en-xland/pn-lam/t-offline"
 
 

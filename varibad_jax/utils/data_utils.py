@@ -1,4 +1,5 @@
 from absl import logging
+import math
 import jax
 import chex
 import tqdm
@@ -261,7 +262,7 @@ def load_data(config: ConfigDict, rng: npr.RandomState, steps_per_rollout: int):
 
     else:
         dataset_size = data["observations"].shape[0]
-        num_train = int(dataset_size * config.data.train_frac)
+        num_train = math.ceil(dataset_size * config.data.train_frac)
 
         # split into train and eval
         train_data = {k: v[:num_train] for k, v in data.items()}
@@ -361,9 +362,9 @@ class LAPODataset(Dataset):
             self.data[k] = einops.rearrange(v, "B T ... -> (B T) ...")
 
         # subsample where only the o_t is valid
-        mask = self.data["mask"][:, -2]
-        for k, v in self.data.items():
-            self.data[k] = v[torch.where(mask > 0)]
+        # mask = self.data["mask"][:, -2]
+        # for k, v in self.data.items():
+        #     self.data[k] = v[torch.where(mask > 0)]
 
         # import ipdb
 
@@ -390,6 +391,8 @@ def create_data_loader(data, data_cfg):
         torch_dataset = LAPODataset(data, data_cfg)
     elif data_cfg.data_type == "transitions":
         torch_dataset = TransitionsDataset(data, data_cfg)
+
+    logging.info(f"num samples: {len(torch_dataset)}")
 
     return NumpyLoader(
         torch_dataset,

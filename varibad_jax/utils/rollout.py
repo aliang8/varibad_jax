@@ -411,8 +411,8 @@ def eval_rollout(
             length=stats.length + 1,
         )
 
-        if action.shape[-1] == 1:
-            action = action.squeeze(axis=-1)
+        # if action.shape[-1] == 1:
+        #     action = action.squeeze(axis=-1)
 
         return (
             rng,

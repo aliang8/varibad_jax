@@ -86,7 +86,8 @@ def main(_):
     )
 
     # collect some rollouts
-    steps_per_rollout = config_p.env.num_episodes_per_rollout * envs.max_episode_steps
+    # steps_per_rollout = config_p.env.num_episodes_per_rollout * envs.max_episode_steps
+    steps_per_rollout = config_p.env.num_episodes_per_rollout * 20
 
     logging.info("start data collection")
     config_p.num_eval_rollouts = config.num_rollouts_collect

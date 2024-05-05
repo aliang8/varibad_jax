@@ -44,6 +44,19 @@ class LAMOutput:
     encoding_indices: jnp.ndarray
 
 
+def breakpoint_if_cond(x):
+    # is_finite = jnp.isfinite(x).all()
+    stop = x < 0.001
+
+    def true_fn(x):
+        jax.debug.breakpoint()
+
+    def false_fn(x):
+        pass
+
+    jax.lax.cond(stop, true_fn, false_fn, x)
+
+
 class LatentActionModel(BaseModel):
     @hk.transform_with_state
     def model(self, states, is_training=True):
@@ -118,8 +131,10 @@ class LatentActionModel(BaseModel):
             else:
                 next_obs_pred = einops.rearrange(next_obs_pred, "b c h w -> b h w c")
                 gt_next_obs = batch.observations[:, -1]
+                # jax.debug.breakpoint()
                 recon_loss = optax.squared_error(next_obs_pred, gt_next_obs)
                 recon_loss = jnp.mean(recon_loss)
+                # breakpoint_if_cond(recon_loss)
         else:
             recon_loss = optax.squared_error(next_obs_pred, batch.observations[:, -1])
             recon_loss = jnp.mean(recon_loss)
