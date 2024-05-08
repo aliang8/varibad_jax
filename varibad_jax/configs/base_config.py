@@ -28,23 +28,24 @@ def get_config(config_string: str = None):
                 normalize_rews=False,
                 image_obs=False,
                 env_kwargs=dict(
-                    grid_size=5, max_episode_steps=15, num_actions=5, random_init=False
+                    grid_size=5, max_episode_steps=15, num_actions=5, random_init=True
                 ),
             )
         ),
         "xland": ConfigDict(
             dict(
                 env_name="xland",
-                env_kwargs=dict(view_size=5, height=9, width=9),
-                benchmark_path="/home/anthony/varibad_jax/varibad_jax/envs/xland_benchmarks/test_ruleset.pkl",
+                env_kwargs=dict(),
+                benchmark_path="/scr/aliang80/varibad_jax/varibad_jax/envs/xland_benchmarks/test_ruleset.pkl",
                 # preloaded_benchmark="small-1m",
                 ruleset_id=0,
-                env_id="XLand-MiniGrid-R1-9x9",
+                env_id="XLand-MiniGridCustom-R1-7x7",
                 num_episodes_per_rollout=1,
                 steps_per_rollout=30,
                 num_processes=16,
                 normalize_rews=False,
                 image_obs=True,
+                symbolic_obs=True,
                 task_dim=5,  # TODO: tbd fix this
             )
         ),
@@ -93,8 +94,8 @@ def get_config(config_string: str = None):
     # number of warmup steps before training
     config.warmup_steps = 10000
     # where to save experiment artifacts (videos, checkpoints, etc)
-    config.root_dir = "/home/anthony/varibad_jax/varibad_jax/"
-    config.exp_dir = "/home/anthony/varibad_jax/varibad_jax/"
+    config.root_dir = "/scr/aliang80/varibad_jax/varibad_jax/"
+    config.exp_dir = "/scr/aliang80/varibad_jax/varibad_jax/"
     config.exp_name = ""
     config.group_name = ""
     config.ray_logdir = "ray_results"

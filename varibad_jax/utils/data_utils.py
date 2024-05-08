@@ -11,6 +11,7 @@ import jax.numpy as jnp
 import einops
 import tqdm
 import numpy.random as npr
+import jax.tree_util as jtu
 from ml_collections.config_dict import ConfigDict
 from collections.abc import Generator
 from torch.utils.data import Dataset, DataLoader
@@ -55,7 +56,7 @@ from tensordict import TensorDict, TensorDictBase
 from torch.utils.data import DataLoader
 from jax.tree_util import tree_map
 from torch.utils import data
-
+from collections import defaultdict as dd
 
 TRAIN_CHUNK_LEN = 32_768
 TEST_CHUNK_LEN = 4096
@@ -63,6 +64,12 @@ TEST_CHUNK_LEN = 4096
 
 def numpy_collate(batch):
     return tree_map(np.asarray, data.default_collate(batch))
+
+
+def subsample_data(data, indices):
+    fn = lambda x: x[indices]
+    subsample_data = tree_map(fn, data)
+    return subsample_data
 
 
 class NumpyLoader(data.DataLoader):
@@ -221,6 +228,12 @@ def load_data(config: ConfigDict, rng: npr.RandomState, steps_per_rollout: int):
     with open(data_path, "rb") as f:
         data = pickle.load(f)
 
+    if config.env.env_name == "xland" and not config.env.symbolic_obs:
+        data["observations"] = data["imgs"]
+        del data["imgs"]
+        # normalize the imgs
+        data["observations"] = (data["observations"].astype(np.float32) / 255.0) - 0.5
+
     num_trajs, num_timesteps = data["observations"].shape[:2]
     avg_return = jnp.mean(jnp.sum(data["rewards"], axis=-1))
     logging.info(f"average return: {avg_return}")
@@ -237,11 +250,10 @@ def load_data(config: ConfigDict, rng: npr.RandomState, steps_per_rollout: int):
     # [B, T, *], trajectory data
     if config.data.num_trajs != -1:
         indices = rng.choice(num_trajs, size=config.data.num_trajs, replace=False)
-        for k, v in data.items():
-            data[k] = v[indices]
+        data = subsample_data(data, indices)
 
-    for k, v in data.items():
-        logging.info(f"{k}: {v.shape}")
+    fn = lambda x, y: logging.info(f"{jax.tree_util.keystr(x)}: {y.shape}")
+    jtu.tree_map_with_path(fn, data)
 
     # logic for creating an unseen set of heldout tasks
     # assuming tasks are the same over timesteps
@@ -256,24 +268,21 @@ def load_data(config: ConfigDict, rng: npr.RandomState, steps_per_rollout: int):
         logging.info(f"heldout tasks: {heldout_tasks}")
 
         mask = (heldout_tasks[:, None] == tasks).all(axis=2).any(axis=0)
-
-        eval_data = {k: v[mask] for k, v in data.items()}
-        train_data = {k: v[~mask] for k, v in data.items()}
-
+        train_data = subsample_data(data, ~mask)
+        eval_data = subsample_data(data, mask)
     else:
         dataset_size = data["observations"].shape[0]
         num_train = math.ceil(dataset_size * config.data.train_frac)
 
         # split into train and eval
-        train_data = {k: v[:num_train] for k, v in data.items()}
-        eval_data = {k: v[num_train:] for k, v in data.items()}
+        train_data = subsample_data(data, np.arange(num_train))
+        eval_data = subsample_data(data, np.arange(num_train, dataset_size))
+        # eval_data = {k: v[num_train:] for k, v in data.items()}
 
     if config.data.data_type == "transitions":
-        for k, v in train_data.items():
-            train_data[k] = einops.rearrange(v, "B T ... -> (B T) ...")
-
-        for k, v in eval_data.items():
-            eval_data[k] = einops.rearrange(v, "B T ... -> (B T) ...")
+        fn = lambda x: einops.rearrange(x, "B T ... -> (B T) ...")
+        train_data = tree_map(fn, train_data)
+        eval_data = tree_map(fn, eval_data)
 
     logging.info(f"num training data: {train_data['observations'].shape[0]}")
     logging.info(f"num eval data: {eval_data['observations'].shape[0]}")
@@ -322,9 +331,7 @@ class TrajectoryDataset(Dataset):
             self.task_id_to_traj_map[tuple(task)].append(indx)
 
     def __getitem__(self, index):
-        data = {}
-        for k, v in self.data.items():
-            data[k] = v[index]
+        data = subsample_data(self.data, index)
 
         if self.data_cfg.num_trajs_per_batch > 1:
             for _ in range(self.data_cfg.num_trajs_per_batch - 1):
@@ -337,11 +344,16 @@ class TrajectoryDataset(Dataset):
                 traj_id = np.random.choice(traj_ids)
 
                 for k, v in self.data.items():
-                    data[k] = np.concatenate([data[k], v[traj_id]], axis=0)
+                    if isinstance(v, dict):
+                        for kk, vv in v.items():
+                            data[k][kk] = np.concatenate(
+                                [data[k][kk], vv[traj_id]], axis=0
+                            )
+                    else:
+                        data[k] = np.concatenate([data[k], v[traj_id]], axis=0)
 
-        for k, v in data.items():
-            data[k] = torch.Tensor(v)
-
+        fn = lambda x: torch.Tensor(x)
+        data = tree_map(fn, data)
         return data
 
     def __len__(self):
@@ -372,18 +384,15 @@ class LAPODataset(Dataset):
         self.num_samples = self.data["observations"].shape[0]
 
     def __getitem__(self, index):
-        data = {}
-        for k, v in self.data.items():
-            data[k] = v[index]
-        return data
+        return subsample_data(self.data, index)
 
     def __len__(self):
         return self.num_samples
 
 
 def create_data_loader(data, data_cfg):
-    for k, v in data.items():
-        data[k] = np.asarray(v)
+    fn = lambda x: np.asarray(x)
+    data = tree_map(fn, data)
 
     if data_cfg.data_type == "trajectories":
         torch_dataset = TrajectoryDataset(data, data_cfg)

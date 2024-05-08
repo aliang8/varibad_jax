@@ -43,6 +43,19 @@ image_encoder_configs = {
             add_residual=True,
         )
     ),
+    "7x7": config_dict.ConfigDict(
+        dict(
+            name="image_encoder",
+            arch=[
+                [16, 3, 1, "VALID"],
+                [32, 3, 1, "VALID"],
+                [32, 2, 1, "VALID"],
+                [64, 2, 1, "VALID"],
+            ],
+            add_bn=True,
+            add_residual=True,
+        )
+    ),
     "64x64": config_dict.ConfigDict(
         dict(
             name="image_encoder",

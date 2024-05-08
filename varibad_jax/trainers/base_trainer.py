@@ -7,6 +7,7 @@ import os
 import tqdm
 import pickle
 import time
+import torch
 import wandb
 import optax
 import einops
@@ -29,6 +30,7 @@ class BaseTrainer:
         self.global_step = 0
         self.rng_seq = hk.PRNGSequence(config.seed)
         np.random.seed(config.seed)
+        torch.manual_seed(config.seed)
 
         # setup log dirs
         # split exp_dir by ,

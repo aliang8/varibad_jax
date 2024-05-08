@@ -5,9 +5,11 @@ import xminigrid
 from functools import partial
 from typing import ClassVar, Optional
 
+import varibad_jax.envs
 from varibad_jax.envs.gridworld_jax import GridNavi
 from varibad_jax.envs.wrappers import BAMDPWrapper
-from procgen import ProcgenEnv
+
+# from procgen import ProcgenEnv
 from xminigrid.benchmarks import Benchmark, load_benchmark, load_benchmark_from_path
 from xminigrid.rendering.text_render import print_ruleset
 
@@ -74,17 +76,17 @@ def make_envs(
         env, env_params = xminigrid.make(env_id, **env_kwargs)
 
         # either we define the ruleset manually here OR load from benchmark
-        if preloaded_benchmark:
-            loaded_benchmark = xminigrid.load_benchmark(name=preloaded_benchmark)
-        else:
-            loaded_benchmark = load_benchmark_from_path(benchmark_path)
+        # if preloaded_benchmark:
+        #     loaded_benchmark = xminigrid.load_benchmark(name=preloaded_benchmark)
+        # else:
+        #     loaded_benchmark = load_benchmark_from_path(benchmark_path)
 
-        num_rulesets = loaded_benchmark.num_rulesets()
-        assert ruleset_id < num_rulesets, f"ruleset_id {ruleset_id} not in benchmark"
+        # num_rulesets = loaded_benchmark.num_rulesets()
+        # assert ruleset_id < num_rulesets, f"ruleset_id {ruleset_id} not in benchmark"
 
-        ruleset = loaded_benchmark.get_ruleset(ruleset_id=ruleset_id)
-        print_ruleset(ruleset)
-        env_params = env_params.replace(ruleset=ruleset)
+        # ruleset = loaded_benchmark.get_ruleset(ruleset_id=ruleset_id)
+        # print_ruleset(ruleset)
+        # env_params = env_params.replace(ruleset=ruleset)
 
     # this still works if we have num_episodes_per_rollout = 1
     env = BAMDPWrapper(

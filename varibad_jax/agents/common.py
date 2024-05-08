@@ -14,6 +14,7 @@ tfb = tfp.bijectors
 class PolicyOutput:
     action: jnp.ndarray
     value: jnp.ndarray
+    hidden_state: Optional[jnp.ndarray] = None
     entropy: Optional[jnp.ndarray] = None
     dist: Optional[tfd.Distribution] = None
     logits: Optional[jnp.ndarray] = None

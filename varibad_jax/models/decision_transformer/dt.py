@@ -128,6 +128,7 @@ class LatentDTAgent(LatentActionBaseAgent, DecisionTransformerAgent):
 
     def label_trajectory_with_actions(self, rng, observations):
         b = observations.shape[0]
+
         # we need to unfold the observations to feed into
         # the latent action model
         if not self.lam_cfg.model.idm.use_transformer:
@@ -140,6 +141,10 @@ class LatentDTAgent(LatentActionBaseAgent, DecisionTransformerAgent):
             windows = jnp.stack(windows, axis=1)
             observations = einops.rearrange(windows, "b t ... -> (b t) ...")
 
+        # import ipdb
+
+        # ipdb.set_trace()
+
         lam_output, _ = self.lam.model.apply(
             self.lam._params,
             self.lam._state,
@@ -149,7 +154,7 @@ class LatentDTAgent(LatentActionBaseAgent, DecisionTransformerAgent):
             is_training=False,
         )
 
-        latent_actions = lam_output.quantize
+        latent_actions = lam_output.latent_actions
 
         if not self.lam_cfg.model.idm.use_transformer:
             # need to reshape it back, squeeze because the lam predicts a single action
@@ -176,16 +181,7 @@ class LatentDTAgent(LatentActionBaseAgent, DecisionTransformerAgent):
         lam_key, policy_key = jax.random.split(rng, 2)
 
         # predict the latent action from observations with pretrained model
-
-        if self.config.image_obs:
-            observations = einops.rearrange(
-                batch.observations, "b t h w c -> b t c h w"
-            )
-        else:
-            observations = batch.observations
-
-        observations = observations.astype(jnp.float32)
-        latent_actions = self.label_trajectory_with_actions(lam_key, observations)
+        latent_actions = self.label_trajectory_with_actions(lam_key, batch.observations)
         batch.actions = latent_actions
 
         # import ipdb

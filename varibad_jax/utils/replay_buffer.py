@@ -9,6 +9,10 @@ import gym
 import argparse
 import numpy as np
 
+import jax.numpy as jnp
+import haiku as hk
+from varibad_jax.agents.actor_critic import ActorCritic, ActorCriticInput
+
 
 class OnlineStorage:
     def __init__(
@@ -71,7 +75,7 @@ class OnlineStorage:
         # inputs to the policy
         # this will include s_0 when state was reset (hence num_steps+1)
         self.prev_state = np.zeros((num_steps + 1, num_processes, *self.state_dim))
-        if self.args.model.pass_latent_to_policy:
+        if self.args.model.policy.pass_latent_to_policy:
             # latent variables (of VAE)
             self.latent_dim = latent_dim
             self.latent_samples = []
@@ -87,7 +91,7 @@ class OnlineStorage:
         # next_state will include s_N when state was reset, skipping s_0
         # (only used if we need to re-compute embeddings after backpropagating RL loss through encoder)
         self.next_state = np.zeros((num_steps, num_processes, *self.state_dim))
-        if self.args.model.pass_belief_to_policy:
+        if self.args.model.policy.pass_belief_to_policy:
             self.beliefs = np.zeros((num_steps + 1, num_processes, belief_dim))
         else:
             self.beliefs = None
@@ -173,11 +177,11 @@ class OnlineStorage:
             level_seeds (np.ndarray)
         """
         self.prev_state[self.step + 1] = state
-        if self.args.model.pass_belief_to_policy:
+        if self.args.model.policy.pass_belief_to_policy:
             self.beliefs[self.step + 1] = belief
-        if self.args.model.pass_task_to_policy:
+        if self.args.model.policy.pass_task_to_policy:
             self.tasks[self.step + 1] = task
-        if self.args.model.pass_latent_to_policy:
+        if self.args.model.policy.pass_latent_to_policy:
             self.latent_samples.append(latent_sample.copy())
             self.latent_mean.append(latent_mean.copy())
             self.latent_logvar.append(latent_logvar.copy())
@@ -203,11 +207,11 @@ class OnlineStorage:
         Copy the last state of the buffer to the first state.
         """
         self.prev_state[0] = self.prev_state[-1]
-        if self.args.model.pass_belief_to_policy:
+        if self.args.model.policy.pass_belief_to_policy:
             self.beliefs[0] = self.beliefs[-1]
-        if self.args.model.pass_task_to_policy:
+        if self.args.model.policy.pass_task_to_policy:
             self.tasks[0] = self.tasks[-1]
-        if self.args.model.pass_latent_to_policy:
+        if self.args.model.policy.pass_latent_to_policy:
             self.latent_samples = []
             self.latent_mean = []
             self.latent_logvar = []
@@ -334,13 +338,24 @@ class OnlineStorage:
         else:
             task = None
 
-        policy_output, policy_state = agent.get_action(
-            rng_key,
-            env_state=self.prev_state[:-1],
-            latent=latent,
-            task=task,
-            is_training=True,
-        )
+        if self.args.model.policy.use_rnn_policy:
+            policy_output, policy_state = agent.jit_unroll(
+                agent._params,
+                agent._state,
+                rng_key,
+                agent,
+                env_state=self.prev_state[:-1],
+                latent=latent,
+                task=task,
+            )
+        else:
+            policy_output, policy_state = agent.get_action(
+                rng_key,
+                env_state=self.prev_state[:-1],
+                latent=latent,
+                task=task,
+                is_training=True,
+            )
 
         log_probs = policy_output.dist.log_prob(self.actions.astype(np.int32).squeeze())
         self.action_log_probs = log_probs

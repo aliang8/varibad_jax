@@ -16,6 +16,7 @@ import jax.tree_util as jtu
 import matplotlib.pyplot as plt
 from xminigrid.experimental.img_obs import TILE_W_AGENT_CACHE, TILE_CACHE, TILE_SIZE
 from xminigrid.core.constants import NUM_COLORS, TILES_REGISTRY, Tiles
+from xminigrid.types import AgentState, EnvCarry, GridState, RuleSet, State
 
 
 @chex.dataclass
@@ -166,10 +167,27 @@ def eval_rollout_dt(
 ) -> RolloutStats:
     rng, reset_rng = jax.random.split(rng, 2)
     if config.model.policy.demo_conditioning and prompt is not None:
-        # set the goal to be the same as the one in the prompt
-        desired_goal = prompt["tasks"][0]
+        if config.env.env_name == "gridworld":
+            # set the goal to be the same as the one in the prompt
+            state = prompt["tasks"][0]
+        elif config.env.env_name == "xland":
+            agent_position = prompt["info"]["agent_position"][0]
+            agent_direction = prompt["info"]["agent_direction"][0]
+            grid = prompt["info"]["grid"][0]
+            goal_encoding = prompt["info"]["goal"][0]
+            rule_encoding = prompt["info"]["rule"][0]
+            agent_state = AgentState(position=agent_position, direction=agent_direction)
+            state = State(
+                key=rng,
+                step_num=jnp.asarray(0),
+                grid=grid,
+                agent=agent_state,
+                goal_encoding=goal_encoding,
+                rule_encoding=rule_encoding,
+                carry=EnvCarry(),
+            )
 
-    xtimestep = env.reset(env.env_params, reset_rng, desired_goal=desired_goal)
+    xtimestep = env.reset(env.env_params, reset_rng, state=state)
     observation_shape = xtimestep.timestep.observation.shape
 
     # first dimension is batch
@@ -199,7 +217,7 @@ def eval_rollout_dt(
             rng, latent_rng = jax.random.split(rng)
             # relabel demo trajectory with latent actions
             latent_actions = agent.label_trajectory_with_actions(
-                latent_rng, prompt["observations"][jnp.newaxis]
+                latent_rng, prompt["observations"][jnp.newaxis].astype(jnp.float32)
             )
             actions = jnp.concatenate([latent_actions, actions], axis=1)
         else:
@@ -255,7 +273,7 @@ def eval_rollout_dt(
 
         entropy = policy_output.entropy
         entropy = jnp.mean(entropy)
-        logging.info(f"entropy: {entropy}")
+        # logging.info(f"entropy: {entropy}")
 
         # [B, T]
         action = policy_output.action
@@ -356,14 +374,7 @@ def eval_rollout(
     done = False
 
     def _step_fn(carry, _):
-        (
-            rng,
-            stats,
-            xtimestep,
-            prev_action,
-            prev_reward,
-            done,
-        ) = carry
+        (rng, stats, xtimestep, prev_action, prev_reward, done, hidden_state) = carry
 
         rng, policy_rng = jax.random.split(rng, 2)
         observation = xtimestep.timestep.observation
@@ -384,10 +395,11 @@ def eval_rollout(
             f"observation shape: {observation.shape}, task shape: {task.shape}"
         )
 
-        policy_output, _ = agent.get_action(
+        (policy_output, hidden_state), _ = agent.get_action(
             policy_rng,
             env_state=observation,
             task=task,
+            hidden_state=hidden_state,
             is_training=False,
         )
         action = policy_output.action
@@ -414,23 +426,15 @@ def eval_rollout(
         # if action.shape[-1] == 1:
         #     action = action.squeeze(axis=-1)
 
-        return (
-            rng,
-            stats,
-            next_xtimestep,
+        return (rng, stats, next_xtimestep, action, reward, done, hidden_state), (
+            xtimestep.timestep,
             action,
-            reward,
-            done,
-        ), (xtimestep.timestep, action)
+        )
 
-    init_carry = (
-        rng,
-        stats,
-        xtimestep,
-        prev_action,
-        prev_reward,
-        done,
-    )
+    if config.model.policy.use_rnn_policy:
+        hidden_state = jnp.zeros((1, config.model.policy.rnn_hidden_size))
+
+    init_carry = (rng, stats, xtimestep, prev_action, prev_reward, done, hidden_state)
 
     # transitions contains (timestep, action)
     carry, (transitions, actions) = jax.lax.scan(

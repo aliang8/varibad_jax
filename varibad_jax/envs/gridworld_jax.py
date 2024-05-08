@@ -57,16 +57,16 @@ class GridNavi:
     def xy_to_id(self, params: EnvParamsT, xy: List[int]):
         return xy[0] + xy[1] * params.grid_size
 
-    def reset(self, params: EnvParamsT, rng: jax.Array, desired_goal: jax.Array = None):
+    def reset(self, params: EnvParamsT, rng: jax.Array, state: jax.Array = None):
         init_rng, goal_rng = jax.random.split(rng)
 
         possible_states = jnp.dstack(
             jnp.meshgrid(jnp.arange(self.grid_size), jnp.arange(self.grid_size))
         ).reshape(-1, 2)
 
-        if desired_goal is not None:
+        if state is not None:
             if self.random_init:
-                id_ = self.xy_to_id(params, desired_goal)
+                id_ = self.xy_to_id(params, state)
 
                 # sample random init state that is not the goal
                 possible_init_states = jnp.delete(
@@ -82,7 +82,7 @@ class GridNavi:
             else:
                 init_xy = jnp.array(self.init_state)
 
-            goal = desired_goal
+            goal = state
         else:
             if self.random_init:
                 init_xy = jax.random.randint(init_rng, (2,), 0, params.grid_size)

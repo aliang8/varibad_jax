@@ -22,7 +22,7 @@ def get_config(config_string: str = None):
             batch_size=128,
             dataset_name="5x5",
             num_trajs=-1,
-            train_frac=0.95,
+            train_frac=1.0,
             data_type="trajectories",
             # for training LAPO
             context_len=1,
@@ -37,7 +37,7 @@ def get_config(config_string: str = None):
     config.eval_interval = 50
     # config.save_key = ""
 
-    config.embedding_dim = 64
+    config.embedding_dim = 32
 
     transformer_config.embedding_dim = config.get_ref("embedding_dim")
 
@@ -110,14 +110,15 @@ def get_config(config_string: str = None):
                     code_dim=16,
                     beta=0.25,
                     ema_decay=0.99,
-                    layer_sizes=[32, 32],
+                    policy_mlp_sizes=[128, 128],
+                    state_embed_mlp_sizes=[128, 128],
                 ),
                 fdm=dict(
                     image_obs=config.env.get_ref("image_obs"),
                     image_encoder_config=image_encoder_config,
                     image_decoder_config=image_decoder_config,
                     embedding_dim=config.get_ref("embedding_dim"),
-                    mlp_layer_sizes=[64, 64],
+                    decoder_mlp_sizes=[64, 64],
                     use_transformer_idm=False,
                 ),
                 beta_loss_weight=1.0,
@@ -167,6 +168,7 @@ def get_config(config_string: str = None):
     config.model = model_config
 
     config.model.use_lr_scheduler = False
+    config.model.warmup_steps = 10_000
     config.model.lr = 3e-4
     config.model.eps = 1e-8
 

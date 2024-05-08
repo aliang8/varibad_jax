@@ -36,15 +36,24 @@ def get_config(config_string: str = None):
     # =============================================================
     policy_config = config_dict.ConfigDict(
         dict(
-            image_encoder_config=image_encoder_config,
+            policy=config_dict.ConfigDict(
+                dict(
+                    pass_state_to_policy=True,
+                    pass_latent_to_policy=False,
+                    pass_belief_to_policy=False,
+                    pass_task_to_policy=False,
+                    mlp_layer_sizes=[128, 128],
+                    use_rnn_policy=False,
+                    rnn_hidden_size=64,
+                    gaussian_policy=False,
+                    embedding_dim=64,
+                    image_obs=config.env.get_ref("image_obs"),
+                    image_encoder_config=image_encoder_config,
+                )
+            ),
             image_obs=config.env.get_ref("image_obs"),
             task_dim=config.env.get_ref("task_dim"),
-            pass_state_to_policy=True,
-            pass_latent_to_policy=False,
-            pass_belief_to_policy=False,
-            pass_task_to_policy=False,
             use_hyperx_bonuses=False,
-            mlp_layer_sizes=[64, 64],
             actor_activation_function="tanh",
             algo="ppo",
             name="ppo",
@@ -60,9 +69,7 @@ def get_config(config_string: str = None):
             use_gae=True,
             tau=0.95,
             max_grad_norm=0.5,
-            embedding_dim=16,
             use_lr_scheduler=False,
-            gaussian_policy=False,
         )
     )
     config.model = policy_config
@@ -72,7 +79,7 @@ def get_config(config_string: str = None):
     config.keys_to_include = {
         "trainer": None,
         "env": ["env_name"],
-        "model": ["algo", "pass_latent_to_policy", "pass_task_to_policy"],
+        "model": ["algo"],
     }
 
     return config

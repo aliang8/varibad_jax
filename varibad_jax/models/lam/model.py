@@ -48,18 +48,21 @@ class LatentFDM(hk.Module):
             )
         else:
             self.embedding_dim = config.embedding_dim
-            self.state_embed = hk.nets.MLP(
-                config.mlp_layer_sizes + [self.embedding_dim],
-                **init_kwargs,
-                activation=nn.gelu,
-            )
-            self.action_embed = hk.nets.MLP(
-                config.mlp_layer_sizes + [self.embedding_dim],
-                **init_kwargs,
-                activation=nn.gelu,
-            )
+            # self.state_embed = hk.nets.MLP(
+            #     config.mlp_layer_sizes + [self.embedding_dim],
+            #     **init_kwargs,
+            #     activation=nn.gelu,
+            # )
+            # self.action_embed = hk.nets.MLP(
+            #     config.mlp_layer_sizes + [self.embedding_dim],
+            #     **init_kwargs,
+            #     activation=nn.gelu,
+            # )
             self.state_decoder = hk.nets.MLP(
-                config.mlp_layer_sizes + [state_dim], **init_kwargs, activation=nn.gelu
+                config.decoder_mlp_sizes + [state_dim],
+                **init_kwargs,
+                activation=nn.gelu,
+                activate_final=False,
             )
 
     def __call__(
@@ -119,6 +122,7 @@ class LatentFDM(hk.Module):
             # action_embed = self.action_embed(actions)
             # model_input = jnp.concatenate([context_embed, action_embed], axis=-1)
 
+            # model_input = actions
             model_input = jnp.concatenate([context, actions], axis=-1)
 
             # predict next state
@@ -170,17 +174,18 @@ class LatentActionIDM(hk.Module):
             else:
                 # MLP
                 self.state_embed = hk.nets.MLP(
-                    list(config.layer_sizes) + [config.embedding_dim],
+                    list(config.state_embed_mlp_sizes) + [config.embedding_dim],
                     activation=nn.gelu,
                     **init_kwargs,
+                    activate_final=False,
                 )
 
         # Predict latent action before inputting to VQ
         self.policy_head = hk.nets.MLP(
-            list(config.layer_sizes) + [config.code_dim],
+            list(config.policy_mlp_sizes) + [config.code_dim],
             activation=nn.gelu,
             name="policy_head",
-            activate_final=True,
+            activate_final=False,
             **init_kwargs,
         )
 
@@ -238,4 +243,5 @@ class LatentActionIDM(hk.Module):
 
         # compute quantized latent actions
         vq_outputs = self.vq(latent_actions, is_training=is_training)
+        vq_outputs["latent_actions"] = latent_actions
         return vq_outputs

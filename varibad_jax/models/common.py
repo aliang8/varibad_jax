@@ -31,7 +31,7 @@ class DownsamplingBlock(hk.Module):
         self.init_kwargs = dict(w_init=w_init, b_init=b_init)
 
     def __call__(self, x, is_training=True):
-        logging.info("inside downsampling block")
+        # logging.info("inside downsampling block")
         x = hk.Conv2D(
             output_channels=self.num_channels,
             kernel_shape=self.kernel_size,
@@ -40,22 +40,22 @@ class DownsamplingBlock(hk.Module):
             data_format="NCHW",
             **self.init_kwargs,
         )(x)
-        logging.info(f"conv shape: {x.shape}")
+        # logging.info(f"conv shape: {x.shape}")
         if self.add_bn:
             x = hk.BatchNorm(create_offset=True, create_scale=True, decay_rate=0.9)(
                 x, is_training
             )
         if self.add_residual:
             x = ResidualBlock(self.num_channels, **self.init_kwargs)(x)
-            logging.info(f"residual shape: {x.shape}")
+            # logging.info(f"residual shape: {x.shape}")
         if self.add_max_pool:
             x = hk.MaxPool(
                 window_shape=(2, 2),
                 strides=(2, 2),
                 padding="SAME",
             )(x)
-            logging.info(f"pool shape: {x.shape}")
-        x = nn.relu(x)
+            # logging.info(f"pool shape: {x.shape}")
+        x = nn.gelu(x)
         return x
 
 
@@ -96,7 +96,7 @@ class UpsamplingBlock(hk.Module):
             )
         if self.add_residual:
             x = ResidualBlock(self.num_channels, **self.init_kwargs)(x)
-        x = nn.relu(x)
+        x = nn.gelu(x)
         return x
 
 
@@ -111,7 +111,7 @@ class ResidualBlock(hk.Module):
     def __call__(self, x):
         main_branch = hk.Sequential(
             [
-                nn.relu,
+                nn.gelu,
                 hk.Conv2D(
                     self._num_channels // 2,
                     kernel_shape=[3, 3],
@@ -120,7 +120,7 @@ class ResidualBlock(hk.Module):
                     data_format="NCHW",
                     **self.init_kwargs,
                 ),
-                nn.relu,
+                nn.gelu,
                 hk.Conv2D(
                     self._num_channels,
                     kernel_shape=[3, 3],
@@ -245,6 +245,4 @@ class ImageDecoder(hk.Module):
             # restore leading dimensions, use lead_dims
             x = x.reshape(lead_dims + x.shape[1:])
 
-        # this is for procgen normalization
-        # x = jnp.tanh(x) / 2.0
         return x

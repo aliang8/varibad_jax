@@ -20,3 +20,39 @@ register(
     entry_point=("varibad_jax.envs.gridworld_jax:GridNavi"),
     kwargs={},
 )
+
+from xminigrid.registration import register as register_xminigrid
+
+register_xminigrid(
+    id="XLand-MiniGridCustom-R1-7x7",
+    entry_point="varibad_jax.envs.xland.custom:CustomXLandMiniGrid",
+    grid_type="R1",
+    height=7,
+    width=7,
+    view_size=5,
+)
+
+register_xminigrid(
+    id="MiniGrid-GoToDoor-R1-7x7",
+    entry_point="varibad_jax.envs.xland.go_to_door:GoToDoor",
+    height=7,
+    width=7,
+    view_size=5,
+)
+
+register_xminigrid(
+    id="MiniGrid-GoToDoor-R1-9x9",
+    entry_point="varibad_jax.envs.xland.go_to_door:GoToDoor",
+    height=9,
+    width=9,
+    view_size=5,
+)
+
+# register_xminigrid(
+#     id="XLand-MiniGrid-R2-9x9",
+#     entry_point="xminigrid.envs.xland:XLandMiniGrid",
+#     grid_type="R2",
+#     height=9,
+#     width=9,
+#     view_size=5,
+# )

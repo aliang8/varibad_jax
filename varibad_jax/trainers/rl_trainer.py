@@ -74,7 +74,7 @@ class RLTrainer(BaseTrainer):
         xtimestep = self.jit_reset(self.env_params, reset_rng)
         state = xtimestep.timestep.observation
         state = state.astype(np.float32)
-        if self.config.model.pass_task_to_policy:
+        if self.config.model.policy.pass_task_to_policy:
             if self.config.env.env_name == "gridworld":
                 task = xtimestep.timestep.state.goal
             elif self.config.env.env_name == "xland":
@@ -88,17 +88,23 @@ class RLTrainer(BaseTrainer):
         if len(state.shape) == 1:  # add extra dimension
             state = state[..., np.newaxis]
 
+        hidden_state = None
+
         self.policy_storage.prev_state[0] = state
 
         for step in range(self.steps_per_rollout):
             # sample random action from policy
-            policy_output, self.agent._state = self.agent.get_action(
+            (policy_output, hidden_state), self.agent._state = self.agent.get_action(
                 next(self.rng_seq),
                 env_state=state,
                 task=task,
+                hidden_state=hidden_state,
                 is_training=True,
             )
 
+            import ipdb
+
+            ipdb.set_trace()
             # take a step in the environment
             action = policy_output.action
             xtimestep = self.jit_step(self.env_params, xtimestep, action)
@@ -108,7 +114,7 @@ class RLTrainer(BaseTrainer):
             done = xtimestep.timestep.last()
             rew_norm = rew_raw
 
-            if self.config.model.pass_task_to_policy:
+            if self.config.model.policy.pass_task_to_policy:
                 if self.config.env.env_name == "gridworld":
                     task = xtimestep.timestep.state.goal
                 elif self.config.env.env_name == "xland":
@@ -157,10 +163,11 @@ class RLTrainer(BaseTrainer):
             self.total_steps += self.num_processes
 
         # compute next value for bootstrapping
-        policy_output, self.agent._state = self.agent.get_action(
+        (policy_output, _), self.agent._state = self.agent.get_action(
             next(self.rng_seq),
             env_state=state,
             task=task,
+            hidden_state=hidden_state,
             is_training=True,
         )
         next_value = policy_output.value

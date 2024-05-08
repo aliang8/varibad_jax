@@ -7,7 +7,9 @@ from absl import app, logging
 import os
 from pathlib import Path
 import pickle
+from PIL import Image
 import jax
+import tqdm
 import json
 import jax.numpy as jnp
 import functools
@@ -20,6 +22,7 @@ from varibad_jax.envs.utils import make_envs
 from varibad_jax.utils.rollout import run_rollouts
 from varibad_jax.models.varibad.varibad import VariBADModel
 from varibad_jax.agents.ppo.ppo import PPOAgent
+from varibad_jax.models.base import RandomActionAgent
 
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.01"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
@@ -87,7 +90,9 @@ def main(_):
 
     # collect some rollouts
     # steps_per_rollout = config_p.env.num_episodes_per_rollout * envs.max_episode_steps
-    steps_per_rollout = config_p.env.num_episodes_per_rollout * 20
+    steps_per_rollout = (
+        config_p.env.num_episodes_per_rollout * config.env.steps_per_rollout
+    )
 
     logging.info("start data collection")
     config_p.num_eval_rollouts = config.num_rollouts_collect
@@ -117,8 +122,43 @@ def main(_):
 
     logging.info(f"dataset size: {dataset_size}")
 
+    # render images afterwards
+    # all_imgs = []
+    # for traj_indx in tqdm.tqdm(range(config.num_rollouts_collect)):
+    #     imgs = []
+    #     for step in range(config.env.steps_per_rollout):
+    #         timestep = jtu.tree_map(lambda x: x[traj_indx][step], transitions)
+    #         img = envs.render(envs.env_params, timestep)
+    #         img = Image.fromarray(img)
+    #         img = img.resize((64, 64))
+    #         imgs.append(img)
+    #     all_imgs.append(imgs)
+
+    # all_imgs = jnp.array(all_imgs)
+    # logging.info(f"all_imgs shape: {all_imgs.shape}")
+
+    # TODO: this is a hack for now
+
+    if config.env.env_name == "xland":
+        info = {
+            "agent_position": transitions.state.agent.position,
+            "agent_direction": transitions.state.agent.direction,
+            "grid": transitions.state.grid,
+            "goal": transitions.state.goal_encoding,
+            "rule": transitions.state.rule_encoding,
+        }
+        # info = transitions.state
+    else:
+        info = {}
+    #     agent_pos = transitions.state.agent.position  # [B, T, 2]
+    #     agent_dir = transitions.state.agent.direction  # [B, T]
+    #     observations = jnp.concatenate([agent_pos, agent_dir[:, :, None]], axis=-1)
+    #     # observations = transitions.state.grid
+
+    # else:
     observations = transitions.observation
     next_observations = transitions.observation[:, 1:]
+
     # append the last observation
     next_observations = jnp.concatenate(
         [next_observations, next_observations[:, -2:-1]], axis=1
@@ -155,11 +195,9 @@ def main(_):
         dones=dones,
         tasks=tasks,
         mask=mask,
+        info=info,
+        # imgs=all_imgs,
     )
-
-    # import ipdb
-
-    # ipdb.set_trace()
 
     metadata = {
         "pretrained_model_config": config_p.to_dict(),

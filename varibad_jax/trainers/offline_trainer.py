@@ -22,7 +22,12 @@ from varibad_jax.utils.rollout import run_rollouts
 
 from varibad_jax.trainers.base_trainer import BaseTrainer
 import varibad_jax.utils.general_utils as gutl
-from varibad_jax.utils.data_utils import load_data, create_data_loader, Batch
+from varibad_jax.utils.data_utils import (
+    load_data,
+    create_data_loader,
+    Batch,
+    subsample_data,
+)
 
 from varibad_jax.models.bc.bc import BCAgent
 from varibad_jax.models.decision_transformer.dt import (
@@ -54,9 +59,9 @@ class OfflineTrainer(BaseTrainer):
             config=config, rng=rng, steps_per_rollout=steps_per_rollout
         )
 
-        import ipdb
+        # import ipdb
 
-        ipdb.set_trace()
+        # ipdb.set_trace()
 
         self.train_dataset = train_dataset
         self.eval_dataset = eval_dataset
@@ -81,11 +86,13 @@ class OfflineTrainer(BaseTrainer):
             else:
                 self.eval_dataloader = None
 
+            obs_shape = self.train_dataset["observations"].shape[2:]
+
         # test dataloader
         batch = next(iter(self.train_dataloader))
 
-        for k, v in batch.items():
-            logging.info(f"{k}: {v.shape}")
+        fn = lambda x, y: logging.info(f"{jax.tree_util.keystr(x)}: {y.shape}")
+        jtu.tree_map_with_path(fn, batch)
 
         if self.config.model.name == "bc":
             model_cls = BCAgent
@@ -104,7 +111,7 @@ class OfflineTrainer(BaseTrainer):
 
         self.model = model_cls(
             config=config.model,
-            observation_shape=self.obs_shape,
+            observation_shape=obs_shape,  # determine obs shape from the dataset
             action_dim=self.action_dim,
             input_action_dim=self.input_action_dim,
             continuous_actions=self.continuous_actions,
@@ -127,6 +134,8 @@ class OfflineTrainer(BaseTrainer):
             start_time = time.time()
             epoch_metrics = dd(list)
             for batch in self.train_dataloader:
+                if "info" in batch:
+                    del batch["info"]
                 batch = Batch(**batch)
                 metrics = self.model.update(next(self.rng_seq), batch)
                 for k, v in metrics.items():
@@ -146,7 +155,8 @@ class OfflineTrainer(BaseTrainer):
             if (epoch + 1) % self.config.eval_interval == 0:
                 eval_metrics = self.eval(epoch + 1)
 
-                print(epoch_metrics)
+                print("train: ", epoch_metrics)
+                print("eval: ", eval_metrics)
 
                 if self.wandb_run is not None:
                     eval_metrics = gutl.prefix_dict_keys(eval_metrics, prefix="eval/")
@@ -158,6 +168,9 @@ class OfflineTrainer(BaseTrainer):
         # run on eval batches
         if self.eval_dataloader is not None:
             for batch in self.eval_dataloader:
+                if "info" in batch:
+                    del batch["info"]
+
                 batch = Batch(**batch)
                 metrics = self.model.update(
                     next(self.rng_seq), batch, update_model=False
@@ -178,7 +191,7 @@ class OfflineTrainer(BaseTrainer):
             prompt_idxs = npr.choice(
                 num_trajs, size=self.config.num_eval_rollouts, replace=False
             )
-            prompts = {k: v[prompt_idxs] for k, v in self.eval_dataset.items()}
+            prompts = subsample_data(self.eval_dataset, prompt_idxs)
         else:
             prompts = None
 

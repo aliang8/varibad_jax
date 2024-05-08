@@ -15,7 +15,7 @@ from functools import partial
 from collections import defaultdict as dd
 from tensorflow_probability.substrates import jax as tfp
 
-from varibad_jax.agents.actor_critic import ActorCritic
+from varibad_jax.agents.actor_critic import ActorCritic, ActorCriticInput
 from varibad_jax.models.base import BaseAgent
 
 tfd = tfp.distributions
@@ -24,23 +24,38 @@ tfb = tfp.bijectors
 
 class PPOAgent(BaseAgent):
     @hk.transform_with_state
-    def model(self, env_state, **kwargs):
-        policy = ActorCritic(self.config, self.is_continuous, self.action_dim)
-        return policy(state=env_state, **kwargs)
+    def model(self, env_state, hidden_state=None, **kwargs):
+        policy = ActorCritic(self.config.policy, self.is_continuous, self.action_dim)
+        policy_input = ActorCriticInput(state=env_state, **kwargs)
+        return policy(policy_input, hidden_state)
+
+    @hk.transform_with_state
+    def unroll_model(self, env_state, **kwargs):
+        policy = ActorCritic(self.config.policy, self.is_continuous, self.action_dim)
+        policy_input = ActorCriticInput(state=env_state, **kwargs)
+
+        batch_size = env_state.shape[1]
+        policy_outs, hidden_states = hk.dynamic_unroll(
+            policy, policy_input, policy.initial_state(batch_size)
+        )
+        return policy_outs
 
     def _init_model(self):
-        t, bs = 2, 2
-        dummy_states = np.zeros((t, bs, *self.observation_shape), dtype=np.float32)
-        if self.config.pass_latent_to_policy:
-            dummy_latents = np.zeros((t, bs, self.config.latent_dim * 2))
+        t = 2
+        dummy_states = np.zeros((t, *self.observation_shape), dtype=np.float32)
+        if self.config.policy.pass_latent_to_policy:
+            dummy_latents = np.zeros((t, self.config.latent_dim * 2))
         else:
             dummy_latents = None
 
-        if self.config.pass_task_to_policy:
-            dummy_tasks = np.zeros((t, bs, self.config.task_dim))
+        if self.config.policy.pass_task_to_policy:
+            dummy_tasks = np.zeros((t, self.config.task_dim))
         else:
             dummy_tasks = None
 
+        self.jit_unroll = jax.jit(
+            self.unroll_model.apply, static_argnames=("self", "is_training")
+        )
         self._params, self._state = self.model.init(
             self._init_key,
             self,
@@ -64,7 +79,7 @@ class PPOAgent(BaseAgent):
         latent: jnp.ndarray = None,
         task: jnp.ndarray = None,
     ):
-        policy_output, state = self.model.apply(
+        (policy_output, _), state = self.model.apply(
             params,
             state,
             rng_key,
@@ -162,7 +177,7 @@ class PPOAgent(BaseAgent):
             )
             # grad_norms, stats = gutl.compute_all_grad_norm(grad_norm_type="2", grads=grads)
             # loss_dict.update(stats)
-            grads, opt_state = self.opt.update(grads, opt_state)
+            grads, opt_state = self.opt.update(grads, opt_state, params)
             params = optax.apply_updates(params, grads)
 
         return params, state, opt_state, loss_dict
@@ -187,7 +202,7 @@ class PPOAgent(BaseAgent):
         advantages = target - value
         gae = advantages
 
-        if self.config.pass_latent_to_policy:
+        if self.config.policy.pass_latent_to_policy:
             latent_mean = np.array(replay_buffer.latent_mean[:-1])
             latent_logvar = np.array(replay_buffer.latent_logvar[:-1])
             latent = np.concatenate([latent_mean, latent_logvar], axis=-1)
@@ -195,7 +210,7 @@ class PPOAgent(BaseAgent):
         else:
             latent = None
 
-        if self.config.pass_task_to_policy:
+        if self.config.policy.pass_task_to_policy:
             task = flatten(np.array(replay_buffer.tasks[:-1]))
         else:
             task = None

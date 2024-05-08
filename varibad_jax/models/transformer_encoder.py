@@ -203,6 +203,7 @@ class SARTransformerEncoder(hk.Module):
             mask = einops.rearrange(mask, "t b -> b t")
 
         if self.image_obs:
+            states = einops.rearrange(states, "b t h w c -> b t c h w")
             state_embed = self.state_embed(states, is_training=is_training)
         else:
             state_embed = self.state_embed(states)

@@ -5,16 +5,18 @@ import jax
 import optax
 import pickle
 import haiku as hk
+import jax.numpy as jnp
 from pathlib import Path
 from functools import partial
 from ml_collections.config_dict import ConfigDict
+from varibad_jax.agents.common import PolicyOutput
 
 
 @optax.inject_hyperparams
 def optimizer(lr, eps):
     return optax.chain(
         # optax.clip_by_global_norm(config.policy.max_grad_norm),
-        optax.adam(lr, eps=eps),
+        optax.adamw(lr, eps=eps),
     )
 
 
@@ -45,6 +47,10 @@ class BaseModel:
         self._state = None
         self._opt_state = None
 
+        w_init = hk.initializers.VarianceScaling(scale=2.0)
+        b_init = hk.initializers.Constant(0.0)
+        self.init_kwargs = dict(w_init=w_init, b_init=b_init)
+
         if load_from_ckpt:
             if ckpt_dir:
                 ckpt_dir = Path(ckpt_dir) / "model_ckpts"
@@ -74,23 +80,15 @@ class BaseModel:
 
     def _init_opt(self) -> None:
         """Initialize Adam optimizer for training."""
-        # if self.config.use_lr_scheduler:
-        #     # lr = optax.polynomial_schedule(
-        #     #     init_value=self._learning_rate_start,
-        #     #     end_value=self._learning_rate_end,
-        #     #     power=1,  # 1: Linear decay
-        #     #     transition_steps=self._learning_rate_decay_steps,
-        #     # )
-        #     lr = optax.piecewise_interpolate_schedule(
-        #         interpolate_type="linear",
-        #         init_value=0.1 * self.config.lr,
-        #         boundaries_and_scales={
-        #             50 * 50: 10,
-        #             50_000: 0.01,
-        #         },
-        #     )
-        # else:
-        lr = self.config.lr
+        if self.config.use_lr_scheduler:
+            # apply linear warmup
+            lr = optax.linear_schedule(
+                init_value=0,
+                end_value=self.config.lr,
+                transition_steps=self.config.warmup_steps,
+            )
+        else:
+            lr = self.config.lr
         self.opt = optimizer(lr, self.config.eps)
         self._opt_state = self.opt.init(self._params)
 
@@ -101,7 +99,7 @@ class BaseModel:
             self.loss_fn, has_aux=True
         )(params, state, rng, batch)
         if update_model:
-            grads, opt_state = self.opt.update(grads, opt_state)
+            grads, opt_state = self.opt.update(grads, opt_state, params)
             params = optax.apply_updates(params, grads)
         else:
             opt_state = self._opt_state
@@ -133,3 +131,21 @@ class BaseAgent(BaseModel):
     # using env_state because of naming conflict with hk state
     def get_action(self, rng, env_state, **kwargs):
         return self.get_action_jit(self._params, self._state, rng, env_state, **kwargs)
+
+
+class RandomActionAgent(BaseAgent):
+
+    @partial(jax.jit, static_argnames=("self", "is_training"))
+    def get_action_jit(self, params, state, rng, env_state, **kwargs):
+        logging.info("random action")
+        logging.info(kwargs)
+        if self.is_continuous:
+            action = jax.random.uniform(rng, (env_state.shape[0], self.action_dim))
+        else:
+            action = jax.random.randint(rng, (env_state.shape[0],), 0, 3)
+
+        return PolicyOutput(action=action, value=jnp.zeros_like(action)), None
+
+    def _init_model(self):
+        self._params, self._state = None, None
+        return
