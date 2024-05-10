@@ -165,6 +165,8 @@ class OfflineTrainer(BaseTrainer):
                     eval_metrics = gutl.prefix_dict_keys(eval_metrics, prefix="eval/")
                     self.wandb_run.log(eval_metrics)
 
+        self.eval(epoch=self.config.num_epochs)
+
     def eval(self, epoch: int):
         eval_metrics = dd(list)
 

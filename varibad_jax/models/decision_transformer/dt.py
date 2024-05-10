@@ -182,7 +182,9 @@ class LatentDTAgent(LatentActionBaseAgent, DecisionTransformerAgent):
         lam_key, policy_key = jax.random.split(rng, 2)
 
         # predict the latent action from observations with pretrained model
-        latent_actions = self.label_trajectory_with_actions(lam_key, batch.observations)
+        latent_actions = self.label_trajectory_with_actions(
+            lam_key, batch.observations.astype(jnp.float32)
+        )
         batch.actions = latent_actions
 
         # import ipdb

@@ -15,6 +15,7 @@ import collections
 from ml_collections import ConfigDict, FieldReference, FrozenConfigDict, config_flags
 from typing import Any
 import pickle
+import jax.tree_util as jtu
 from pathlib import Path
 from ray import train, tune
 from ray.train import RunConfig, ScalingConfig
@@ -37,7 +38,9 @@ psh = {
         "env_id": "eid",
         "num_frames": "nf",
         "num_processes": "np",
+        "steps_per_rollout": "steps",
     },
+    "data": {"num_trajs": "nt"},
     "vae": {
         "lr": "vlr",
         "kl_weight": "klw",
@@ -57,7 +60,7 @@ psh = {
         "pass_latent_to_policy": "pltp",
         "pass_task_to_policy": "pttp",
         "name": "pn",
-        "algo": "alg",
+        "idm": {"beta": "b", "num_codes": "n_codes", "code_dim": "code_d"},
     },
 }
 
@@ -118,28 +121,25 @@ def update(source, overrides):
 
 
 def create_exp_name(param_space, config):
+    global trial_str
     trial_str = config["exp_name"] + ","
 
-    for k, override in param_space.items():
-        if k in config:
-            if isinstance(override, dict) and "grid_search" not in override:
-                for k2 in override.keys():
-                    if k2 in config[k]:
-                        trial_str += f"{psh[k][k2]}-{config[k][k2]},"
-            else:
-                trial_str += f"{psh[k]}-{config[k]},"
+    def add_to_trial_str(k, v):
+        global trial_str
+        shorthand = psh
+        value = config
+        for i, key in enumerate(k):
+            key_str = eval(str(key))[0]
+            if key_str == "grid_search" or isinstance(key, jtu.SequenceKey):
+                continue
 
-    # also add keys to include
-    for k, v in config["keys_to_include"].items():
-        if v is None:
-            if k not in param_space:
-                trial_str += f"{psh[k]}-{config[k]},"
-        else:
-            for k2 in v:
-                if k not in param_space or (
-                    k in param_space and k2 not in param_space[k]
-                ):
-                    trial_str += f"{psh[k][k2]}-{config[k][k2]},"
+            shorthand = shorthand[key_str]
+            value = value[key_str]
+
+        trial_str += str(shorthand) + "-" + str(value) + ","
+
+    jtu.tree_map_with_path(add_to_trial_str, param_space)
+    jtu.tree_map_with_path(add_to_trial_str, config["keys_to_include"])
 
     trial_str = trial_str[:-1]
     print("trial_str: ", trial_str)

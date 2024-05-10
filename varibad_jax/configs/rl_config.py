@@ -77,7 +77,6 @@ def get_config(config_string: str = None):
     config.notes = "RL"
     config.tags = ["rl", "jax"]
     config.keys_to_include = {
-        "trainer": None,
         "env": ["env_name", "env_id"],
     }
 
