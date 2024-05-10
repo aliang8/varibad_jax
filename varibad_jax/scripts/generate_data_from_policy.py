@@ -167,9 +167,10 @@ def main(_):
     dones = transitions.last()
 
     states = transitions.state
-    # import ipdb
 
-    # ipdb.set_trace()
+    import ipdb
+
+    ipdb.set_trace()
     if config.env.env_name == "gridworld":
         successes = states.success
         mask = 1 - successes

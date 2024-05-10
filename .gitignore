@@ -18,3 +18,4 @@ varibad_jax/varibad_jax/ray_results/*
 test*
 misc/*
 varibad_jax/datasets/*
+old/*
