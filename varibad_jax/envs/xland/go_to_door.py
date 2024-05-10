@@ -35,7 +35,10 @@ class GoToDoor(CustomXLandMiniGrid):
         keys = jax.random.split(_key, num=5)
 
         # pick four random color for the tiles without replacement
-        colors = jax.random.permutation(keys[0], jnp.arange(1, NUM_COLORS))[:4]
+        # colors = jax.random.permutation(keys[0], jnp.arange(1, NUM_COLORS))[:4]
+
+        # select four items
+        colors = jnp.array([1, 2, 3, 5])
 
         # pick one of the tiles to be the goal
         goal_indx = jax.random.randint(keys[2], shape=(), minval=0, maxval=len(colors))
@@ -43,20 +46,23 @@ class GoToDoor(CustomXLandMiniGrid):
         tile = Tiles.DOOR_LOCKED
         colored_tiles = []
 
-        # for indx, color in enumerate(colors):
-        #     if indx == goal_indx:
-        #         tile = Tiles.DOOR_OPEN
-        #     else:
-        #         tile = Tiles.DOOR_LOCKED
-        #     colored_tiles.append(TILES_REGISTRY[tile, color])
-        colored_tiles = jnp.array([TILES_REGISTRY[tile, color] for color in colors])
-        goal_tile = colored_tiles[goal_indx]
+        goal_tile = TILES_REGISTRY[tile, colors[goal_indx]]
+
+        for _, color in enumerate(colors):
+            colored_tiles.append(TILES_REGISTRY[tile, color])
+
         grid = room(params.height, params.width)
 
         # pick four numbers between 1 and params.height - 1
-        door_positions = jax.random.randint(
-            keys[1], shape=(4,), minval=1, maxval=params.height - 1
-        )
+        # door_positions = jax.random.randint(
+        #     keys[1], shape=(4,), minval=1, maxval=params.height - 1
+        # )
+        door_positions = [
+            int(params.height // 2),
+            int(params.height // 2),
+            int(params.width // 2),
+            int(params.width // 2),
+        ]
 
         grid = grid.at[0, door_positions[0]].set(colored_tiles[0])
         grid = grid.at[door_positions[1], -1].set(colored_tiles[1])
@@ -83,8 +89,11 @@ class GoToDoor(CustomXLandMiniGrid):
         _goal_encoding = AgentNearGoal(tile=goal_tile).encode()
         _rule_encoding = EmptyRule().encode()[None, ...]
 
+        mask = mask.at[int(params.height // 2), int(params.width // 2)].set(False)
+
         ball_coords, agent_coords = sample_coordinates(keys[3], grid, num=2, mask=mask)
-        grid = grid.at[ball_coords[0], ball_coords[1]].set(ball)
+        # grid = grid.at[ball_coords[0], ball_coords[1]].set(ball)
+        grid = grid.at[int(params.height // 2), int(params.width // 2)].set(ball)
 
         agent = AgentState(position=agent_coords, direction=sample_direction(keys[4]))
         state = State(

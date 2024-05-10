@@ -17,6 +17,7 @@ class PolicyOutput:
     hidden_state: Optional[jnp.ndarray] = None
     entropy: Optional[jnp.ndarray] = None
     dist: Optional[tfd.Distribution] = None
+    log_prob: Optional[jnp.ndarray] = None
     logits: Optional[jnp.ndarray] = None
     latent_action: Optional[jnp.ndarray] = None
 
@@ -53,7 +54,7 @@ class ActionHead(hk.Module):
             else:
                 action = action_dist.mode()
             entropy = action_dist.entropy()
-
+            log_prob = action_dist.log_prob(action)
         else:
             mean = self.mean(h)
             logvar = self.logvar(h)
@@ -64,11 +65,13 @@ class ActionHead(hk.Module):
                 action = action_dist.sample(seed=hk.next_rng_key())
                 logits = jnp.stack([mean, logvar], axis=-1)
                 entropy = action_dist.entropy()
+                log_prob = action_dist.log_prob(action)
             else:
                 action = mean
                 logits = None
                 entropy = None
                 action_dist = None
+                log_prob = None
 
         return PolicyOutput(
             action=action,
@@ -76,4 +79,5 @@ class ActionHead(hk.Module):
             entropy=entropy,
             dist=action_dist,
             logits=logits,
+            log_prob=log_prob,
         )

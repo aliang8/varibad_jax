@@ -398,10 +398,11 @@ def eval_rollout(
         (policy_output, hidden_state), _ = agent.get_action(
             policy_rng,
             env_state=observation,
-            task=task,
             hidden_state=hidden_state,
+            task=task,
             is_training=False,
         )
+
         action = policy_output.action
         next_xtimestep = env.step(env.env_params, xtimestep, action.squeeze())
         next_timestep = next_xtimestep.timestep
@@ -433,6 +434,8 @@ def eval_rollout(
 
     if config.model.policy.use_rnn_policy:
         hidden_state = jnp.zeros((1, config.model.policy.rnn_hidden_size))
+    else:
+        hidden_state = None
 
     init_carry = (rng, stats, xtimestep, prev_action, prev_reward, done, hidden_state)
 

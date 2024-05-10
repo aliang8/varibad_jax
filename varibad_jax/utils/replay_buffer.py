@@ -349,7 +349,7 @@ class OnlineStorage:
                 task=task,
             )
         else:
-            policy_output, policy_state = agent.get_action(
+            (policy_output, _), policy_state = agent.get_action(
                 rng_key,
                 env_state=self.prev_state[:-1],
                 latent=latent,
@@ -358,6 +358,10 @@ class OnlineStorage:
             )
 
         log_probs = policy_output.dist.log_prob(self.actions.astype(np.int32).squeeze())
+
+        # import jax
+
+        # jax.debug.breakpoint()
         self.action_log_probs = log_probs
         # [T, B]
 

@@ -33,6 +33,15 @@ register_xminigrid(
 )
 
 register_xminigrid(
+    id="MiniGrid-GoToDoor-R1-5x5",
+    entry_point="varibad_jax.envs.xland.go_to_door:GoToDoor",
+    height=5,
+    width=5,
+    view_size=5,
+)
+
+
+register_xminigrid(
     id="MiniGrid-GoToDoor-R1-7x7",
     entry_point="varibad_jax.envs.xland.go_to_door:GoToDoor",
     height=7,

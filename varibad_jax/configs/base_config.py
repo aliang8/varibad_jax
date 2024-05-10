@@ -75,7 +75,6 @@ def get_config(config_string: str = None):
     config.seed = 521
     config.mode = "train"
     config.use_wb = False
-    config.lr_anneal_method = "warmup_exp_decay"
 
     # number of updates
     config.log_level = "info"
@@ -88,7 +87,7 @@ def get_config(config_string: str = None):
     config.best_metric = "max"
 
     config.eval_interval = 100
-    config.disable_tqdm = True
+    config.disable_tqdm = False
     config.smoke_test = True
 
     # number of warmup steps before training

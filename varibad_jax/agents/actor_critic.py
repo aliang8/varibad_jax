@@ -82,11 +82,11 @@ class ActorCritic(hk.Module):
                 b_init=b_init,
             )
 
-        self.action_pred = hk.nets.MLP(
+        self.embed_input = hk.nets.MLP(
             list(self.config.mlp_layer_sizes),
             activation=nn.gelu,
             activate_final=True,
-            name="action_pred",
+            name="embed_input",
             **init_kwargs,
         )
 
@@ -117,8 +117,8 @@ class ActorCritic(hk.Module):
             state_embed = self.state_embed(state, is_training=is_training)
         else:
             state_embed = self.state_embed(state)
-        state_embed = nn.gelu(state_embed)
 
+        state_embed = nn.gelu(state_embed)
         policy_input = state_embed
 
         # Encode latent
@@ -133,8 +133,7 @@ class ActorCritic(hk.Module):
             task_embed = nn.gelu(task_embed)
             policy_input = jnp.concatenate((policy_input, task_embed), axis=-1)
 
-        value = self.critic_mlp(policy_input)
-        h = self.action_pred(policy_input)
+        h = self.embed_input(policy_input)
 
         if self.config.use_rnn_policy:
             if hidden_state is None:
@@ -143,6 +142,7 @@ class ActorCritic(hk.Module):
         else:
             hidden_state = None
 
+        value = self.critic_mlp(h)
         policy_output = self.action_head(h, is_training=is_training)
         policy_output.value = value
         return policy_output, hidden_state

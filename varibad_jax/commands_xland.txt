@@ -3,12 +3,13 @@
 python3 main.py \
     --config=configs/rl_config.py:lstm-xland-5x5 \
     --config.smoke_test=True \
-    --config.use_wb=True \
-    --config.exp_name="oracle_7x7" \
+    --config.use_wb=False \
+    --config.exp_name="oracle_7x7_2" \
     --config.env.num_episodes_per_rollout=1 \
     --config.env.steps_per_rollout=30 \
     --config.visualize_rollouts=True \
-    --config.model.entropy_coeff=0.05
+    --config.model.entropy_coeff=0.05 \
+    --config.model.policy.use_rnn_policy=True
 
 python3 scripts/train_xland_oracle.py
 
@@ -134,8 +135,21 @@ python3 main.py \
     --config.use_wb=True \
     --config.exp_name="oracle_gotokey_7x7" \
     --config.env.num_episodes_per_rollout=1 \
+    --config.env.steps_per_rollout=100 \
+    --config.visualize_rollouts=True \
+    --config.model.entropy_coeff=0.1 \
+    --config.env.env_id=MiniGrid-GoToDoor-R1-7x7 \
+    --config.model.policy.use_rnn_policy=True
+
+
+python3 main.py \
+    --config=configs/rl_config.py:lstm-xland-5x5 \
+    --config.smoke_test=True \
+    --config.use_wb=False \
+    --config.exp_name="oracle_7x7_2" \
+    --config.env.num_episodes_per_rollout=1 \
     --config.env.steps_per_rollout=30 \
     --config.visualize_rollouts=True \
     --config.model.entropy_coeff=0.05 \
-    --config.env.env_id=MiniGrid-GoToDoor-R1-7x7 \
-    --config.model.policy.use_rnn_policy=True
+    --config.model.policy.use_rnn_policy=True \
+    --config.trainer="test"

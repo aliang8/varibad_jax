@@ -21,6 +21,7 @@ from ray.train import RunConfig, ScalingConfig
 from varibad_jax.trainers.meta_trainer import MetaRLTrainer
 from varibad_jax.trainers.rl_trainer import RLTrainer
 from varibad_jax.trainers.offline_trainer import OfflineTrainer
+from varibad_jax.trainers.rl_trainer_test import RLTrainer as Test
 
 # os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.01"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
@@ -90,6 +91,8 @@ def train_model_fn(config):
         trainer_cls = MetaRLTrainer
     elif config.trainer == "offline":
         trainer_cls = OfflineTrainer
+    elif config.trainer == "test":
+        trainer_cls = Test
 
     trainer = trainer_cls(config)
     if config.mode == "train":
