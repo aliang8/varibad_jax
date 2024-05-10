@@ -17,19 +17,9 @@ from pathlib import Path
 from ml_collections.config_dict import ConfigDict
 
 from varibad_jax.models.base import BaseModel, BaseAgent
-from varibad_jax.agents.actor_critic import ActorCritic
+from varibad_jax.agents.actor_critic import ActorCritic, ActorCriticInput
 from varibad_jax.models.lam.model import LatentFDM, LatentActionIDM
 from varibad_jax.agents.common import ActionHead
-
-
-@partial(jax.jit, static_argnames=("n"))
-def confusion_matrix(labels, predictions, n):
-    cm, _ = jax.lax.scan(
-        lambda carry, pair: (carry.at[pair].add(1), None),
-        jnp.zeros((n, n), dtype=jnp.uint32),
-        (labels, predictions),
-    )
-    return cm
 
 
 @chex.dataclass
@@ -86,12 +76,13 @@ class LatentActionModel(BaseModel):
         dummy_states = np.zeros((bs, t, *self.observation_shape), dtype=np.float32)
         # dummy_states = np.zeros((bs, t, 64, 64, 3), dtype=np.float32)
 
-        self._params, self._state = self.model.init(
+        params, state = self.model.init(
             self._init_key,
             self,
             states=dummy_states,
             is_training=True,
         )
+        return params, state
 
     def loss_fn(
         self, params: hk.Params, state: hk.State, rng: jax.random.PRNGKey, batch: Tuple
@@ -200,12 +191,13 @@ class LatentActionDecoder(BaseModel):
         dummy_latent_actions = np.zeros(
             (bs, self.config.latent_action_dim), dtype=np.float32
         )
-        self._params, self._state = self.model.init(
+        params, state = self.model.init(
             self._init_key,
             self,
             latent_actions=dummy_latent_actions,
             is_training=True,
         )
+        return params, state
 
     def loss_fn(
         self, params: hk.Params, state: hk.State, rng: jax.random.PRNGKey, batch
@@ -215,8 +207,8 @@ class LatentActionDecoder(BaseModel):
         agent_key, decoder_key = jax.random.split(rng, 2)
 
         model_output, _ = self.lam.model.apply(
-            self.lam._params,
-            self.lam._state,
+            self.lam._ts.params,
+            self.lam._ts.state,
             agent_key,
             self.lam,
             states=observations.astype(jnp.float32),
@@ -336,7 +328,7 @@ class LatentActionBaseAgent(BaseAgent):
             )
 
     @partial(jax.jit, static_argnames=("self", "is_training"))
-    def get_action_jit(self, params, state, rng, env_state, task=None, **kwargs):
+    def get_action_jit(self, ts, rng, env_state, task=None, **kwargs):
         logging.info("inside get action for LatentActionAgent")
         la_key, decoder_key = jax.random.split(rng, 2)
 
@@ -344,22 +336,22 @@ class LatentActionBaseAgent(BaseAgent):
         #     env_state = einops.rearrange(env_state, "b h w c -> b c h w")
 
         # predict latent action and then use pretrained action decoder
-        la_output, _ = self.model.apply(
-            params, state, la_key, self, env_state, task, **kwargs
+        (la_output, hstate), state = self.model.apply(
+            ts.params, ts.state, la_key, self, env_state, task, **kwargs
         )
         latent_actions = la_output.action
 
         # decode latent action
         action_output, _ = self.latent_action_decoder.model.apply(
-            self.latent_action_decoder._params,
-            self.latent_action_decoder._state,
+            self.latent_action_decoder._ts.params,
+            self.latent_action_decoder._ts.state,
             decoder_key,
             self.latent_action_decoder,
             latent_actions=latent_actions,
             is_training=False,
         )
         action_output.latent_action = latent_actions
-        return action_output, state
+        return (action_output, hstate), state
 
 
 class LatentActionAgent(LatentActionBaseAgent):
@@ -376,7 +368,10 @@ class LatentActionAgent(LatentActionBaseAgent):
             is_continuous=self.is_continuous,  # we are predicting latent actions which are continuous vectors
             action_dim=self.config.latent_action_dim,
         )
-        policy_output = policy(states, task=task, is_training=is_training)
+        policy_input = ActorCriticInput(
+            state=states, task=task, is_training=is_training
+        )
+        policy_output = policy(policy_input, hidden_state=None)
         return policy_output
 
     def _init_model(self):
@@ -388,13 +383,14 @@ class LatentActionAgent(LatentActionBaseAgent):
         else:
             dummy_task = None
 
-        self._params, self._state = self.model.init(
+        params, state = self.model.init(
             self._init_key,
             self,
             states=dummy_state,
-            tasks=dummy_task,
+            task=dummy_task,
             is_training=True,
         )
+        return params, state
 
     def loss_fn(
         self, params: hk.Params, state: hk.State, rng: jax.random.PRNGKey, batch: Tuple
@@ -405,8 +401,8 @@ class LatentActionAgent(LatentActionBaseAgent):
 
         # predict the latent action from observations with pretrained model
         lam_output, _ = self.lam.model.apply(
-            self.lam._params,
-            self.lam._state,
+            self.lam._ts.params,
+            self.lam._ts.state,
             lam_key,
             self.lam,
             states=batch.observations.astype(jnp.float32),
@@ -424,7 +420,7 @@ class LatentActionAgent(LatentActionBaseAgent):
         # only the middle observation matters here
         # not a recurrent policy
         # predict latent action
-        action_output, state = self.model.apply(
+        (action_output, _), state = self.model.apply(
             params,
             state,
             policy_key,

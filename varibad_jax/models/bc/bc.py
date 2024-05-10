@@ -16,10 +16,8 @@ from functools import partial
 from pathlib import Path
 from ml_collections.config_dict import ConfigDict
 
-from varibad_jax.models.base import BaseModel, BaseAgent
-from varibad_jax.agents.actor_critic import ActorCritic
-from varibad_jax.models.lam.model import LatentFDM, LatentActionIDM
-from varibad_jax.agents.common import ActionHead
+from varibad_jax.models.base import BaseAgent
+from varibad_jax.agents.actor_critic import ActorCritic, ActorCriticInput
 
 
 class BCAgent(BaseAgent):
@@ -28,14 +26,19 @@ class BCAgent(BaseAgent):
     """
 
     @hk.transform_with_state
-    def model(self, states, tasks=None, is_training=True, **kwargs):
+    def model(
+        self, states: jnp.ndarray, task: jnp.ndarray, is_training: bool, **kwargs
+    ):
         # predicts the latent action
         policy = ActorCritic(
             self.config.policy,
             is_continuous=self.is_continuous,
             action_dim=self.action_dim,
         )
-        policy_output = policy(states, task=tasks, is_training=is_training)
+        policy_input = ActorCriticInput(
+            state=states, task=task, is_training=is_training
+        )
+        policy_output = policy(policy_input, hidden_state=None)
         return policy_output
 
     def _init_model(self):
@@ -47,13 +50,14 @@ class BCAgent(BaseAgent):
         else:
             dummy_task = None
 
-        self._params, self._state = self.model.init(
+        params, state = self.model.init(
             self._init_key,
             self,
             states=dummy_state,
-            tasks=dummy_task,
+            task=dummy_task,
             is_training=True,
         )
+        return params, state
 
     def loss_fn(
         self, params: hk.Params, state: hk.State, rng: jax.random.PRNGKey, batch: Tuple
@@ -63,19 +67,16 @@ class BCAgent(BaseAgent):
         rng, policy_key = jax.random.split(rng, 2)
 
         # predict latent action
-        action_output, state = self.model.apply(
+        (action_output, _), state = self.model.apply(
             params,
             state,
             policy_key,
             self,
             states=batch.observations.astype(jnp.float32),
-            tasks=batch.tasks,
+            task=batch.tasks,
             is_training=True,
         )
 
-        # import ipdb
-
-        # ipdb.set_trace()
         gt_actions = batch.actions
         if self.is_continuous:
             loss = optax.squared_error(action_output.action, gt_actions)

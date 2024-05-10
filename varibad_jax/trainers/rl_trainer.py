@@ -1,43 +1,66 @@
-import os
-import collections
-import random
 import time
-import sys
-from absl import app, flags
 from absl import logging
-import pickle
-import flax
-import flax.linen as nn
-from flax.training.train_state import TrainState
 import jax
 import jax.numpy as jnp
-from jax.random import PRNGKey
-import numpy as np
-import optax
 import tqdm
-from ml_collections.config_flags import config_flags
-from ml_collections.config_dict import ConfigDict, FrozenConfigDict
-from functools import partial
-import haiku as hk
-from pathlib import Path
-import gymnasium as gym
+from ml_collections.config_dict import ConfigDict
+from flax import struct
+import jax.tree_util as jtu
+from typing import Optional
 
 from varibad_jax.trainers.base_trainer import BaseTrainer
 from varibad_jax.agents.ppo.ppo import PPOAgent
 from varibad_jax.utils.rollout import run_rollouts
-
-from varibad_jax.utils.replay_buffer import OnlineStorage
 import varibad_jax.utils.general_utils as gutl
+
+
+class Transition(struct.PyTreeNode):
+    done: jax.Array
+    action: jax.Array
+    value: jax.Array
+    reward: jax.Array
+    log_prob: jax.Array
+    obs: jax.Array
+    # for rnn policy
+    prev_action: jax.Array
+    prev_reward: jax.Array
+    task: Optional[jax.Array] = None
+
+
+def calculate_gae(
+    transitions: Transition,
+    last_val: jax.Array,
+    gamma: float,
+    gae_lambda: float,
+) -> tuple[jax.Array, jax.Array]:
+
+    # single iteration for the loop
+    def _get_advantages(gae_and_next_value, transition):
+        gae, next_value = gae_and_next_value
+        delta = (
+            transition.reward
+            + gamma * next_value * (1 - transition.done)
+            - transition.value
+        )
+        gae = delta + gamma * gae_lambda * (1 - transition.done) * gae
+        return (gae, transition.value), gae
+
+    _, advantages = jax.lax.scan(
+        _get_advantages,
+        (jnp.zeros_like(last_val), last_val),
+        transitions,
+        reverse=True,
+    )
+    # advantages and values (Q)
+    return advantages, advantages + transitions.value
 
 
 class RLTrainer(BaseTrainer):
     def __init__(self, config: ConfigDict):
         super().__init__(config)
         self.total_steps = 0
-        self.num_processes = config.env.num_processes
-        self.num_updates = (
-            int(config.num_frames) // self.steps_per_rollout // config.env.num_processes
-        )
+        self.num_updates = config.num_frames // config.num_steps // config.num_envs
+
         logging.info(f"num rl updates = {self.num_updates}")
         logging.info(f"steps per rollout = {self.steps_per_rollout}")
         logging.info(f"action_dim = {self.action_dim}")
@@ -50,157 +73,131 @@ class RLTrainer(BaseTrainer):
             continuous_actions=self.continuous_actions,
             key=next(self.rng_seq),
         )
-        self.policy_storage = self.setup_replay_buffers()
 
-    def setup_replay_buffers(self):
-        policy_storage = OnlineStorage(
-            args=self.config,
-            num_steps=self.steps_per_rollout,
-            num_processes=self.num_processes,
-            state_dim=self.envs.observation_space.shape,
-            latent_dim=0,
-            belief_dim=0,
-            task_dim=self.task_dim,
-            action_space=self.envs.action_space,
-            hidden_size=0,
-            normalise_rewards=self.config.env.normalize_rews,
-        )
-        return policy_storage
+        def _env_step(runner_state, _):
+            rng, ts, prev_xtimestep, prev_action, prev_reward, prev_hstate = (
+                runner_state
+            )
 
-    def collect_rollouts(self):
-        logging.debug("inside rollout")
-        reset_rng = next(self.rng_seq)
-        reset_rng = jax.random.split(reset_rng, self.num_processes)
-        xtimestep = self.jit_reset(self.env_params, reset_rng)
-        state = xtimestep.timestep.observation
-        state = state.astype(np.float32)
-        if self.config.model.policy.pass_task_to_policy:
-            if self.config.env.env_name == "gridworld":
-                task = xtimestep.timestep.state.goal
-            elif self.config.env.env_name == "xland":
-                task = xtimestep.timestep.state.goal_encoding
+            # SELECT ACTION
+            rng, _rng = jax.random.split(rng)
+            observation = prev_xtimestep.timestep.observation
+            observation = observation.astype(jnp.float32)
+
+            # GET CURRENT TASK VECTOR
+            if config.env.env_name == "gridworld":
+                task = prev_xtimestep.timestep.state.goal
+            elif config.env.env_name == "xland":
+                task = prev_xtimestep.timestep.state.goal_encoding
 
             if len(task.shape) == 1:
-                task = task[np.newaxis]
-        else:
-            task = None
+                task = task[jnp.newaxis]
+            task = task.astype(jnp.float32)
 
-        if len(state.shape) == 1:  # add extra dimension
-            state = state[..., np.newaxis]
-
-        hidden_state = None
-
-        self.policy_storage.prev_state[0] = state
-
-        for step in range(self.steps_per_rollout):
-            # sample random action from policy
-            (policy_output, hidden_state), self.agent._state = self.agent.get_action(
-                next(self.rng_seq),
-                env_state=state,
+            (policy_output, hstate), new_state = self.agent.get_action_jit(
+                ts,
+                _rng,
+                env_state=observation,
+                hidden_state=prev_hstate,
                 task=task,
-                hidden_state=hidden_state,
                 is_training=True,
             )
 
-            # take a step in the environment
             action = policy_output.action
-            xtimestep = self.jit_step(self.env_params, xtimestep, action)
-            next_state = xtimestep.timestep.observation
-            next_state = next_state.astype(np.float32)
-            rew_raw = xtimestep.timestep.reward
-            done = xtimestep.timestep.last()
-            rew_norm = rew_raw
-
-            if self.config.model.policy.pass_task_to_policy:
-                if self.config.env.env_name == "gridworld":
-                    task = xtimestep.timestep.state.goal
-                elif self.config.env.env_name == "xland":
-                    task = xtimestep.timestep.state.goal_encoding
-
-                if len(task.shape) == 1:
-                    task = task[np.newaxis]
-            else:
-                task = None
-
-            # add extra dimension
-            if len(next_state.shape) == 1:
-                next_state = next_state[np.newaxis]
-
-            if len(action.shape) == 1:
-                action = action[:, np.newaxis]
-
-            done = done[:, np.newaxis]
-            reward = rew_raw[:, np.newaxis]
-            reward_norm = rew_norm[:, np.newaxis]
+            log_prob = policy_output.log_prob
             value = policy_output.value
 
-            self.policy_storage.next_state[step] = next_state.copy()
+            # STEP ENV
+            xtimestep = jax.vmap(self.envs.step, in_axes=(None, 0, 0))(
+                self.env_params, prev_xtimestep, action
+            )
+            reward = xtimestep.timestep.reward
+            action = action.reshape(-1, 1).astype(jnp.float32)
+            reward = reward.reshape(-1, 1)
+            done = xtimestep.timestep.last().reshape(-1, 1)
 
-            # mask out timesteps that are done
-            masks_done = np.array([[0.0] if done_ else [1.0] for done_ in done])
+            # reset the hidden state when the episode is over
+            mask = xtimestep.timestep.last()[:, None]
+            if hstate is not None:
+                hstate = hstate * (1 - mask)
 
-            # add experience to policy buffer
-            self.policy_storage.insert(
-                state=next_state,
-                belief=None,
-                task=task,
-                actions=action,
-                rewards_raw=reward,
-                rewards_normalised=reward_norm,
-                hyperx_bonuses=None,
-                vae_recon_bonuses=None,
-                masks=masks_done,
-                bad_masks=masks_done,  # TODO: fix this?
-                value_preds=value,
+            transition = Transition(
                 done=done,
+                action=action,
+                value=value,
+                reward=reward,
+                log_prob=log_prob,
+                obs=prev_xtimestep.timestep.observation.astype(jnp.float32),
+                prev_action=action,
+                prev_reward=prev_reward,
+                task=task,
             )
 
-            # update state
-            state = next_state
-            self.total_steps += self.num_processes
+            ts.state = new_state
+            runner_state = (rng, ts, xtimestep, action, reward, hstate)
+            return runner_state, transition
 
-        # compute next value for bootstrapping
-        (policy_output, _), self.agent._state = self.agent.get_action(
-            next(self.rng_seq),
-            env_state=state,
-            task=task,
-            hidden_state=hidden_state,
-            is_training=True,
-        )
-        next_value = policy_output.value
+        self._env_step = _env_step
 
-        # compute returns for current rollout
-        self.policy_storage.compute_returns(
-            next_value=next_value,
-            use_gae=True,
-            gamma=self.config.model.gamma,
-            tau=self.config.model.tau,
-            use_proper_time_limits=False,
-        )
-        logging.debug("done collecting rollouts")
+        def _update_epoch(update_state, _):
+            (
+                rng,
+                ts,
+                init_hstate,
+                transitions,
+                advantages,
+                targets,
+            ) = update_state
 
-    def perform_update(self):
-        logging.debug("inside perform update")
-        metrics = {}
+            # MINIBATCHES PREPARATION
+            rng, _rng = jax.random.split(rng)
+            permutation = jax.random.permutation(_rng, config.num_envs)
 
-        # compute ppo update
-        update_start = time.time()
-        policy_metrics = self.agent.update(
-            replay_buffer=self.policy_storage,
-            rng=next(self.rng_seq),
-        )
-        policy_update_time = time.time() - update_start
-        policy_metrics = gutl.prefix_dict_keys(policy_metrics, prefix="policy/")
-        metrics.update(policy_metrics)
-        logging.debug("done updating policy")
-        metrics["time/policy_update_time"] = policy_update_time
-        return metrics
+            # [T, B, ...]
+            batch = (init_hstate, transitions, advantages, targets)
+            # [B, T, ...], as our model assumes
+            batch = jtu.tree_map(lambda x: x.swapaxes(0, 1), batch)
+
+            shuffled_batch = jtu.tree_map(
+                lambda x: jnp.take(x, permutation, axis=0), batch
+            )
+            # [num_minibatches, minibatch_size, ...]
+            minibatches = jtu.tree_map(
+                lambda x: jnp.reshape(
+                    x, (config.model.num_minibatches, -1) + x.shape[1:]
+                ),
+                shuffled_batch,
+            )
+
+            # import ipdb
+
+            # ipdb.set_trace()
+
+            rng, _rng = jax.random.split(rng)
+            minibatch_carry = (_rng, ts)
+            # PERFORM GRADIENT UPDATE FOR EACH MINIBATCH
+            minibatch_carry, update_info = jax.lax.scan(
+                self.agent._update_minibatch, minibatch_carry, minibatches
+            )
+
+            (rng, ts) = minibatch_carry
+
+            update_state = (
+                rng,
+                ts,
+                init_hstate,
+                transitions,
+                advantages,
+                targets,
+            )
+            return update_state, update_info
+
+        self._update_epoch = _update_epoch
 
     def train(self):
         logging.info("Training starts")
-        start_time = time.time()
 
-        # first eval
+        # FIRST EVAL
         if not self.config.skip_first_eval:
             eval_metrics, *_ = run_rollouts(
                 rng=next(self.rng_seq),
@@ -212,90 +209,121 @@ class RLTrainer(BaseTrainer):
                 wandb_run=self.wandb_run,
             )
 
-        for self.iter_idx in tqdm.tqdm(
-            range(0, self.num_updates), smoothing=0.1, disable=self.config.disable_tqdm
-        ):
-            print(
-                "------------------ Iteration {}; Frames {} ------------------".format(
-                    self.iter_idx, self.total_steps
-                )
+        # INIT ENV
+        prev_action = jnp.zeros(
+            (self.config.num_envs, self.input_action_dim), dtype=jnp.float32
+        )
+        prev_reward = jnp.zeros((self.config.num_envs, 1))
+        if self.config.model.policy.use_rnn_policy:
+            init_hstate = jnp.zeros(
+                (self.config.num_envs, self.config.model.policy.rnn_hidden_size)
             )
-            # collect rollout
-            rollout_start = time.time()
-            self.collect_rollouts()
-            # import ipdb
+        else:
+            init_hstate = None
 
-            # ipdb.set_trace()
-            rollout_time = time.time() - rollout_start
+        reset_rngs = jax.random.split(next(self.rng_seq), self.config.num_envs)
+        xtimestep = self.jit_reset(self.env_params, reset_rngs)
 
-            # Log episodic rewards for completed environments
-            # sum over timesteps and average over environments
-            episodic_rewards_raw = self.policy_storage.rewards_raw.sum(axis=0).mean()
-            episodic_rewards_normalised = self.policy_storage.rewards_normalised.sum(
-                axis=0
-            ).mean()
-            if self.wandb_run is not None:
-                self.wandb_run.log(
-                    {
-                        "train/episodic_rewards_raw": episodic_rewards_raw,
-                        "train/episodic_rewards_normalised": episodic_rewards_normalised,
-                    },
-                    step=self.iter_idx,
+        for self.iter_idx in tqdm.tqdm(
+            range(self.num_updates),
+            smoothing=0.1,
+            desc="rl training",
+            disable=self.config.disable_tqdm,
+        ):
+            runner_state = (
+                next(self.rng_seq),
+                self.agent._ts,
+                xtimestep,
+                prev_action,
+                prev_reward,
+                init_hstate,
+            )
+
+            initial_hstate = runner_state[-1]
+
+            steps_start = time.time()
+            # transitions: [T, B ...]
+            # COLLECT TRANSITIONS
+            runner_state, transitions = jax.lax.scan(
+                self._env_step, runner_state, None, self.config.num_steps
+            )
+
+            steps_end = time.time()
+            fps = (self.config.num_envs * self.config.num_steps) / (
+                steps_end - steps_start
+            )
+            # logging.info(f"fps = {fps}")
+
+            # CALCULATE ADVANTAGE
+            rng, ts, xtimestep, prev_action, prev_reward, hstate = runner_state
+            self.agent._ts = ts
+
+            # calculate value of the last step for bootstrapping
+            (policy_output, _), state = self.agent.get_action(
+                next(self.rng_seq),
+                env_state=xtimestep.timestep.observation.astype(jnp.float32),
+                hidden_state=hstate,
+                task=transitions.task[-1],  # get the most recent task
+                is_training=True,
+            )
+
+            # update training state (state)
+            self.agent._ts.state = state
+            last_val = policy_output.value
+
+            advantages, targets = calculate_gae(
+                transitions,
+                last_val,
+                self.config.model.gamma,
+                self.config.model.tau,
+            )
+
+            if initial_hstate is not None:
+                init_hstate = initial_hstate[None, :]
+
+            update_state = (
+                next(self.rng_seq),
+                self.agent._ts,
+                init_hstate,
+                transitions,
+                advantages,
+                targets,
+            )
+
+            # UPDATE POLICY
+            update_state, loss_info = jax.lax.scan(
+                self._update_epoch, update_state, None, self.config.model.num_epochs
+            )
+            # UPDATE AGENT STATES
+            self.agent._ts = update_state[1]
+
+            # averaging over minibatches then over epochs
+            loss_info = jtu.tree_map(lambda x: x.mean(-1).mean(-1), loss_info)
+
+            init_hstate = hstate  # SET HIDDEN STATE FOR NEXT ROLLOUTS
+
+            # LOGGING
+            if ((self.iter_idx + 1) % self.config.log_interval) == 0:
+                # logging.info(f"ep_rew: {transitions.reward.sum(0).mean()}")
+                metrics = {**loss_info, "time/fps": fps}
+                if self.wandb_run is not None:
+                    self.wandb_run.log(metrics, step=self.iter_idx)
+
+            # EVALUATION
+            if ((self.iter_idx + 1) % self.config.eval_interval) == 0:
+                eval_metrics, *_ = run_rollouts(
+                    rng=next(self.rng_seq),
+                    agent=self.agent,
+                    env=self.eval_envs,
+                    config=self.config,
+                    steps_per_rollout=self.steps_per_rollout,
+                    action_dim=self.input_action_dim,
+                    wandb_run=self.wandb_run,
                 )
+                # SAVE MODEL
+                self.save_model(self.agent.save_dict, eval_metrics, iter=self.iter_idx)
 
-            if self.config.warmup_steps > self.total_steps:
-                logging.info("Not updating yet ...")
-                self.policy_storage.after_update()
-                continue
-
-            # update vae and policy
-            # wait for some warmup steps first
-            if self.total_steps >= self.config.warmup_steps:
-                train_metrics = self.perform_update()
-
-                if ((self.iter_idx + 1) % self.config.log_interval) == 0:
-                    # Environment stats
-                    env_stats = {
-                        "state_max": self.policy_storage.prev_state.max(),
-                        "state_min": self.policy_storage.prev_state.min(),
-                        "rew_max": self.policy_storage.rewards_raw.max(),
-                        "rew_min": self.policy_storage.rewards_raw.min(),
-                        "rew_avg": self.policy_storage.rewards_raw.mean(),
-                        "rew_sum": self.policy_storage.rewards_raw.sum(),
-                        "rew_goal": (self.policy_storage.rewards_raw == 1).sum(),
-                    }
-                    env_stats = gutl.prefix_dict_keys(env_stats, prefix="env/")
-                    metrics = {
-                        **train_metrics,
-                        **env_stats,
-                        "time/rollout_time": rollout_time,
-                        "time/fps": self.total_steps / (time.time() - start_time),
-                    }
-                    if self.wandb_run is not None:
-                        self.wandb_run.log(metrics, step=self.iter_idx)
-
-                if (self.iter_idx + 1) % self.config.eval_interval == 0:
-                    eval_metrics, *_ = run_rollouts(
-                        rng=next(self.rng_seq),
-                        agent=self.agent,
-                        env=self.eval_envs,
-                        config=self.config,
-                        steps_per_rollout=self.steps_per_rollout,
-                        action_dim=self.input_action_dim,
-                        wandb_run=self.wandb_run,
-                    )
-                    # save to pickle
-                    self.save_model(
-                        self.agent.save_dict, eval_metrics, iter=self.iter_idx
-                    )
-
-                    if self.wandb_run is not None:
-                        eval_metrics = gutl.prefix_dict_keys(eval_metrics, "eval/")
-                        self.wandb_run.log(eval_metrics, step=self.iter_idx)
-
-            # Clean up after update
-            self.policy_storage.after_update()
-
-        self.envs.close()
-        logging.info("Finished training, closing everything")
-        return
+                print(eval_metrics)
+                if self.wandb_run is not None:
+                    eval_metrics = gutl.prefix_dict_keys(eval_metrics, "eval/")
+                    self.wandb_run.log(eval_metrics)

@@ -138,7 +138,7 @@ def run_rollouts(
 
             # generate the images
             videos = []
-            for rollout_indx in range(config.num_eval_rollouts):
+            for rollout_indx in range(config.num_eval_rollouts_render):
                 images = []
                 for step in range(steps_per_rollout):
                     timestep = jtu.tree_map(

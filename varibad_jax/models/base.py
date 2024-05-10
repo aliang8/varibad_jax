@@ -100,19 +100,21 @@ class BaseModel:
         opt_state = self.opt.init(params)
         return opt_state
 
-    @partial(jax.jit, static_argnums=(0, 6))
+    @partial(jax.jit, static_argnums=(0, 4))
     def update_model(self, ts, rng, batch, update_model):
         logging.info("updating model")
         (loss, (metrics, new_state)), grads = jax.value_and_grad(
             self.loss_fn, has_aux=True
-        )(ts, rng, batch)
+        )(ts.params, ts.state, rng, batch)
         if update_model:
             grads, new_opt_state = self.opt.update(grads, ts.opt_state, ts.params)
             new_params = optax.apply_updates(ts.params, grads)
         else:
             new_opt_state = ts.opt_state
             new_params = ts.params
-        new_ts = TrainingState(new_params, new_state, new_opt_state)
+        new_ts = TrainingState(
+            params=new_params, state=new_state, opt_state=new_opt_state
+        )
         return new_ts, metrics
 
     def update(self, rng, batch, update_model=True):

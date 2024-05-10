@@ -41,7 +41,7 @@ class DecisionTransformerAgent(BaseAgent):
         else:
             dummy_prompt = None
 
-        self._params, self._state = self.model.init(
+        params, state = self.model.init(
             self._init_key,
             self,
             states=dummy_states,
@@ -51,6 +51,7 @@ class DecisionTransformerAgent(BaseAgent):
             prompt=dummy_prompt,
             is_training=True,
         )
+        return params, state
 
     def loss_fn(
         self, params: hk.Params, state: hk.State, rng: jax.random.PRNGKey, batch: Tuple
@@ -124,7 +125,7 @@ class LatentDTAgent(LatentActionBaseAgent, DecisionTransformerAgent):
         LatentActionBaseAgent.__init__(self, *args, **kwargs)
 
     def _init_model(self):
-        DecisionTransformerAgent._init_model(self)
+        return DecisionTransformerAgent._init_model(self)
 
     def label_trajectory_with_actions(self, rng, observations):
         b = observations.shape[0]
@@ -146,8 +147,8 @@ class LatentDTAgent(LatentActionBaseAgent, DecisionTransformerAgent):
         # ipdb.set_trace()
 
         lam_output, _ = self.lam.model.apply(
-            self.lam._params,
-            self.lam._state,
+            self.lam._ts.params,
+            self.lam._ts.state,
             rng,
             self.lam,
             states=observations,
@@ -188,3 +189,29 @@ class LatentDTAgent(LatentActionBaseAgent, DecisionTransformerAgent):
 
         # ipdb.set_trace()
         return DecisionTransformerAgent.loss_fn(self, params, state, policy_key, batch)
+
+    @partial(jax.jit, static_argnames=("self", "is_training"))
+    def get_action_jit(self, ts, rng, env_state, task=None, **kwargs):
+        logging.info("inside get action for LatentActionAgent")
+        la_key, decoder_key = jax.random.split(rng, 2)
+
+        # if self.config.image_obs:
+        #     env_state = einops.rearrange(env_state, "b h w c -> b c h w")
+
+        # predict latent action and then use pretrained action decoder
+        la_output, state = self.model.apply(
+            ts.params, ts.state, la_key, self, env_state, task, **kwargs
+        )
+        latent_actions = la_output.action
+
+        # decode latent action
+        action_output, _ = self.latent_action_decoder.model.apply(
+            self.latent_action_decoder._ts.params,
+            self.latent_action_decoder._ts.state,
+            decoder_key,
+            self.latent_action_decoder,
+            latent_actions=latent_actions,
+            is_training=False,
+        )
+        action_output.latent_action = latent_actions
+        return action_output, state

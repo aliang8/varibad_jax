@@ -86,7 +86,10 @@ class OfflineTrainer(BaseTrainer):
             else:
                 self.eval_dataloader = None
 
-            obs_shape = self.train_dataset["observations"].shape[2:]
+            if self.config.data.data_type in ["trajectories", "lapo"]:
+                obs_shape = self.train_dataset["observations"].shape[2:]
+            else:
+                obs_shape = self.train_dataset["observations"].shape[1:]
 
         # test dataloader
         batch = next(iter(self.train_dataloader))
@@ -129,7 +132,7 @@ class OfflineTrainer(BaseTrainer):
                 self.wandb_run.log(metrics)
 
         # train
-        for epoch in tqdm.tqdm(range(self.config.num_epochs)):
+        for epoch in tqdm.tqdm(range(self.config.num_epochs), desc="epochs"):
             # iterate over batches of data
             start_time = time.time()
             epoch_metrics = dd(list)
@@ -146,7 +149,7 @@ class OfflineTrainer(BaseTrainer):
 
             epoch_time = time.time() - start_time
             epoch_metrics["time/epoch"] = epoch_time
-            epoch_metrics["misc/lr"] = self.model._opt_state.hyperparams["lr"]
+            epoch_metrics["misc/lr"] = self.model._ts.opt_state.hyperparams["lr"]
 
             if self.wandb_run is not None:
                 metrics = gutl.prefix_dict_keys(epoch_metrics, prefix="train/")

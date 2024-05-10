@@ -80,6 +80,7 @@ def get_config(config_string: str = None):
             embedding_dim=config.get_ref("embedding_dim"),
             mlp_layer_sizes=[128, 128],
             gaussian_policy=False,
+            use_rnn_policy=False,
         )
     )
 

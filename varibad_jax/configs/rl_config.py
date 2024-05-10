@@ -78,10 +78,11 @@ def get_config(config_string: str = None):
     config.tags = ["rl", "jax"]
     config.keys_to_include = {
         "trainer": None,
-        "env": ["env_name"],
+        "env": ["env_name", "env_id"],
     }
 
     # RL training config
     config.num_envs = 1024
     config.num_steps = 16
+    config.num_eval_rollouts = 50
     return config

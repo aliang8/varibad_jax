@@ -303,10 +303,7 @@ class TransitionsDataset(Dataset):
         self.num_samples = self.data["observations"].shape[0]
 
     def __getitem__(self, index):
-        data = {}
-        for k, v in self.data.items():
-            data[k] = v[index]
-        return data
+        return subsample_data(self.data, index)
 
     def __len__(self):
         return self.num_samples
@@ -364,6 +361,10 @@ class LAPODataset(Dataset):
     def __init__(self, data, data_cfg):
         self.data = data
         self.data_cfg = data_cfg
+
+        # not sure what to do with this stuff
+        if "info" in self.data:
+            del self.data["info"]
 
         # restructure it to be N-step transitions
         for k, v in self.data.items():
