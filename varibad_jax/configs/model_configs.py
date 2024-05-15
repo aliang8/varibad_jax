@@ -6,7 +6,7 @@ transformer_config = config_dict.ConfigDict(
         name="transformer",
         hidden_dim=64,
         num_heads=8,
-        num_layers=3,
+        num_layers=2,
         attn_size=32,
         widening_factor=4,
         dropout_rate=0.1,
@@ -29,6 +29,18 @@ image_encoder_configs = {
             ],
         )
     ),
+    "3x3": config_dict.ConfigDict(
+        dict(
+            name="image_encoder",
+            arch=[
+                [16, 2, 1, "SAME"],
+                [32, 2, 1, "VALID"],
+                [64, 2, 1, "VALID"],
+            ],
+            add_bn=True,
+            add_residual=True,
+        )
+    ),
     "5x5": config_dict.ConfigDict(
         # assumes a 5x5x2 observation
         dict(
@@ -36,11 +48,12 @@ image_encoder_configs = {
             arch=[
                 [16, 2, 1, "VALID"],
                 [32, 2, 1, "VALID"],
-                [32, 2, 1, "VALID"],
                 [64, 2, 1, "VALID"],
+                [128, 2, 1, "VALID"],
             ],
             add_bn=True,
             add_residual=True,
+            scale=1,
         )
     ),
     "7x7": config_dict.ConfigDict(
@@ -78,8 +91,8 @@ image_decoder_configs = {
         dict(
             name="image_decoder",
             arch=[
+                [128, 2, 1, "VALID"],
                 [64, 2, 1, "VALID"],
-                [32, 2, 1, "VALID"],
                 [32, 2, 1, "VALID"],
                 [16, 2, 1, "VALID"],
             ],

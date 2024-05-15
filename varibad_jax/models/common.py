@@ -141,11 +141,13 @@ class ImageEncoder(hk.Module):
         arch: List[List[int]] = [],
         w_init=hk.initializers.VarianceScaling(scale=2.0),
         b_init=hk.initializers.Constant(0.0),
+        scale: int = 1,
         **kwargs,
     ):
         super().__init__()
         self.embedding_dim = embedding_dim
         self.arch = arch
+        self.scale = scale
         self.init_kwargs = dict(w_init=w_init, b_init=b_init)
         self.kwargs = kwargs
 
@@ -160,7 +162,7 @@ class ImageEncoder(hk.Module):
         intermediate = []
         for i, spec in enumerate(self.arch):
             x = DownsamplingBlock(
-                num_channels=spec[0],
+                num_channels=spec[0] * self.scale,
                 kernel_size=spec[1],
                 stride=spec[2],
                 padding=spec[3],

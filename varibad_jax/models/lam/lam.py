@@ -303,7 +303,6 @@ class LatentActionBaseAgent(BaseAgent):
 
         lam_key, decoder_key = jax.random.split(self._init_key, 2)
 
-        # TODO(anthony): hard-coding the checkpoint now, fix this
         self.lam = LatentActionModel(
             self.lam_cfg.model,
             key=lam_key,
@@ -397,7 +396,7 @@ class LatentActionAgent(LatentActionBaseAgent):
     ):
         logging.info(f"lam loss function, observations: {batch.observations.shape}")
 
-        lam_key, policy_key = jax.random.split(rng, 2)
+        lam_key, policy_key, decoder_key = jax.random.split(rng, 3)
 
         # predict the latent action from observations with pretrained model
         lam_output, _ = self.lam.model.apply(
@@ -432,5 +431,34 @@ class LatentActionAgent(LatentActionBaseAgent):
         loss = optax.squared_error(action_output.action, latent_actions)
         loss = jnp.mean(loss)
 
-        metrics = {"bc_loss": loss}
+        # decode latent action and record prediction acc
+        # this measures how close the LA + decoder is to the gt action
+        # output from LAM => action decoder
+        gt_action_output, _ = self.latent_action_decoder.model.apply(
+            self.latent_action_decoder._ts.params,
+            self.latent_action_decoder._ts.state,
+            decoder_key,
+            self.latent_action_decoder,
+            latent_actions=latent_actions,
+            is_training=False,
+        )
+
+        gt_actions = batch.actions[:, -2]
+        acc = gt_action_output.action == gt_actions.squeeze()
+        acc = jnp.mean(acc)
+
+        # this measures how close the LA pred + decoder is to the gt action
+        # output from policy => action decoder
+        decoded_action_output, _ = self.latent_action_decoder.model.apply(
+            self.latent_action_decoder._ts.params,
+            self.latent_action_decoder._ts.state,
+            decoder_key,
+            self.latent_action_decoder,
+            latent_actions=action_output.action,
+            is_training=True,
+        )
+        decoded_acc = decoded_action_output.action == gt_actions.squeeze()
+        decoded_acc = jnp.mean(decoded_acc)
+
+        metrics = {"bc_loss": loss, "acc": acc, "decoded_acc": decoded_acc}
         return loss, (metrics, state)

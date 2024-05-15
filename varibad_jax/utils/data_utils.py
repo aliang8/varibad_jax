@@ -26,6 +26,7 @@ class Batch:
     dones: jnp.ndarray
     tasks: jnp.ndarray = None
     mask: jnp.ndarray = None
+    successes: jnp.ndarray = None
 
 
 # def load_procgen_data(data_dir: str, env_id: str, stage: str = "train"):
@@ -222,7 +223,7 @@ def load_data(config: ConfigDict, rng: npr.RandomState, steps_per_rollout: int):
         return train_data, eval_data
 
     # load dataset
-    dataset_name = f"{config.data.dataset_name}_eid-{config.env.env_id}_n-{config.num_rollouts_collect}_steps-{steps_per_rollout}"
+    dataset_name = f"{config.data.dataset_name}_eid-{config.env.env_id}_n-{config.num_rollouts_collect}"
     data_path = data_dir / dataset_name / "dataset.pkl"
     logging.info(f"loading data from {data_path}")
     with open(data_path, "rb") as f:
@@ -234,9 +235,9 @@ def load_data(config: ConfigDict, rng: npr.RandomState, steps_per_rollout: int):
         # normalize the imgs
         data["observations"] = (data["observations"].astype(np.float32) / 255.0) - 0.5
 
-    num_trajs, num_timesteps = data["observations"].shape[:2]
-    avg_return = jnp.mean(jnp.sum(data["rewards"], axis=-1))
-    logging.info(f"average return: {avg_return}")
+    # num_trajs, num_timesteps = data["observations"].shape[:2]
+    # avg_return = jnp.mean(jnp.sum(data["rewards"], axis=-1))
+    # logging.info(f"average return: {avg_return}")
 
     # TODO: add some observation normalization here
     # data["observations"] /= 14.0
@@ -247,42 +248,74 @@ def load_data(config: ConfigDict, rng: npr.RandomState, steps_per_rollout: int):
         returns = jnp.cumsum(data["rewards"][:, ::-1], axis=1)[:, ::-1]
         data["rewards"] = returns
 
-    # [B, T, *], trajectory data
-    if config.data.num_trajs != -1:
-        indices = rng.choice(num_trajs, size=config.data.num_trajs, replace=False)
-        data = subsample_data(data, indices)
-
     fn = lambda x, y: logging.info(f"{jax.tree_util.keystr(x)}: {y.shape}")
     jtu.tree_map_with_path(fn, data)
 
     # logic for creating an unseen set of heldout tasks
     # assuming tasks are the same over timesteps
     if config.data.holdout_tasks:
-        tasks = data["tasks"][:, 0]
-        unique_tasks = np.unique(tasks, axis=0)
+        if config.env.env_name == "gridworld":
+            tasks = data["tasks"][:, 0]
+            unique_tasks = np.unique(tasks, axis=0)
 
-        # sample a few to be heldout tasks
-        indices = rng.choice(range(len(unique_tasks)), size=4, replace=False)
-        heldout_tasks = unique_tasks[indices]
+            # sample a few to be heldout tasks
+            indices = rng.choice(range(len(unique_tasks)), size=4, replace=False)
+            heldout_tasks = unique_tasks[indices]
 
-        logging.info(f"heldout tasks: {heldout_tasks}")
+            logging.info(f"heldout tasks: {heldout_tasks}")
 
-        mask = (heldout_tasks[:, None] == tasks).all(axis=2).any(axis=0)
-        train_data = subsample_data(data, ~mask)
-        eval_data = subsample_data(data, mask)
+            eval_mask = (heldout_tasks[:, None] == tasks).all(axis=2).any(axis=0)
+        elif config.env.env_name == "xland":
+            # the task is defined by the environment state
+            # which is the agent's position and the goal position
+            grid = data["info"]["grid"]
+            agent_pos = data["info"]["agent_position"]
+            agent_dir = data["info"]["agent_direction"]
+
+            # filter trajectories based on agent starting pos + goal location
+            ic_mask = (agent_pos[:, 0, 0] < 3) & (agent_pos[:, 0, 1] < 3)
+            from xminigrid.core.constants import (
+                TILES_REGISTRY,
+                Colors,
+                Tiles,
+                NUM_COLORS,
+            )
+
+            goal_tile = TILES_REGISTRY[Tiles.BALL, Colors.YELLOW]
+            goal_locs = jnp.array(
+                list(zip(*jnp.where((grid[:, 0] == goal_tile).sum(axis=-1))))
+            )
+            goal_mask = (goal_locs[:, 1] >= 3) & (goal_locs[:, 2] >= 3)
+            # eval_mask = ic_mask & goal_mask
+            eval_mask = goal_mask
+            logging.info(
+                f"number of filtered trajectories for evaluation: {eval_mask.sum()}"
+            )
+
+        train_data = subsample_data(data, ~eval_mask)
+        eval_data = subsample_data(data, eval_mask)
     else:
         dataset_size = data["observations"].shape[0]
-        num_train = math.ceil(dataset_size * config.data.train_frac)
+        num_trajectories = data["dones"].sum()
+
+        num_train_trajs = math.ceil(num_trajectories * config.data.train_frac)
+        dones = data["dones"]
+        traj = jnp.cumsum(dones)
+        end_idx = jnp.argmax(traj >= num_train_trajs) + 1
+        train_indices = jnp.arange(dataset_size)[:end_idx]
+        eval_indices = jnp.arange(dataset_size)[end_idx:]
 
         # split into train and eval
-        train_data = subsample_data(data, np.arange(num_train))
-        eval_data = subsample_data(data, np.arange(num_train, dataset_size))
-        # eval_data = {k: v[num_train:] for k, v in data.items()}
+        train_data = subsample_data(data, train_indices)
+        eval_data = subsample_data(data, eval_indices)
 
-    if config.data.data_type == "transitions":
-        fn = lambda x: einops.rearrange(x, "B T ... -> (B T) ...")
-        train_data = tree_map(fn, train_data)
-        eval_data = tree_map(fn, eval_data)
+    if config.data.num_trajs != -1:
+        # find end index of the Kth trajectory
+        dones = train_data["dones"]
+        traj = jnp.cumsum(dones)
+        end_idx = jnp.argmax(traj >= config.data.num_trajs) + 1
+        indices = jnp.arange(train_data["observations"].shape[0])[:end_idx]
+        train_data = subsample_data(train_data, indices)
 
     logging.info(f"num training data: {train_data['observations'].shape[0]}")
     logging.info(f"num eval data: {eval_data['observations'].shape[0]}")
@@ -371,17 +404,14 @@ class LAPODataset(Dataset):
             v = torch.from_numpy(v)
 
             # unfold it so we can get N-step transitions
-            v = v.unfold(1, self.data_cfg.context_len + 2, 1).movedim(-1, 2)
-            self.data[k] = einops.rearrange(v, "B T ... -> (B T) ...")
+            v = v.unfold(0, self.data_cfg.context_len + 2, 1).movedim(-1, 1)
+            self.data[k] = v
 
-        # subsample where only the o_t is valid
-        # mask = self.data["mask"][:, -2]
-        # for k, v in self.data.items():
-        #     self.data[k] = v[torch.where(mask > 0)]
+        # filter trajectories where the first observation is not done
+        mask = self.data["dones"][:, -2]
+        for k, v in self.data.items():
+            self.data[k] = v[torch.where(~mask)]
 
-        # import ipdb
-
-        # ipdb.set_trace()
         self.num_samples = self.data["observations"].shape[0]
 
     def __getitem__(self, index):
@@ -406,7 +436,7 @@ def create_data_loader(data, data_cfg):
 
     return NumpyLoader(
         torch_dataset,
-        batch_size=data_cfg.batch_size,
+        batch_size=min(len(torch_dataset), data_cfg.batch_size),
         shuffle=True,
-        drop_last=True,
+        drop_last=False,
     )

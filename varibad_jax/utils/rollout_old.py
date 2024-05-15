@@ -2,7 +2,6 @@ import time
 from absl import logging
 import jax
 import chex
-import tqdm
 import haiku as hk
 import jax.numpy as jnp
 from xminigrid.environment import Environment, EnvParamsT
@@ -25,7 +24,6 @@ from xminigrid.types import AgentState, EnvCarry, GridState, RuleSet, State
 class RolloutStats:
     episode_return: jnp.ndarray
     length: jnp.ndarray
-    success: jnp.ndarray
 
 
 def run_rollouts(
@@ -33,6 +31,7 @@ def run_rollouts(
     agent,
     config: ConfigDict,
     env: Environment,
+    steps_per_rollout: int,
     action_dim: int,
     wandb_run=None,
     prompts=None,
@@ -47,6 +46,7 @@ def run_rollouts(
     rollout_kwargs = dict(
         agent=agent,
         action_dim=action_dim,
+        steps_per_rollout=steps_per_rollout,
         env=env,
         config=config,
         **kwargs,
@@ -62,26 +62,33 @@ def run_rollouts(
     # render function doesn't work with vmap
     if prompts is not None:
         logging.info("using prompts")
-        eval_metrics, (trajectories, actions, successes) = rollout_fn(
-            prompts[0], **rollout_kwargs
-        )
+        eval_metrics, (transitions, actions) = jax.vmap(
+            lambda rng, prompt: functools.partial(rollout_fn, **rollout_kwargs)(
+                rng=rng, prompt=prompt
+            )
+        )(rng_keys, prompts)
     else:
-        eval_metrics, (trajectories, actions, successes) = rollout_fn(
-            rng_keys[0], **rollout_kwargs
-        )
+        eval_metrics, (transitions, actions) = jax.vmap(
+            functools.partial(rollout_fn, **rollout_kwargs)
+        )(rng_keys)
 
     rollout_time = time.time() - start
+    fps = (config.num_eval_rollouts * steps_per_rollout) / rollout_time
+
     eval_metrics = {
-        "episode_return": eval_metrics["episode_return"],
-        "avg_length": eval_metrics["length"],
-        "success": eval_metrics["success"],
-        "rollout_time": rollout_time / config.num_eval_rollouts,
+        "episode_return": jnp.mean(eval_metrics["episode_return"]),
+        "avg_length": jnp.mean(eval_metrics["length"]),
+        "fps": fps,
     }
+    print(eval_metrics)
 
     # visualize the rollouts
     if wandb_run is not None and config.visualize_rollouts:
 
         if config.env.env_name == "gridworld":
+            trajectories = transitions.observation
+            goals = transitions.state.goal
+
             fig, axes = plt.subplots(figsize=(12, 12), nrows=3, ncols=3)
             grid_size = env.env_params.grid_size
 
@@ -134,12 +141,15 @@ def run_rollouts(
             videos = []
             for rollout_indx in range(config.num_eval_rollouts_render):
                 images = []
-                for step, timestep in enumerate(trajectories[rollout_indx]):
+                for step in range(steps_per_rollout):
+                    timestep = jtu.tree_map(
+                        lambda x: x[rollout_indx][step], transitions
+                    )
                     img = env.render(env.env_params, timestep)
                     # cv2 text image
                     img = cv2.putText(
                         img,
-                        f"step: {step}, s: {successes[rollout_indx]}",
+                        f"step: {step}",
                         (10, 10),
                         cv2.FONT_HERSHEY_SIMPLEX,
                         0.5,
@@ -149,19 +159,12 @@ def run_rollouts(
                     images.append(img)
                 videos.append(images)
 
-            # pad videos to same length
-            max_length = max([len(video) for video in videos])
-            for indx, video in enumerate(videos):
-                while len(video) < max_length:
-                    video.append(video[-1])
-
-                videos[indx] = video
-
             videos = np.array(videos)
+
             videos = einops.rearrange(videos, "n t h w c -> n t c h w")
             wandb_run.log({"eval_rollouts": wandb.Video(np.array(videos), fps=5)})
 
-    return eval_metrics, (trajectories, actions, successes)
+    return eval_metrics, transitions, actions
 
 
 def eval_rollout_dt(
@@ -197,8 +200,8 @@ def eval_rollout_dt(
                 carry=EnvCarry(),
             )
 
-    timestep = env.reset(env.env_params, reset_rng, state=state)
-    observation_shape = timestep.observation.shape
+    xtimestep = env.reset(env.env_params, reset_rng, state=state)
+    observation_shape = xtimestep.timestep.observation.shape
 
     # first dimension is batch
     observations = jnp.zeros((1, steps_per_rollout, *observation_shape))
@@ -210,9 +213,9 @@ def eval_rollout_dt(
 
     if config.model.policy.task_conditioning:
         if config.env.env_name == "gridworld":
-            task = timestep.state.goal
+            task = xtimestep.timestep.state.goal
         elif config.env.env_name == "xland":
-            task = timestep.state.goal_encoding
+            task = xtimestep.timestep.state.goal_encoding
 
         task = task.reshape(1, 1, -1)
         prompt = task
@@ -253,7 +256,7 @@ def eval_rollout_dt(
         (
             rng,
             stats,
-            timestep,
+            xtimestep,
             observations,
             actions,
             rewards,
@@ -263,7 +266,7 @@ def eval_rollout_dt(
         ) = carry
 
         rng, policy_rng = jax.random.split(rng)
-        observation = timestep.observation
+        observation = xtimestep.timestep.observation
         observation = observation.astype(jnp.float32)
         observations = observations.at[0, stats.length].set(observation)
         mask = mask.at[0, stats.length].set(1.0)
@@ -286,8 +289,8 @@ def eval_rollout_dt(
         # [B, T]
         action = policy_output.action
         action = action[0, stats.length]
-        timestep = env.step(env.env_params, timestep, action)
-        timestep = timestep
+        xtimestep = env.step(env.env_params, xtimestep, action)
+        timestep = xtimestep.timestep
         reward = timestep.reward
         done = timestep.last()
 
@@ -315,7 +318,7 @@ def eval_rollout_dt(
         return (
             rng,
             stats,
-            timestep,
+            xtimestep,
             observations,
             actions,
             rewards,
@@ -327,7 +330,7 @@ def eval_rollout_dt(
     init_carry = (
         rng,
         stats,
-        timestep,
+        xtimestep,
         observations,
         actions,
         rewards,
@@ -344,7 +347,19 @@ def eval_rollout_dt(
     return stats, transitions
 
 
-def env_reset(config: ConfigDict, rng, env, reset_fn: Callable, prompt: dict = None):
+def eval_rollout(
+    rng: jax.Array,
+    agent,
+    env: Environment,
+    config: dict,
+    action_dim: int,
+    steps_per_rollout: int,
+    prompt=None,
+    **kwargs,
+) -> RolloutStats:
+
+    stats = RolloutStats(episode_return=0, length=0)
+
     rng, reset_rng = jax.random.split(rng, 2)
 
     if prompt is not None:
@@ -381,144 +396,101 @@ def env_reset(config: ConfigDict, rng, env, reset_fn: Callable, prompt: dict = N
                 rule_encoding=rule_encoding,
                 carry=EnvCarry(),
             )
-        timestep = reset_fn(
+        xtimestep = env.reset(
             env.env_params, reset_rng, state=state, randomize_agent=False
         )
     else:
-        timestep = reset_fn(env.env_params, reset_rng)
+        xtimestep = env.reset(env.env_params, reset_rng)
 
-    return timestep
+    if config.env.env_name == "gridworld":
+        task = xtimestep.timestep.state.goal
+    elif config.env.env_name == "xland":
+        task = xtimestep.timestep.state.goal_encoding
 
+    if len(task.shape) == 1:
+        task = task[jnp.newaxis]
 
-def eval_rollout(
-    rng: jax.Array,
-    agent,
-    env: Environment,
-    config: dict,
-    prompt=None,
-    **kwargs,
-) -> RolloutStats:
+    task = task.astype(jnp.float32)
 
-    jit_reset = jax.jit(env.reset)
-    jit_step = jax.jit(env.step)
-    jit_apply = jax.jit(agent.get_action, static_argnames=("is_training"))
+    prev_action = jnp.zeros((1, action_dim))
+    prev_reward = jnp.zeros((1, 1))
+    done = False
 
-    trajectories = []
-    all_actions = []
-    all_stats = []
-    all_successes = []
+    def _step_fn(carry, _):
+        (rng, stats, xtimestep, prev_action, prev_reward, done, hidden_state) = carry
 
-    for episode in tqdm.tqdm(range(config.num_eval_rollouts)):
-        stats = RolloutStats(episode_return=0, length=0, success=False)
-        rng, reset_rng = jax.random.split(rng, 2)
-
-        timestep = env_reset(config, reset_rng, env, jit_reset, prompt=prompt)
-
-        timesteps = [timestep]
-        actions = []
+        rng, policy_rng = jax.random.split(rng, 2)
+        observation = xtimestep.timestep.observation
+        observation = observation.astype(jnp.float32)
+        observation = observation[jnp.newaxis]
 
         if config.env.env_name == "gridworld":
-            task = timestep.state.goal
+            task = xtimestep.timestep.state.goal
         elif config.env.env_name == "xland":
-            task = timestep.state.goal_encoding
+            task = xtimestep.timestep.state.goal_encoding
 
         if len(task.shape) == 1:
             task = task[jnp.newaxis]
 
         task = task.astype(jnp.float32)
 
-        success = False
-        done = False
+        logging.info(
+            f"observation shape: {observation.shape}, task shape: {task.shape}"
+        )
 
-        if config.model.policy.use_rnn_policy:
-            hidden_state = jnp.zeros((1, config.model.policy.rnn_hidden_size))
-        else:
-            hidden_state = None
+        (policy_output, hidden_state), _ = agent.get_action(
+            policy_rng,
+            env_state=observation,
+            hidden_state=hidden_state,
+            task=task,
+            is_training=False,
+        )
+        # jax.debug.breakpoint()
 
-        step = 0
+        action = policy_output.action
+        next_xtimestep = env.step(env.env_params, xtimestep, action.squeeze())
+        next_timestep = next_xtimestep.timestep
+        next_obs = next_timestep.observation
+        reward = next_timestep.reward
+        done = next_timestep.last()
+        next_obs = next_obs.astype(jnp.float32)
 
-        while not done:
-            rng, policy_rng = jax.random.split(rng, 2)
-            observation = timestep.observation
-            observation = observation.astype(jnp.float32)
-            observation = observation[jnp.newaxis]
+        # add extra dimension for batch
+        next_obs = next_obs[jnp.newaxis]
+        action = action.reshape(1, 1).astype(jnp.float32)
+        reward = reward.reshape(1, 1)
 
-            if config.env.env_name == "gridworld":
-                task = timestep.state.goal
-            elif config.env.env_name == "xland":
-                task = timestep.state.goal_encoding
+        if "lam" in config.model.name:
+            action = policy_output.latent_action
 
-            if len(task.shape) == 1:
-                task = task[jnp.newaxis]
+        stats = stats.replace(
+            episode_return=stats.episode_return + next_timestep.reward,
+            length=stats.length + 1,
+        )
 
-            task = task.astype(jnp.float32)
+        jax.debug.breakpoint()
 
-            (policy_output, hidden_state), _ = jit_apply(
-                policy_rng,
-                env_state=observation,
-                hidden_state=hidden_state,
-                task=task,
-                is_training=False,
-            )
+        # if action.shape[-1] == 1:
+        #     action = action.squeeze(axis=-1)
 
-            action = policy_output.action
-            next_timestep = jit_step(env.env_params, timestep, action.squeeze())
-            next_obs = next_timestep.observation
-            reward = next_timestep.reward
-            done = next_timestep.last()
+        return (rng, stats, next_xtimestep, action, reward, done, hidden_state), (
+            xtimestep.timestep,
+            action,
+        )
 
-            if step < (env.max_episode_steps - 1):
-                success = success or done
+    if config.model.policy.use_rnn_policy:
+        hidden_state = jnp.zeros((1, config.model.policy.rnn_hidden_size))
+    else:
+        hidden_state = None
 
-            next_obs = next_obs.astype(jnp.float32)
+    init_carry = (rng, stats, xtimestep, prev_action, prev_reward, done, hidden_state)
 
-            # add extra dimension for batch
-            next_obs = next_obs[jnp.newaxis]
-            action = action.reshape(1, 1).astype(jnp.float32)
-            reward = reward.reshape(1, 1)
-
-            if "lam" in config.model.name:
-                action = policy_output.latent_action
-
-            stats = stats.replace(
-                episode_return=stats.episode_return + next_timestep.reward,
-                length=stats.length + 1,
-                success=success,
-            )
-
-            timesteps.append(next_timestep)
-            actions.append(action)
-            step += 1
-            timestep = next_timestep
-
-        # add a dummy action for the shape
-        actions.append(actions[-1])
-
-        trajectories.append(timesteps)
-        all_actions.append(actions)
-        all_stats.append(stats)
-        all_successes.append(success)
-
-    # merge all the trajectories
-    # all_transitions = [
-    #     transition for trajectory in trajectories for transition in trajectory
-    # ]
-
-    # # combine transitions
-    # all_transitions = jtu.tree_map(lambda *v: jnp.stack(v), *all_transitions)
-
-    # # merge actions too
-    # all_actions = [action for actions in all_actions for action in actions]
-    # all_actions = jtu.tree_map(lambda *v: jnp.stack(v), *all_actions)
-    # all_successes = jnp.array(all_successes)
-
-    all_transitions = trajectories
-
-    stats = jtu.tree_map(lambda *x: jnp.mean(jnp.stack(x)), *all_stats)
-
-    # if action.shape[-1] == 1:
-    #     action = action.squeeze(axis=-1)
-    return stats, (all_transitions, all_actions, all_successes)
+    # transitions contains (timestep, action)
+    carry, (transitions, actions) = jax.lax.scan(
+        _step_fn, init_carry, None, length=steps_per_rollout
+    )
+    stats = carry[1]
+    return stats, (transitions, actions)
 
 
 def eval_rollout_with_belief_model(
@@ -534,8 +506,8 @@ def eval_rollout_with_belief_model(
     stats = RolloutStats(episode_return=0, length=0)
 
     rng, reset_rng, prior_rng = jax.random.split(rng, 3)
-    timestep = env.reset(env.env_params, reset_rng)
-    observation = timestep.observation
+    xtimestep = env.reset(env.env_params, reset_rng)
+    observation = xtimestep.timestep.observation
     prev_action = jnp.zeros((1, action_dim))
     prev_reward = jnp.zeros((1, 1))
     done = False
@@ -557,7 +529,7 @@ def eval_rollout_with_belief_model(
         (
             rng,
             stats,
-            timestep,
+            xtimestep,
             prev_action,
             prev_reward,
             done,
@@ -566,7 +538,7 @@ def eval_rollout_with_belief_model(
         ) = carry
 
         rng, policy_rng, encoder_rng = jax.random.split(rng, 3)
-        observation = timestep.observation
+        observation = xtimestep.timestep.observation
         observation = observation.astype(jnp.float32)
         observation = observation[jnp.newaxis]
 
@@ -577,8 +549,8 @@ def eval_rollout_with_belief_model(
             is_training=False,
         )
         action = policy_output.action
-        timestep = env.step(env.env_params, timestep, action.squeeze())
-        timestep = timestep
+        xtimestep = env.step(env.env_params, xtimestep, action.squeeze())
+        timestep = xtimestep.timestep
         next_obs = timestep.observation
         reward = timestep.reward
         done = timestep.last()
@@ -636,7 +608,7 @@ def eval_rollout_with_belief_model(
         return (
             rng,
             stats,
-            timestep,
+            xtimestep,
             action,
             reward,
             done,
@@ -647,7 +619,7 @@ def eval_rollout_with_belief_model(
     init_carry = (
         rng,
         stats,
-        timestep,
+        xtimestep,
         prev_action,
         prev_reward,
         done,

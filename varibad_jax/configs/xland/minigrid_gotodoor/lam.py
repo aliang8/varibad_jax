@@ -8,24 +8,25 @@ def get_config(config_string: str = None):
     config.exp_name = "lam"
     config.visualize_rollouts = True
 
-    config.data.dataset_name = "minigrid_easy"
+    config.data.dataset_name = "minigrid_gotodoor"
     config.data.data_type = "lapo"
     config.data.context_len = 0
-    config.data.num_trajs = 1000
+    config.data.num_trajs = -1
 
-    config.env.env_id = "XLand-MiniGrid-TwoGoals-R1-7x7-5"
+    config.env.env_id = "MiniGrid-GoToDoor-R1-7x7"
+    config.env.ruleset_id = -1
     config.env.num_episodes_per_rollout = 1
+    config.env.steps_per_rollout = 30
 
-    config.embedding_dim = 256
     config.model.idm.beta = 0.05
     config.model.idm.ema_decay = 0.999
     config.model.idm.num_codes = 60
-    config.model.idm.code_dim = 128
+    config.model.idm.code_dim = 64
     config.model.use_lr_scheduler = True
 
     config.num_rollouts_collect = 10_000
-    config.num_evals = 10
-    config.num_epochs = 2000
+    config.eval_interval = 5
+    config.num_epochs = 100
 
     config.keys_to_include = {
         "env": {"env_name": 1, "env_id": 1, "steps_per_rollout": 1},

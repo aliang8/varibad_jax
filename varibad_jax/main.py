@@ -24,7 +24,7 @@ from varibad_jax.trainers.meta_trainer import MetaRLTrainer
 from varibad_jax.trainers.offline_trainer import OfflineTrainer
 from varibad_jax.trainers.rl_trainer import RLTrainer
 
-# os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.01"
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.01"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 _CONFIG = config_flags.DEFINE_config_file("config")
 
@@ -60,13 +60,17 @@ psh = {
         "pass_latent_to_policy": "pltp",
         "pass_task_to_policy": "pttp",
         "name": "pn",
+        "entropy_coeff": "ent_c",
         "idm": {"beta": "b", "num_codes": "n_codes", "code_dim": "code_d"},
     },
 }
 
 # run with ray tune
 param_space = {
-    "seed": tune.grid_search([1]),
+    # "seed": tune.grid_search([1, 2]),
+    # "data": {"num_trajs": tune.grid_search([5, 100, 1000])},
+    "data": {"num_trajs": tune.grid_search([100, 500, 1000])},
+    # "model": {"entropy_coeff": tune.grid_search([0.02, 0.05, 0.1])},
 }
 
 
@@ -122,10 +126,14 @@ def update(source, overrides):
 
 def create_exp_name(param_space, config):
     global trial_str
+    global keys_added
     trial_str = config["exp_name"] + ","
+    keys_added = set()
 
     def add_to_trial_str(k, v):
         global trial_str
+        global keys_added
+
         shorthand = psh
         value = config
         for i, key in enumerate(k):
@@ -136,7 +144,10 @@ def create_exp_name(param_space, config):
             shorthand = shorthand[key_str]
             value = value[key_str]
 
-        trial_str += str(shorthand) + "-" + str(value) + ","
+        if not shorthand in keys_added:
+            trial_str += str(shorthand) + "-" + str(value) + ","
+
+        keys_added.add(shorthand)
 
     jtu.tree_map_with_path(add_to_trial_str, param_space)
     jtu.tree_map_with_path(add_to_trial_str, config["keys_to_include"])

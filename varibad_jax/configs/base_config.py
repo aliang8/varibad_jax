@@ -87,6 +87,8 @@ def get_config(config_string: str = None):
     config.best_metric = "max"
 
     config.eval_interval = 100
+    config.num_evals = 10
+    config.eval_perc = 0.1
     config.disable_tqdm = False
     config.smoke_test = True
 
@@ -102,7 +104,7 @@ def get_config(config_string: str = None):
 
     # for rollout visualization
     config.fps = 5
-    config.num_eval_rollouts = 10
+    config.num_eval_rollouts = 50
 
     # number of eval rollout videos to save
     config.visualize_rollouts = True

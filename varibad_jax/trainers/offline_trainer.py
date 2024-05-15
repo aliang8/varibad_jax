@@ -39,6 +39,7 @@ from varibad_jax.models.lam.lam import (
     LatentActionAgent,
     LatentActionDecoder,
 )
+from varibad_jax.models.vpt.vpt import VPT, VPTAgent
 
 
 class OfflineTrainer(BaseTrainer):
@@ -55,41 +56,42 @@ class OfflineTrainer(BaseTrainer):
         except:
             steps_per_rollout = None
 
-        train_dataset, eval_dataset = load_data(
+        self.train_dataset, self.eval_dataset = load_data(
             config=config, rng=rng, steps_per_rollout=steps_per_rollout
         )
+        # these are trajectories
+        self.eval_prompts = self.sample_prompts()
+
+        # if config.data.data_type == "transitions":
+        #     fn = lambda x: einops.rearrange(x, "B T ... -> (B T) ...")
+        #     self.train_dataset = jtu.tree_map(fn, self.train_dataset)
+        #     self.eval_dataset = jtu.tree_map(fn, self.eval_dataset)
 
         # import ipdb
 
         # ipdb.set_trace()
 
-        self.train_dataset = train_dataset
-        self.eval_dataset = eval_dataset
-
         if self.config.env.env_name == "procgen":
-            self.train_dataloader = train_dataset.get_iter(self.config.batch_size)
-            self.eval_dataloader = eval_dataset.get_iter(self.config.batch_size)
+            self.train_dataloader = self.train_dataset.get_iter(self.config.batch_size)
+            self.eval_dataloader = self.eval_dataset.get_iter(self.config.batch_size)
             # number of batches ot iterate over each epoch of training
             self.num_train_batches = 50
             self.num_eval_batches = 2
         else:
             self.train_dataloader = create_data_loader(
-                train_dataset, data_cfg=config.data
+                self.train_dataset, data_cfg=config.data
             )
             logging.info(f"Number of train batches: {len(self.train_dataloader)}")
 
-            if len(eval_dataset["observations"]) > 0:
+            if len(self.eval_dataset["observations"]) > 0:
                 self.eval_dataloader = create_data_loader(
-                    eval_dataset, data_cfg=config.data
+                    self.eval_dataset, data_cfg=config.data
                 )
                 logging.info(f"Number of eval batches: {len(self.eval_dataloader)}")
             else:
                 self.eval_dataloader = None
 
-            if self.config.data.data_type in ["trajectories", "lapo"]:
-                obs_shape = self.train_dataset["observations"].shape[2:]
-            else:
-                obs_shape = self.train_dataset["observations"].shape[1:]
+            obs_shape = self.train_dataset["observations"].shape[1:]
 
         # test dataloader
         batch = next(iter(self.train_dataloader))
@@ -99,7 +101,7 @@ class OfflineTrainer(BaseTrainer):
 
         if self.config.model.name == "bc":
             model_cls = BCAgent
-        elif self.config.model.name == "dt":
+        elif self.config.model.name == "dt_agent":
             model_cls = DecisionTransformerAgent
         elif self.config.model.name == "dt_lam_agent":
             model_cls = LatentDTAgent
@@ -109,6 +111,10 @@ class OfflineTrainer(BaseTrainer):
             model_cls = LatentActionDecoder
         elif self.config.model.name == "lam_agent":
             model_cls = LatentActionAgent
+        elif self.config.model.name == "vpt":
+            model_cls = VPT
+        elif self.config.model.name == "vpt_bc":
+            model_cls = VPTAgent
         else:
             raise ValueError(f"Unknown model name: {self.config.model.name}")
 
@@ -121,6 +127,40 @@ class OfflineTrainer(BaseTrainer):
             task_dim=self.config.env.task_dim,
             key=next(self.rng_seq),
         )
+
+        if self.config.num_evals != -1:
+            self.eval_every = int(self.config.num_epochs // self.config.num_evals)
+        elif self.config.eval_perc != -1:
+            self.eval_every = int(self.config.num_epochs * self.config.eval_perc)
+        else:
+            self.eval_every = self.config.eval_interval
+
+        logging.info(f"evaluating model every: {self.eval_every}")
+
+    def sample_prompts(self):
+        eval_prompts = None
+        if self.config.data.holdout_tasks or self.config.model.name == "dt_lam_agent":
+            if (
+                len(self.eval_dataset["observations"]) == 0
+            ):  # use full training set if no eval
+                num_trajs = self.train_dataset["observations"].shape[0]
+                sample_dataset = self.train_dataset
+            else:
+                # sample a couple of trajectories from the evaluation dataset for inference
+                num_trajs = self.eval_dataset["observations"].shape[0]
+                sample_dataset = self.eval_dataset
+
+            if num_trajs < self.config.num_eval_rollouts:
+                replace = True
+            else:
+                replace = False
+
+            prompt_idxs = npr.choice(
+                num_trajs, size=self.config.num_eval_rollouts, replace=replace
+            )
+            eval_prompts = subsample_data(sample_dataset, prompt_idxs)
+
+        return eval_prompts
 
     def train(self):
         # first eval
@@ -151,11 +191,7 @@ class OfflineTrainer(BaseTrainer):
             epoch_metrics["time/epoch"] = epoch_time
             epoch_metrics["misc/lr"] = self.model._ts.opt_state.hyperparams["lr"]
 
-            if self.wandb_run is not None:
-                metrics = gutl.prefix_dict_keys(epoch_metrics, prefix="train/")
-                self.wandb_run.log(metrics)
-
-            if (epoch + 1) % self.config.eval_interval == 0:
+            if ((epoch + 1) % self.eval_every) == 0:
                 eval_metrics = self.eval(epoch + 1)
 
                 print("train: ", epoch_metrics)
@@ -163,7 +199,11 @@ class OfflineTrainer(BaseTrainer):
 
                 if self.wandb_run is not None:
                     eval_metrics = gutl.prefix_dict_keys(eval_metrics, prefix="eval/")
-                    self.wandb_run.log(eval_metrics)
+                    self.wandb_run.log(eval_metrics, step=epoch + 1, commit=False)
+
+            if self.wandb_run is not None:
+                metrics = gutl.prefix_dict_keys(epoch_metrics, prefix="train/")
+                self.wandb_run.log(metrics, step=epoch + 1)
 
         self.eval(epoch=self.config.num_epochs)
 
@@ -186,19 +226,10 @@ class OfflineTrainer(BaseTrainer):
             for k, v in eval_metrics.items():
                 eval_metrics[k] = jnp.mean(jnp.array(v))
 
-        if (
-            "dt" in self.config.model.name
-            and self.config.model.policy.demo_conditioning
-            or self.config.data.holdout_tasks
-        ):
-            # sample a couple of demo prompts from the evaluation dataset
-            num_trajs = self.eval_dataset["observations"].shape[0]
-            prompt_idxs = npr.choice(
-                num_trajs, size=self.config.num_eval_rollouts, replace=False
-            )
-            prompts = subsample_data(self.eval_dataset, prompt_idxs)
-        else:
-            prompts = None
+        if self.config.data.resample_prompts_every_eval:
+            logging.info("getting new set of eval prompts")
+            # get new set of prompts for evaluation
+            self.eval_prompts = self.sample_prompts()
 
         # run rollouts
         if hasattr(self.model, "get_action") and self.config.run_eval_rollouts:
@@ -210,7 +241,7 @@ class OfflineTrainer(BaseTrainer):
                 action_dim=self.model.input_action_dim,
                 steps_per_rollout=self.steps_per_rollout,
                 wandb_run=self.wandb_run,
-                prompts=prompts,
+                prompts=self.eval_prompts,
             )
             eval_metrics.update(rollout_metrics)
 

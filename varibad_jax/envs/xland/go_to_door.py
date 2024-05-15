@@ -20,16 +20,6 @@ from varibad_jax.envs.xland.custom import CustomXLandMiniGrid
 
 
 class GoToDoor(CustomXLandMiniGrid):
-    def default_params(self, **kwargs) -> EnvParams:
-        params = EnvParams(height=5, width=5, max_steps=None)
-        params = params.replace(**kwargs)
-        print(params)
-
-        if params.max_steps is None:
-            # formula directly taken from MiniGrid
-            params = params.replace(max_steps=params.height * params.width)
-        return params
-
     def _generate_problem(self, params: EnvParams, key: jax.Array) -> State[EnvCarry]:
         key, _key = jax.random.split(key)
         keys = jax.random.split(_key, num=5)

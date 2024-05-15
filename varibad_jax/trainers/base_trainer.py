@@ -117,6 +117,8 @@ class BaseTrainer:
             except:
                 self.task_dim = self.config.env.task_dim
 
+            logging.info(f"task_dim: {self.task_dim}")
+
         if self.config.log_level == "info":
             logging.set_verbosity(logging.INFO)
         elif self.config.log_level == "debug":

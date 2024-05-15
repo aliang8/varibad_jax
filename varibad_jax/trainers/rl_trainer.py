@@ -65,6 +65,15 @@ class RLTrainer(BaseTrainer):
         logging.info(f"steps per rollout = {self.steps_per_rollout}")
         logging.info(f"action_dim = {self.action_dim}")
 
+        if self.config.num_evals != -1:
+            self.eval_every = int(self.num_updates // self.config.num_evals)
+        elif self.config.eval_perc != -1:
+            self.eval_every = int(self.num_updates * self.config.eval_perc)
+        else:
+            self.eval_every = self.config.eval_interval
+
+        logging.info(f"evaluating model every: {self.eval_every} update steps")
+
         self.agent = PPOAgent(
             config=config.model,
             observation_shape=self.envs.observation_space.shape,
@@ -75,20 +84,18 @@ class RLTrainer(BaseTrainer):
         )
 
         def _env_step(runner_state, _):
-            rng, ts, prev_xtimestep, prev_action, prev_reward, prev_hstate = (
-                runner_state
-            )
+            rng, ts, prev_timestep, prev_action, prev_reward, prev_hstate = runner_state
 
             # SELECT ACTION
             rng, _rng = jax.random.split(rng)
-            observation = prev_xtimestep.timestep.observation
+            observation = prev_timestep.observation
             observation = observation.astype(jnp.float32)
 
             # GET CURRENT TASK VECTOR
             if config.env.env_name == "gridworld":
-                task = prev_xtimestep.timestep.state.goal
+                task = prev_timestep.state.goal
             elif config.env.env_name == "xland":
-                task = prev_xtimestep.timestep.state.goal_encoding
+                task = prev_timestep.state.goal_encoding
 
             if len(task.shape) == 1:
                 task = task[jnp.newaxis]
@@ -108,18 +115,17 @@ class RLTrainer(BaseTrainer):
             value = policy_output.value
 
             # STEP ENV
-            xtimestep = jax.vmap(self.envs.step, in_axes=(None, 0, 0))(
-                self.env_params, prev_xtimestep, action
+            timestep = jax.vmap(self.envs.step, in_axes=(None, 0, 0))(
+                self.env_params, prev_timestep, action
             )
-            reward = xtimestep.timestep.reward
+            reward = timestep.reward
             action = action.reshape(-1, 1).astype(jnp.float32)
             reward = reward.reshape(-1, 1)
-            done = xtimestep.timestep.last().reshape(-1, 1)
+            done = timestep.last().reshape(-1, 1)
 
             # reset the hidden state when the episode is over
-            mask = xtimestep.timestep.last()[:, None]
             if hstate is not None:
-                hstate = hstate * (1 - mask)
+                hstate = hstate * (1 - done)
 
             transition = Transition(
                 done=done,
@@ -127,14 +133,14 @@ class RLTrainer(BaseTrainer):
                 value=value,
                 reward=reward,
                 log_prob=log_prob,
-                obs=prev_xtimestep.timestep.observation.astype(jnp.float32),
+                obs=prev_timestep.observation.astype(jnp.float32),
                 prev_action=action,
                 prev_reward=prev_reward,
                 task=task,
             )
 
             ts.state = new_state
-            runner_state = (rng, ts, xtimestep, action, reward, hstate)
+            runner_state = (rng, ts, timestep, action, reward, hstate)
             return runner_state, transition
 
         self._env_step = _env_step
@@ -222,7 +228,7 @@ class RLTrainer(BaseTrainer):
             init_hstate = None
 
         reset_rngs = jax.random.split(next(self.rng_seq), self.config.num_envs)
-        xtimestep = self.jit_reset(self.env_params, reset_rngs)
+        timestep = self.jit_reset(self.env_params, reset_rngs)
 
         for self.iter_idx in tqdm.tqdm(
             range(self.num_updates),
@@ -233,7 +239,7 @@ class RLTrainer(BaseTrainer):
             runner_state = (
                 next(self.rng_seq),
                 self.agent._ts,
-                xtimestep,
+                timestep,
                 prev_action,
                 prev_reward,
                 init_hstate,
@@ -255,13 +261,13 @@ class RLTrainer(BaseTrainer):
             # logging.info(f"fps = {fps}")
 
             # CALCULATE ADVANTAGE
-            rng, ts, xtimestep, prev_action, prev_reward, hstate = runner_state
+            rng, ts, timestep, prev_action, prev_reward, hstate = runner_state
             self.agent._ts = ts
 
             # calculate value of the last step for bootstrapping
             (policy_output, _), state = self.agent.get_action(
                 next(self.rng_seq),
-                env_state=xtimestep.timestep.observation.astype(jnp.float32),
+                env_state=timestep.observation.astype(jnp.float32),
                 hidden_state=hstate,
                 task=transitions.task[-1],  # get the most recent task
                 is_training=True,
@@ -310,7 +316,7 @@ class RLTrainer(BaseTrainer):
                     self.wandb_run.log(metrics, step=self.iter_idx)
 
             # EVALUATION
-            if ((self.iter_idx + 1) % self.config.eval_interval) == 0:
+            if ((self.iter_idx + 1) % self.eval_every) == 0:
                 eval_metrics, *_ = run_rollouts(
                     rng=next(self.rng_seq),
                     agent=self.agent,

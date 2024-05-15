@@ -9,13 +9,15 @@ def get_config(config_string: str = None):
     config.exp_name = "oracle"
     config.visualize_rollouts = True
 
-    config.env.env_id = "XLand-MiniGrid-TwoGoals-R1-7x7-5"
+    config.env.env_id = "MiniGrid-GoToDoor-R1-7x7"
+    config.env.ruleset_id = -1
     config.env.num_episodes_per_rollout = 1
     config.env.steps_per_rollout = 30
     config.num_frames = 20_000_000
+    config.eval_interval = 50
 
+    config.model.policy.use_rnn_policy = True
     config.model.entropy_coeff = 0.05
-    config.model.policy.pass_task_to_policy = True
 
     config.keys_to_include = {
         "env": {"env_name": 1, "env_id": 1, "steps_per_rollout": 1}

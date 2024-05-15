@@ -8,17 +8,17 @@ def get_config(config_string: str = None):
     config.exp_name = "dt_lam_agent"
     config.visualize_rollouts = True
 
-    config.data.dataset_name = "minigrid_easy"
+    config.data.dataset_name = "minigrid_gotodoor"
     config.data.data_type = "trajectories"
     config.data.context_len = 0
-    config.data.num_trajs = 100
-    config.data.train_frac = 1.0
+    config.data.num_trajs = -1
+    config.data.train_frac = 0.95
     config.data.num_trajs_per_batch = 2  # ICL hyperparameter
-    config.data.resample_prompts_every_eval = True
 
-    config.env.env_id = "XLand-MiniGridCustom-R1-7x7"
+    config.env.env_id = "MiniGrid-GoToDoor-R1-7x7"
+    config.env.ruleset_id = -1
     config.env.num_episodes_per_rollout = 1
-    config.env.steps_per_rollout = 20
+    config.env.steps_per_rollout = 30
 
     config.model.use_lr_scheduler = False
     config.model.latent_action_dim = 64
@@ -28,8 +28,8 @@ def get_config(config_string: str = None):
     config.embedding_dim = 64
 
     config.num_rollouts_collect = 10_000
-    config.num_evals = 20
-    config.num_epochs = 8000
+    config.eval_interval = 10
+    config.num_epochs = 200
     config.run_eval_rollouts = True
 
     config.keys_to_include = {

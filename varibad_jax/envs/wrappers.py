@@ -17,6 +17,130 @@ class TimestepInfo:
     init_key: PRNGKey
 
 
+class GymAutoResetWrapper(Wrapper):
+    def __auto_reset(self, params, timestep):
+        key, _ = jax.random.split(timestep.state.key)
+        reset_timestep = self._env.reset(params, key)
+
+        timestep = timestep.replace(
+            state=reset_timestep.state,
+            observation=reset_timestep.observation,
+        )
+        return timestep
+
+    # TODO: add last_obs somewhere in the timestep? add extras like in Jumanji?
+    def step(self, params, timestep, action):
+        timestep = self._env.step(params, timestep, action)
+        timestep = jax.lax.cond(
+            timestep.last(),
+            lambda: self.__auto_reset(params, timestep),
+            lambda: timestep,
+        )
+        return timestep
+
+
+class BasicWrapper(Wrapper):
+    def __init__(
+        self,
+        env,
+        env_params: EnvParamsT,
+        steps_per_rollout: int = 15,
+    ):
+        """Wrapper"""
+        super().__init__(env)
+        self.env = env
+        self.env_params = env_params
+        self.steps_per_rollout = steps_per_rollout
+        # self.basic_info = dict(step_count=0, done_mdp=0, done=False, success=False)
+
+    # def reset(self, env_params: EnvParamsT, rng: PRNGKey, **kwargs):
+    #     timestep = self.env.reset(env_params, rng, **kwargs)
+
+    #     xtimestep = TimestepInfo(
+    #         timestep=timestep,
+    #         info=self.basic_info,
+    #         init_key=rng,
+    #     )
+    #     return xtimestep
+
+    # def __auto_reset(
+    #     self, env_params: EnvParamsT, timestep: TimeStep, key: PRNGKey, **kwargs
+    # ):
+    #     # key, _ = jax.random.split(timestep.state.key)
+    #     # always reset to the same initial state after a trial is complete
+    #     # TODO: not sure if this is always correct
+    #     reset_timestep = self._env.reset(env_params, key, **kwargs)
+
+    #     timestep = timestep.replace(
+    #         state=reset_timestep.state,
+    #         observation=reset_timestep.observation,
+    #     )
+    #     return timestep
+
+    # def step(
+    #     self,
+    #     env_params: EnvParamsT,
+    #     xtimestep: TimestepInfo,
+    #     action: jax.Array,
+    #     **kwargs
+    # ):
+    #     timestep = self.env.step(env_params, xtimestep.timestep, action)
+
+    #     done = timestep.last()
+
+    #     # ignore environment done
+    #     info = xtimestep.info
+
+    #     info["step_count"] = info["step_count"] + 1
+    #     steps = info["step_count"]
+    #     done_mdp = jnp.where(steps >= self.max_episode_steps, 1, 0)
+    #     info["done_mdp"] = done_mdp
+
+    #     success = (info["success"] | done) & ~done_mdp
+
+    #     # when the MDP is done, we reset back to initial timestep, but keep the same task
+    #     timestep = jax.lax.cond(
+    #         done_mdp,
+    #         lambda: self.__auto_reset(
+    #             env_params, timestep, xtimestep.init_key, **kwargs
+    #         ),
+    #         lambda: timestep,
+    #     )
+
+    #     # also reset the info dict
+    #     info = jax.lax.cond(done_mdp, lambda: self.basic_info, lambda: info)
+
+    #     info["success"] = success
+    #     info["done"] = info["done"] | done
+    #     xtimestep = TimestepInfo(
+    #         timestep=timestep, info=info, init_key=xtimestep.init_key
+    #     )
+    #     return xtimestep
+
+    @property
+    def observation_space(self):
+        try:
+            return self.env.observation_space(self.env_params)
+        except:
+            return gym.spaces.Box(
+                shape=self.env.observation_shape(self.env_params), low=0, high=1
+            )
+
+    @property
+    def action_space(self):
+        try:
+            return self.env.action_space(self.env_params)
+        except:
+            return gym.spaces.Discrete(self.env.num_actions(self.env_params))
+
+    @property
+    def max_episode_steps(self):
+        try:
+            return self.env_params.max_episode_steps
+        except:
+            return self.steps_per_rollout
+
+
 class BAMDPWrapper(Wrapper):
 
     def __init__(

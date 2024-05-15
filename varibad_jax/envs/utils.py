@@ -7,7 +7,7 @@ from typing import ClassVar, Optional
 
 import varibad_jax.envs
 from varibad_jax.envs.gridworld_jax import GridNavi
-from varibad_jax.envs.wrappers import BAMDPWrapper
+from varibad_jax.envs.wrappers import BAMDPWrapper, GymAutoResetWrapper, BasicWrapper
 
 # from procgen import ProcgenEnv
 from xminigrid.benchmarks import Benchmark, load_benchmark, load_benchmark_from_path
@@ -73,6 +73,7 @@ def make_envs(
         env = GridNavi(**env_kwargs)
         env_params = env.default_params(**env_kwargs)
     elif env_name == "xland":
+        env_kwargs["max_steps"] = steps_per_rollout
         env, env_params = xminigrid.make(env_id, **env_kwargs)
 
         if ruleset_id > -1:
@@ -91,12 +92,20 @@ def make_envs(
             print_ruleset(ruleset)
             env_params = env_params.replace(ruleset=ruleset)
 
+    if training:
+        env = GymAutoResetWrapper(env)
+
     # this still works if we have num_episodes_per_rollout = 1
-    env = BAMDPWrapper(
-        env,
-        env_params=env_params,
-        steps_per_rollout=steps_per_rollout,
-        num_episodes_per_rollout=num_episodes_per_rollout,
-    )
+    if num_episodes_per_rollout > 1:
+        env = BAMDPWrapper(
+            env,
+            env_params=env_params,
+            steps_per_rollout=steps_per_rollout,
+            num_episodes_per_rollout=num_episodes_per_rollout,
+        )
+    else:
+        env = BasicWrapper(
+            env, env_params=env_params, steps_per_rollout=steps_per_rollout
+        )
 
     return env, env_params

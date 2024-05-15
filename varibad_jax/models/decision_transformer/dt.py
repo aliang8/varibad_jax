@@ -106,6 +106,7 @@ class DecisionTransformerAgent(BaseAgent):
         if self.is_continuous:
             # compute MSE loss
             loss = optax.squared_error(action_preds, actions.squeeze())
+            acc = 0.0
         else:
             # compute cross entropy with logits
             loss = optax.softmax_cross_entropy_with_integer_labels(
@@ -113,9 +114,13 @@ class DecisionTransformerAgent(BaseAgent):
             )
             # loss *= batch.mask
             # loss = loss.sum() / batch.mask.sum()
+
+            acc = policy_output.action == actions.squeeze(axis=-1)
+            acc = jnp.mean(acc)
+
         loss = jnp.mean(loss)
 
-        metrics = {"bc_loss": loss, "entropy": entropy}
+        metrics = {"bc_loss": loss, "entropy": entropy, "decoded_acc": acc}
 
         return loss, (metrics, new_state)
 

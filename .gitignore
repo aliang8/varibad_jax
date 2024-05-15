@@ -20,3 +20,5 @@ misc/*
 varibad_jax/datasets/*
 old/*
 varibad_jax/commands/*
+varibad_jax/hello.txt
+varibad_jax/tmp.sh

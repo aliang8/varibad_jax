@@ -30,6 +30,7 @@ def get_config(config_string: str = None):
             num_trajs_per_batch=1,
             burstiness=0.5,
             holdout_tasks=False,
+            resample_prompts_every_eval=False,
         )
     )
 
@@ -37,7 +38,7 @@ def get_config(config_string: str = None):
     config.eval_interval = 50
     # config.save_key = ""
 
-    config.embedding_dim = 32
+    config.embedding_dim = 64
 
     transformer_config.embedding_dim = config.get_ref("embedding_dim")
 
@@ -91,7 +92,13 @@ def get_config(config_string: str = None):
         "bc": ConfigDict(
             dict(name="bc", image_obs=config.env.get_ref("image_obs"), policy=bc_config)
         ),
-        "dt": dt_config,
+        "dt_agent": ConfigDict(
+            dict(
+                name="dt_agent",
+                image_obs=config.env.get_ref("image_obs"),
+                policy=dt_config,
+            )
+        ),
         "lam": ConfigDict(
             dict(
                 name="lam",
@@ -119,7 +126,7 @@ def get_config(config_string: str = None):
                     image_encoder_config=image_encoder_config,
                     image_decoder_config=image_decoder_config,
                     embedding_dim=config.get_ref("embedding_dim"),
-                    decoder_mlp_sizes=[64, 64],
+                    decoder_mlp_sizes=[128, 128],
                     use_transformer_idm=False,
                 ),
                 beta_loss_weight=1.0,
@@ -134,6 +141,34 @@ def get_config(config_string: str = None):
                 latent_action_dim=16,
                 context_len=config.data.get_ref("context_len"),
                 mlp_layer_sizes=[128, 128],
+            )
+        ),
+        "vpt": ConfigDict(
+            dict(
+                name="vpt",
+                idm=dict(
+                    image_obs=config.env.get_ref("image_obs"),
+                    # image_encoder_config=ConfigDict(
+                    #     dict(
+                    #         out_channels=[16, 32, 32], out_features=256, impala_scale=4
+                    #     )
+                    # ),
+                    gaussian_policy=False,
+                    image_encoder_config=image_encoder_config,
+                    use_transformer=False,
+                    transformer_config=transformer_config,
+                    embedding_dim=config.get_ref("embedding_dim"),
+                ),
+                image_obs=config.env.get_ref("image_obs"),
+                context_len=config.data.get_ref("context_len"),
+                mlp_layer_sizes=[128, 128],
+            )
+        ),
+        "vpt_bc": ConfigDict(
+            dict(
+                name="vpt_bc",
+                image_obs=config.env.get_ref("image_obs"),
+                policy=bc_config,
             )
         ),
         "lam_agent": ConfigDict(
@@ -179,6 +214,6 @@ def get_config(config_string: str = None):
     config.num_rollouts_collect = 50_000
 
     config.cpu = 5
-    config.gpu = 1.0  # needs more gpu here
+    config.gpu = 0.2  # needs more gpu here
 
     return config

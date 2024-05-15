@@ -89,23 +89,33 @@ def main(_):
     )
 
     # collect some rollouts
-    # steps_per_rollout = config_p.env.num_episodes_per_rollout * envs.max_episode_steps
-    steps_per_rollout = (
-        config_p.env.num_episodes_per_rollout * config.env.steps_per_rollout
-    )
-
     logging.info("start data collection")
     config_p.num_eval_rollouts = config.num_rollouts_collect
 
-    eval_metrics, transitions, actions = run_rollouts(
+    eval_metrics, (transitions, actions, successes) = run_rollouts(
         rng=next(rng_seq),
         agent=agent,
         belief_model=belief_model,
         env=envs,
         config=config_p,
-        steps_per_rollout=steps_per_rollout,
         action_dim=input_action_dim,
     )
+
+    # convert list of list into one list
+    transitions = [
+        transition for trajectory in transitions for transition in trajectory
+    ]
+
+    # combine transitions
+    transitions = jtu.tree_map(lambda *v: jnp.stack(v), *transitions)
+
+    # merge actions too
+    actions = [action for actions in actions for action in actions]
+    actions = jtu.tree_map(lambda *v: jnp.stack(v), *actions)
+    if len(actions.shape) == 3:
+        actions = actions.squeeze(axis=1)
+
+    successes = jnp.array(successes)
 
     logging.info(f"eval metrics: {eval_metrics}")
 
@@ -113,7 +123,7 @@ def main(_):
     data_dir = (
         Path(config.root_dir)
         / "datasets"
-        / f"{config.data.dataset_name}_eid-{config.env.env_id}_n-{config.num_rollouts_collect}_steps-{steps_per_rollout}"
+        / f"{config.data.dataset_name}_eid-{config_p.env.env_id}_n-{config.num_rollouts_collect}"
     )
     data_dir.mkdir(exist_ok=True, parents=True)
     data_file = data_dir / "dataset.pkl"
@@ -166,21 +176,10 @@ def main(_):
     rewards = transitions.reward
     dones = transitions.last()
 
-    states = transitions.state
-
-    import ipdb
-
-    ipdb.set_trace()
     if config.env.env_name == "gridworld":
-        successes = states.success
-        mask = 1 - successes
-        mask = mask.at[:, -1].set(0)
-
-        tasks = states.goal
+        tasks = transitions.state.goal
     elif config.env.env_name == "xland":
-        mask = transitions.discount
-
-        tasks = states.goal_encoding
+        tasks = transitions.state.goal_encoding
 
     logging.info(
         f"observations shape: {observations.shape}, rewards shape: {rewards.shape}, actions shape: {actions.shape}"
@@ -195,8 +194,8 @@ def main(_):
         rewards=rewards,
         dones=dones,
         tasks=tasks,
-        mask=mask,
         info=info,
+        successes=successes,
         # imgs=all_imgs,
     )
 

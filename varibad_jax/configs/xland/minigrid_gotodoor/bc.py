@@ -9,18 +9,20 @@ def get_config(config_string: str = None):
     config.exp_name = "bc"
     config.visualize_rollouts = True
 
-    config.data.dataset_name = "minigrid_easy"
+    config.data.dataset_name = "minigrid_gotodoor"
     config.data.data_type = "transitions"
-    config.data.num_trajs = 200
+    config.data.num_trajs = -1
 
-    config.env.env_id = "XLand-MiniGrid-TwoGoals-R1-7x7-5"
+    config.env.env_id = "MiniGrid-GoToDoor-R1-7x7"
+    config.env.ruleset_id = -1
     config.env.num_episodes_per_rollout = 1
+    config.env.steps_per_rollout = 30
 
     config.model.policy.pass_task_to_policy = False
 
-    config.num_rollouts_collect = 1000
-    config.num_evals = 10
-    config.num_epochs = 5000
+    config.num_rollouts_collect = 10_000
+    config.eval_interval = 5
+    config.num_epochs = 100
 
     config.keys_to_include = {
         "env": {"env_name": 1, "env_id": 1, "steps_per_rollout": 1},

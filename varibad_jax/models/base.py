@@ -109,12 +109,12 @@ class BaseModel:
         if update_model:
             grads, new_opt_state = self.opt.update(grads, ts.opt_state, ts.params)
             new_params = optax.apply_updates(ts.params, grads)
+            new_ts = TrainingState(
+                params=new_params, state=new_state, opt_state=new_opt_state
+            )
         else:
-            new_opt_state = ts.opt_state
-            new_params = ts.params
-        new_ts = TrainingState(
-            params=new_params, state=new_state, opt_state=new_opt_state
-        )
+            new_ts = ts
+
         return new_ts, metrics
 
     def update(self, rng, batch, update_model=True):
