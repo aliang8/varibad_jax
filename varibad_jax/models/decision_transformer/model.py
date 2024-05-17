@@ -49,6 +49,7 @@ class DecisionTransformer(hk.Module):
         mask: jax.Array,  # [B, T]
         rewards: jax.Array = None,  # [B, T, 1]
         prompt: jax.Array = None,
+        traj_index: jax.Array = None,
         is_training: bool = True,
         **kwargs
     ) -> jax.Array:
@@ -59,6 +60,7 @@ class DecisionTransformer(hk.Module):
             rewards=rewards,
             mask=mask,
             prompt=prompt,
+            traj_index=traj_index,
             is_training=is_training,
         )
 

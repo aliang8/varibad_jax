@@ -17,8 +17,10 @@ def get_config(config_string: str = None):
     config.env.num_episodes_per_rollout = 1
 
     config.embedding_dim = 256
-    config.model.idm.beta = 0.05
-    config.model.idm.ema_decay = 0.999
+    # config.model.idm.beta = 0.05
+    # config.model.idm.ema_decay = 0.999
+    config.model.idm.beta = 0.25
+    config.model.idm.ema_decay = 0.99
     config.model.idm.num_codes = 60
     config.model.idm.code_dim = 64
     config.model.use_lr_scheduler = True

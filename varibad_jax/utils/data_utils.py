@@ -27,6 +27,7 @@ class Batch:
     tasks: jnp.ndarray = None
     mask: jnp.ndarray = None
     successes: jnp.ndarray = None
+    traj_index: jnp.ndarray = None
 
 
 # def load_procgen_data(data_dir: str, env_id: str, stage: str = "train"):
@@ -213,6 +214,43 @@ class DataStager:
                 yield numpy_batch
 
 
+def convert_to_trajectories(data):
+    dones = data["dones"]
+    # get indices where the trajectory ends
+    traj_ends = jnp.where(dones)[0]
+    traj_ends = jnp.concatenate([jnp.array([-1]), traj_ends])
+    traj_lens = traj_ends[1:] - traj_ends[:-1]
+    max_len = int(traj_lens.max())
+
+    data["mask"] = jnp.ones_like(data["dones"])
+
+    # split each data by done
+    data = tree_map(lambda x: jnp.split(x, jnp.where(dones)[0] + 1)[:-1], data)
+
+    del data["successes"]
+    # pad everything to the max length
+    data = tree_map(
+        lambda x: jnp.pad(
+            x,
+            ((0, max_len - x.shape[0]), *[(0, 0)] * (len(x.shape) - 1)),
+            mode="constant",
+        ),
+        data,
+    )
+    # stack the trajectories together
+    stacked_data = {}
+    for k, v in data.items():
+        if isinstance(v, dict):
+            stacked_data[k] = {}
+            for kk, vv in v.items():
+                stacked_data[k][kk] = jnp.stack(vv)
+        else:
+            stacked_data[k] = jnp.stack(v)
+
+    data = stacked_data
+    return data
+
+
 def load_data(config: ConfigDict, rng: npr.RandomState, steps_per_rollout: int):
     data_dir = Path(config.root_dir) / config.data.data_dir
 
@@ -310,28 +348,40 @@ def load_data(config: ConfigDict, rng: npr.RandomState, steps_per_rollout: int):
 
         train_data = subsample_data(data, ~eval_mask)
         eval_data = subsample_data(data, eval_mask)
+
+        if num_trajs > -1:
+            dones = data["dones"]
+            traj = jnp.cumsum(dones)
+            end_idx = jnp.argmax(traj >= num_trajs) + 1
+            train_indices = jnp.arange(end_idx)
+            train_data = subsample_data(train_data, train_indices)
     else:
         dataset_size = data["observations"].shape[0]
-        num_trajectories = data["dones"].sum()
+        num_total_trajs = data["dones"].sum()
+        num_trajs = config.data.num_trajs
+        if num_trajs > -1:
+            num_trajs = min(num_trajs, num_total_trajs)
+        else:
+            num_trajs = num_total_trajs
 
-        num_train_trajs = math.ceil(num_trajectories * config.data.train_frac)
+        num_train_trajs = math.ceil(num_trajs * config.data.train_frac)
         dones = data["dones"]
         traj = jnp.cumsum(dones)
-        end_idx = jnp.argmax(traj >= num_train_trajs) + 1
-        train_indices = jnp.arange(dataset_size)[:end_idx]
-        eval_indices = jnp.arange(dataset_size)[end_idx:]
+        train_end_idx = jnp.argmax(traj >= num_train_trajs) + 1
+        end_idx = jnp.argmax(traj >= num_trajs) + 1
+
+        train_indices = jnp.arange(end_idx)[:train_end_idx]
+        eval_indices = jnp.arange(end_idx)[train_end_idx:]
 
         # split into train and eval
         train_data = subsample_data(data, train_indices)
         eval_data = subsample_data(data, eval_indices)
 
-    if config.data.num_trajs != -1:
-        # find end index of the Kth trajectory
-        dones = train_data["dones"]
-        traj = jnp.cumsum(dones)
-        end_idx = jnp.argmax(traj >= config.data.num_trajs) + 1
-        indices = jnp.arange(train_data["observations"].shape[0])[:end_idx]
-        train_data = subsample_data(train_data, indices)
+    if config.data.data_type == "trajectories":
+        logging.info("converting data to trajectories")
+        train_data = convert_to_trajectories(train_data)
+        if eval_data["observations"].shape[0] > 0:
+            eval_data = convert_to_trajectories(eval_data)
 
     logging.info(f"num training data: {train_data['observations'].shape[0]}")
     logging.info(f"num eval data: {eval_data['observations'].shape[0]}")
@@ -364,6 +414,11 @@ class TrajectoryDataset(Dataset):
         self.data_cfg = data_cfg
         self.num_trajectories = self.data["observations"].shape[0]
 
+        # set a max length for the trajectories
+        self.max_traj_len = (
+            self.data["observations"].shape[1] * self.data_cfg.num_trajs_per_batch
+        )
+
         # map from trajectory index to task index
         self.tasks = self.data["tasks"][:, 0]
         self.traj_to_task_id_map = {}
@@ -388,15 +443,31 @@ class TrajectoryDataset(Dataset):
 
                 # choose a random new trajectory with the same MDP to combine
                 traj_id = np.random.choice(traj_ids)
+                traj_2 = subsample_data(self.data, traj_id)
 
-                for k, v in self.data.items():
+                # compute total length of the trajectories
+                traj1_len = data["mask"].sum()
+                traj2_len = traj_2["mask"].sum()
+
+                # merge the two trajectories together
+                for k, v in data.items():
                     if isinstance(v, dict):
                         for kk, vv in v.items():
-                            data[k][kk] = np.concatenate(
-                                [data[k][kk], vv[traj_id]], axis=0
-                            )
+                            new_vv = np.zeros((self.max_traj_len, *vv.shape[1:]))
+                            new_vv[:traj1_len] = data[k][kk][:traj1_len]
+                            new_vv[traj1_len : traj1_len + traj2_len] = traj_2[k][kk][
+                                :traj2_len
+                            ]
+                            data[k][kk] = new_v
                     else:
-                        data[k] = np.concatenate([data[k], v[traj_id]], axis=0)
+                        new_v = np.zeros((self.max_traj_len, *v.shape[1:]))
+                        new_v[:traj1_len] = data[k][:traj1_len]
+                        new_v[traj1_len : traj1_len + traj2_len] = traj_2[k][:traj2_len]
+                        data[k] = new_v
+
+                data["traj_index"] = np.zeros(self.max_traj_len, dtype=np.int32)
+                data["traj_index"][:traj1_len] = 1
+                data["traj_index"][traj1_len : traj1_len + traj2_len] = 2
 
         fn = lambda x: torch.Tensor(x)
         data = tree_map(fn, data)

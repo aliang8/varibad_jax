@@ -8,6 +8,7 @@ import jax.numpy as jnp
 from absl import logging
 from functools import partial
 
+from varibad_jax.utils.data_utils import Batch
 from varibad_jax.models.base import BaseAgent
 from varibad_jax.models.decision_transformer.model import DecisionTransformer
 from varibad_jax.models.lam.lam import LatentActionBaseAgent
@@ -41,6 +42,8 @@ class DecisionTransformerAgent(BaseAgent):
         else:
             dummy_prompt = None
 
+        dummy_traj_index = np.zeros((bs, t))
+
         params, state = self.model.init(
             self._init_key,
             self,
@@ -49,6 +52,7 @@ class DecisionTransformerAgent(BaseAgent):
             rewards=dummy_rewards,
             mask=dummy_mask,
             prompt=dummy_prompt,
+            traj_index=dummy_traj_index,
             is_training=True,
         )
         return params, state
@@ -89,6 +93,7 @@ class DecisionTransformerAgent(BaseAgent):
             rewards=rewards,
             mask=mask,
             prompt=prompt,
+            traj_index=batch.traj_index,
             is_training=True,
         )
 
@@ -107,18 +112,18 @@ class DecisionTransformerAgent(BaseAgent):
             # compute MSE loss
             loss = optax.squared_error(action_preds, actions.squeeze())
             acc = 0.0
+            loss *= batch.mask[..., jnp.newaxis]
+            loss = loss.sum() / batch.mask.sum()
         else:
             # compute cross entropy with logits
             loss = optax.softmax_cross_entropy_with_integer_labels(
                 action_preds, actions.squeeze(axis=-1).astype(jnp.int32)
             )
-            # loss *= batch.mask
-            # loss = loss.sum() / batch.mask.sum()
+            loss *= batch.mask
+            loss = loss.sum() / batch.mask.sum()
 
             acc = policy_output.action == actions.squeeze(axis=-1)
             acc = jnp.mean(acc)
-
-        loss = jnp.mean(loss)
 
         metrics = {"bc_loss": loss, "entropy": entropy, "decoded_acc": acc}
 
@@ -177,7 +182,7 @@ class LatentDTAgent(LatentActionBaseAgent, DecisionTransformerAgent):
         return latent_actions
 
     def loss_fn(
-        self, params: hk.Params, state: hk.State, rng: jax.random.PRNGKey, batch: Tuple
+        self, params: hk.Params, state: hk.State, rng: jax.random.PRNGKey, batch: Batch
     ):
         # observations should be B, T, ...
         logging.info(
@@ -191,10 +196,6 @@ class LatentDTAgent(LatentActionBaseAgent, DecisionTransformerAgent):
             lam_key, batch.observations.astype(jnp.float32)
         )
         batch.actions = latent_actions
-
-        # import ipdb
-
-        # ipdb.set_trace()
         return DecisionTransformerAgent.loss_fn(self, params, state, policy_key, batch)
 
     @partial(jax.jit, static_argnames=("self", "is_training"))

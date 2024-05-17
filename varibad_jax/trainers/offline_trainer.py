@@ -62,11 +62,6 @@ class OfflineTrainer(BaseTrainer):
         # these are trajectories
         self.eval_prompts = self.sample_prompts()
 
-        # if config.data.data_type == "transitions":
-        #     fn = lambda x: einops.rearrange(x, "B T ... -> (B T) ...")
-        #     self.train_dataset = jtu.tree_map(fn, self.train_dataset)
-        #     self.eval_dataset = jtu.tree_map(fn, self.eval_dataset)
-
         if self.config.env.env_name == "procgen":
             self.train_dataloader = self.train_dataset.get_iter(
                 self.config.data.batch_size
@@ -92,7 +87,10 @@ class OfflineTrainer(BaseTrainer):
             else:
                 self.eval_dataloader = None
 
-            obs_shape = self.train_dataset["observations"].shape[1:]
+            if config.data.data_type == "trajectories":
+                obs_shape = self.train_dataset["observations"].shape[2:]
+            else:
+                obs_shape = self.train_dataset["observations"].shape[1:]
 
         # print batch item shapes
         batch = next(iter(self.train_dataloader))

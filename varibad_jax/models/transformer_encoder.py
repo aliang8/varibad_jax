@@ -168,7 +168,9 @@ class SARTransformerEncoder(hk.Module):
         self.action_embed = hk.Linear(embedding_dim, **init_kwargs)
         self.reward_embed = hk.Linear(embedding_dim, **init_kwargs)
         self.timestep_embed = hk.Embed(max_timesteps, embedding_dim)
+
         self.prompt_embed = hk.Linear(embedding_dim, **init_kwargs)
+        self.traj_index_embed = hk.Embed(5, embedding_dim)
 
         self.embed = hk.Linear(hidden_dim, **init_kwargs)
 
@@ -179,6 +181,7 @@ class SARTransformerEncoder(hk.Module):
         mask: jax.Array,  # [T, B]
         rewards: jax.Array = None,  # [T, B, 1]
         prompt: jax.Array = None,
+        traj_index: jax.Array = None,
         is_training: bool = True,
         **kwargs,
     ) -> jax.Array:
@@ -222,6 +225,12 @@ class SARTransformerEncoder(hk.Module):
 
         state_embed = state_embed + timestep_embed  # [B, T, D]
         action_embed = action_embed + timestep_embed
+
+        # for ICL training, denote trajectory index
+        if traj_index is not None:
+            traj_index_embed = self.traj_index_embed(traj_index.astype(jnp.int32))
+            state_embed = state_embed + traj_index_embed
+            action_embed = action_embed + traj_index_embed
 
         if self.encode_separate:
             # stack, [B, T, D] -> [B, 3, T, D]

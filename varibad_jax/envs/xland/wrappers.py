@@ -22,14 +22,14 @@ class FullyObservableWrapper(Wrapper):
         )
         return full_obs
 
-    def reset(self, params, key):
-        timestep = self._env.reset(params, key)
+    def reset(self, params, key, **kwargs):
+        timestep = self._env.reset(params, key, **kwargs)
         full_obs = self.full_obs(timestep)
         timestep = timestep.replace(observation=full_obs)
         return timestep
 
-    def step(self, params, timestep, action):
-        timestep = self._env.step(params, timestep, action)
+    def step(self, params, timestep, action, **kwargs):
+        timestep = self._env.step(params, timestep, action, **kwargs)
         full_obs = self.full_obs(timestep)
         timestep = timestep.replace(observation=full_obs)
         return timestep

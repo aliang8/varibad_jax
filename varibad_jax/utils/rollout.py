@@ -16,6 +16,8 @@ import functools
 from ml_collections import ConfigDict
 import jax.tree_util as jtu
 import matplotlib.pyplot as plt
+
+from varibad_jax.utils.data_utils import subsample_data
 from xminigrid.experimental.img_obs import TILE_W_AGENT_CACHE, TILE_CACHE, TILE_SIZE
 from xminigrid.core.constants import NUM_COLORS, TILES_REGISTRY, Tiles, Colors
 from xminigrid.types import AgentState, EnvCarry, GridState, RuleSet, State
@@ -96,11 +98,10 @@ def run_rollouts(
 ) -> RolloutStats:
     logging.info("Evaluating policy rollout...")
 
-    rng_keys = jax.random.split(rng, config.num_eval_rollouts)
-
     start = time.time()
 
     rollout_kwargs = dict(
+        rng=rng,
         agent=agent,
         action_dim=action_dim,
         env=env,
@@ -112,6 +113,7 @@ def run_rollouts(
         rollout_fn = eval_rollout_with_belief_model
     elif "dt" in config.model.name:
         rollout_fn = eval_rollout_dt
+        rollout_kwargs["max_traj_len"] = 100
     else:
         rollout_fn = eval_rollout
 
@@ -119,12 +121,10 @@ def run_rollouts(
     if prompts is not None:
         logging.info("using prompts")
         eval_metrics, (trajectories, actions, successes) = rollout_fn(
-            prompts[0], **rollout_kwargs
+            prompts=prompts, **rollout_kwargs
         )
     else:
-        eval_metrics, (trajectories, actions, successes) = rollout_fn(
-            rng_keys[0], **rollout_kwargs
-        )
+        eval_metrics, (trajectories, actions, successes) = rollout_fn(**rollout_kwargs)
 
     rollout_time = time.time() - start
     eval_metrics = {
@@ -226,181 +226,183 @@ def eval_rollout_dt(
     env: Environment,
     config: dict,
     action_dim: int,
-    steps_per_rollout: int,
-    prompt=None,
+    max_traj_len: int,
+    prompts=None,
     **kwargs,
 ) -> RolloutStats:
-    rng, reset_rng = jax.random.split(rng, 2)
-    if config.model.policy.demo_conditioning and prompt is not None:
-        if config.env.env_name == "gridworld":
-            # set the goal to be the same as the one in the prompt
-            state = prompt["tasks"][0]
-        elif config.env.env_name == "xland":
-            agent_position = prompt["info"]["agent_position"][0]
-            agent_direction = prompt["info"]["agent_direction"][0]
-            grid = prompt["info"]["grid"][0]
+    jit_reset = jax.jit(env.reset, static_argnames=("randomize_agent"))
+    jit_step = jax.jit(env.step)
+    jit_apply = jax.jit(agent.get_action, static_argnames=("is_training"))
 
-            goal_encoding = prompt["info"]["goal"][0]
-            rule_encoding = prompt["info"]["rule"][0]
-            agent_state = AgentState(position=agent_position, direction=agent_direction)
-            state = State(
-                key=rng,
-                step_num=jnp.asarray(0),
-                grid=grid,
-                agent=agent_state,
-                goal_encoding=goal_encoding,
-                rule_encoding=rule_encoding,
-                carry=EnvCarry(),
-            )
+    if "lam" in config.model.name:
+        jit_relabel = jax.jit(agent.label_trajectory_with_actions)
 
-    timestep = env.reset(env.env_params, reset_rng, state=state)
-    observation_shape = timestep.observation.shape
+    trajectories = []
+    all_actions = []
+    all_stats = []
+    all_successes = []
 
-    # first dimension is batch
-    observations = jnp.zeros((1, steps_per_rollout, *observation_shape))
-    actions = jnp.zeros((1, steps_per_rollout, action_dim))
-    rewards = jnp.zeros((1, steps_per_rollout, 1))
-    mask = jnp.zeros((1, steps_per_rollout))
-    done = False
-    start_index = 0
+    for episode in tqdm.tqdm(range(config.num_eval_rollouts)):
+        rng, reset_rng = jax.random.split(rng, 2)
 
-    if config.model.policy.task_conditioning:
+        prompt = subsample_data(prompts, episode)
+
+        # import ipdb
+
+        # ipdb.set_trace()
+
+        timestep = env_reset(config, reset_rng, env, jit_reset, prompt=prompt)
+        timesteps = [timestep]
+        traj_actions = []
+
         if config.env.env_name == "gridworld":
             task = timestep.state.goal
         elif config.env.env_name == "xland":
             task = timestep.state.goal_encoding
 
-        task = task.reshape(1, 1, -1)
-        prompt = task
-    elif config.model.policy.demo_conditioning and config.data.num_trajs_per_batch > 1:
-        logging.info("adding prompt info before trajectory")
-        # prepend prompt into the input tokens
-        num_prompt_steps = prompt["observations"].shape[0]
-        observations = jnp.concatenate(
-            [prompt["observations"][jnp.newaxis], observations], axis=1
-        )
-        if "lam" in config.model.name:
-            rng, latent_rng = jax.random.split(rng)
-            # relabel demo trajectory with latent actions
-            latent_actions = agent.label_trajectory_with_actions(
-                latent_rng, prompt["observations"][jnp.newaxis].astype(jnp.float32)
-            )
-            actions = jnp.concatenate([latent_actions, actions], axis=1)
+        if len(task.shape) == 1:
+            task = task[jnp.newaxis]
+
+        observation_shape = timestep.observation.shape
+
+        # first dimension is batch
+        observations = np.zeros((1, max_traj_len, *observation_shape))
+        actions = np.zeros((1, max_traj_len, action_dim))
+        rewards = np.zeros((1, max_traj_len, 1))
+        mask = np.zeros((1, max_traj_len))
+        start_index = 0
+        traj_index = None
+
+        if config.model.policy.task_conditioning:
+            if config.env.env_name == "gridworld":
+                task = timestep.state.goal
+            elif config.env.env_name == "xland":
+                task = timestep.state.goal_encoding
+
+            task = task.reshape(1, 1, -1)
+            prompt = task
+        elif (
+            config.model.policy.demo_conditioning
+            and config.data.num_trajs_per_batch > 1
+        ):
+            # logging.info("adding prompt info before trajectory")
+            # prepend prompt into the input tokens
+            prompt_steps = prompt["mask"].sum()
+
+            # filter prompt for steps
+            filtered_prompt = jtu.tree_map(lambda x: x[:prompt_steps], prompt)
+            observations[:, :prompt_steps] = filtered_prompt["observations"]
+
+            if "lam" in config.model.name:
+                rng, latent_rng = jax.random.split(rng)
+                # relabel demo trajectory with latent actions
+                latent_actions = jit_relabel(
+                    latent_rng, prompt["observations"][jnp.newaxis].astype(jnp.float32)
+                )
+                # TODO: might be an index issue here
+                latent_actions = latent_actions[:, :prompt_steps]
+                actions[:, :prompt_steps] = latent_actions
+            else:
+                actions[:, :prompt_steps] = filtered_prompt["actions"]
+
+            rewards[:, :prompt_steps] = filtered_prompt["rewards"].reshape(1, -1, 1)
+            mask[:, :prompt_steps] = 1.0
+            traj_index = np.ones((1, max_traj_len))
+            traj_index[:, :prompt_steps] = 1.0
+            traj_index = jnp.array(traj_index)
+
+            start_index = prompt_steps
+            prompt = None
         else:
-            actions = jnp.concatenate([prompt["actions"][jnp.newaxis], actions], axis=1)
-        rewards = jnp.concatenate(
-            [prompt["rewards"].reshape(1, -1, 1), rewards], axis=1
-        )
+            prompt = None
 
-        mask = jnp.concatenate([jnp.ones((1, num_prompt_steps)), mask], axis=1)
-        start_index = num_prompt_steps
-        prompt = None
-    else:
-        prompt = None
+        # first return-to-go is the desired return value
+        # this is probably environment / task specific
+        rtg = 60.0
+        observations = jnp.array(observations)
+        actions = jnp.array(actions)
+        rewards = jnp.array(rewards)
+        mask = jnp.array(mask)
+        rewards = rewards.at[0, start_index].set(rtg)
 
-    stats = RolloutStats(episode_return=0, length=start_index)
+        step = 0
+        success = False
+        done = False
+        stats = RolloutStats(episode_return=0, length=start_index, success=False)
 
-    # first return-to-go is the desired return value
-    # this is probably environment / task specific
-    rtg = 60.0
-    rewards = rewards.at[0, start_index].set(rtg)
+        while not done:
+            rng, policy_rng = jax.random.split(rng)
+            observation = timestep.observation
+            observation = observation.astype(jnp.float32)
+            observations = observations.at[0, stats.length].set(observation)
+            mask = mask.at[0, stats.length].set(1.0)
+            if config.model.policy.demo_conditioning:
+                traj_index = traj_index.at[0, stats.length].set(2.0)
 
-    def _step_fn(carry, _):
-        (
-            rng,
-            stats,
-            timestep,
-            observations,
-            actions,
-            rewards,
-            rtg,
-            mask,
-            done,
-        ) = carry
+            policy_output, _ = jit_apply(
+                policy_rng,
+                env_state=None,
+                states=observations,
+                actions=actions,
+                rewards=rewards if config.model.policy.use_rtg else None,
+                mask=mask,
+                prompt=prompt,
+                traj_index=traj_index,
+                is_training=False,
+            )
 
-        rng, policy_rng = jax.random.split(rng)
-        observation = timestep.observation
-        observation = observation.astype(jnp.float32)
-        observations = observations.at[0, stats.length].set(observation)
-        mask = mask.at[0, stats.length].set(1.0)
+            entropy = policy_output.entropy
+            entropy = jnp.mean(entropy)
+            # logging.info(f"entropy: {entropy}")
 
-        policy_output, _ = agent.get_action(
-            policy_rng,
-            env_state=None,
-            states=observations,
-            actions=actions,
-            rewards=rewards if config.model.policy.use_rtg else None,
-            mask=mask,
-            prompt=prompt,
-            is_training=False,
-        )
+            # [B, T]
+            action = policy_output.action
+            action = action[0, stats.length]
+            timestep = jit_step(env.env_params, timestep, action)
+            reward = timestep.reward
+            done = timestep.last()
 
-        entropy = policy_output.entropy
-        entropy = jnp.mean(entropy)
-        # logging.info(f"entropy: {entropy}")
+            action = action.reshape(1).astype(jnp.float32)
+            reward = reward.reshape(1)
 
-        # [B, T]
-        action = policy_output.action
-        action = action[0, stats.length]
-        timestep = env.step(env.env_params, timestep, action)
-        timestep = timestep
-        reward = timestep.reward
-        done = timestep.last()
+            if step < (env.max_episode_steps - 1):
+                success = success or done
 
-        action = action.reshape(1).astype(jnp.float32)
-        reward = reward.reshape(1)
+            if "lam" in config.model.name:
+                action = policy_output.latent_action[0, stats.length]
 
-        if "lam" in config.model.name:
-            action = policy_output.latent_action[0, stats.length]
+            actions = actions.at[0, stats.length].set(action)
 
-        actions = actions.at[0, stats.length].set(action)
+            # return to go is the previous return minus reward
+            rtg = rtg - timestep.reward
 
-        # return to go is the previous return minus rewad
-        rtg = rtg - timestep.reward
+            rewards = rewards.at[0, stats.length].set(rtg)
 
-        rewards = rewards.at[0, stats.length].set(rtg)
+            if action.shape[-1] == 1:
+                action = action.squeeze(axis=-1)
 
-        stats = stats.replace(
-            episode_return=stats.episode_return + timestep.reward,
-            length=stats.length + 1,
-        )
+            step += 1
+            timesteps.append(timestep)
+            traj_actions.append(action)
 
-        if action.shape[-1] == 1:
-            action = action.squeeze(axis=-1)
+            stats = stats.replace(
+                episode_return=stats.episode_return + timestep.reward,
+                length=stats.length + 1,
+                success=success,
+            )
 
-        return (
-            rng,
-            stats,
-            timestep,
-            observations,
-            actions,
-            rewards,
-            rtg,
-            mask,
-            done,
-        ), (timestep, action)
+        trajectories.append(timesteps)
+        all_actions.append(traj_actions)
+        all_stats.append(stats)
+        all_successes.append(success)
+        all_transitions = trajectories
 
-    init_carry = (
-        rng,
-        stats,
-        timestep,
-        observations,
-        actions,
-        rewards,
-        rtg,
-        mask,
-        done,
-    )
-
-    # transitions contains (timestep, action)
-    carry, transitions = jax.lax.scan(
-        _step_fn, init_carry, None, length=steps_per_rollout
-    )
-    stats = carry[1]
-    return stats, transitions
+    stats = jtu.tree_map(lambda *x: jnp.mean(jnp.stack(x)), *all_stats)
+    return stats, (all_transitions, all_actions, all_successes)
 
 
 def env_reset(config: ConfigDict, rng, env, reset_fn: Callable, prompt: dict = None):
+
     rng, reset_rng = jax.random.split(rng, 2)
 
     if prompt is not None:
@@ -550,6 +552,8 @@ def eval_rollout(
         # add a dummy action for the shape
         actions.append(actions[-1])
 
+        # only add successful trajectories
+        # if success:
         trajectories.append(timesteps)
         all_actions.append(actions)
         all_stats.append(stats)

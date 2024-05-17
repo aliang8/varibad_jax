@@ -48,7 +48,6 @@ class BasicWrapper(Wrapper):
     ):
         """Wrapper"""
         super().__init__(env)
-        self.env = env
         self.env_params = env_params
         self.steps_per_rollout = steps_per_rollout
         # self.basic_info = dict(step_count=0, done_mdp=0, done=False, success=False)
@@ -117,21 +116,31 @@ class BasicWrapper(Wrapper):
     #     )
     #     return xtimestep
 
+    def reset(self, env_params: EnvParamsT, rng: PRNGKey, **kwargs):
+        timestep = self._env.reset(env_params, rng, **kwargs)
+        return timestep
+
+    def step(
+        self, env_params: EnvParamsT, timestep: TimeStep, action: jnp.ndarray, **kwargs
+    ):
+        timestep = self._env.step(env_params, timestep, action, **kwargs)
+        return timestep
+
     @property
     def observation_space(self):
         try:
-            return self.env.observation_space(self.env_params)
+            return self._env.observation_space(self.env_params)
         except:
             return gym.spaces.Box(
-                shape=self.env.observation_shape(self.env_params), low=0, high=1
+                shape=self._env.observation_shape(self.env_params), low=0, high=1
             )
 
     @property
     def action_space(self):
         try:
-            return self.env.action_space(self.env_params)
+            return self._env.action_space(self.env_params)
         except:
-            return gym.spaces.Discrete(self.env.num_actions(self.env_params))
+            return gym.spaces.Discrete(self._env.num_actions(self.env_params))
 
     @property
     def max_episode_steps(self):

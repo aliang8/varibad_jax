@@ -140,7 +140,7 @@ def get_config(config_string: str = None):
                 lam_ckpt=lam_ckpt,
                 latent_action_dim=16,
                 context_len=config.data.get_ref("context_len"),
-                mlp_layer_sizes=[128, 128],
+                mlp_layer_sizes=[128, 128, 128],
             )
         ),
         "vpt": ConfigDict(

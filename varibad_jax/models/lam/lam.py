@@ -162,7 +162,8 @@ class LatentActionDecoder(BaseModel):
                 input_action_dim=self.input_action_dim,
                 continuous_actions=self.is_continuous,
                 load_from_ckpt=True,
-                ckpt_dir=Path(self.config.lam_ckpt),
+                ckpt_file=Path(self.config.lam_ckpt) / "model_ckpts" / "ckpt_0100.pkl",
+                # ckpt_dir=Path(self.config.lam_ckpt),
             )
         else:
             self.lam = lam
@@ -257,7 +258,6 @@ class LatentActionDecoder(BaseModel):
                 action_pred.logits, gt_actions.astype(jnp.int32)
             )
             acc = action_pred.action == gt_actions
-            jax.debug.breakpoint()
             # breakpoint_if_cond(acc.mean())
 
         if self.lam_cfg.model.idm.use_transformer:
@@ -314,7 +314,8 @@ class LatentActionBaseAgent(BaseAgent):
             self.lam_cfg.model,
             key=lam_key,
             load_from_ckpt=True,
-            ckpt_dir=Path(self.config.lam_ckpt),
+            ckpt_file=Path(self.config.lam_ckpt) / "model_ckpts" / "ckpt_0100.pkl",
+            # ckpt_dir=Path(self.config.lam_ckpt),
             **extra_kwargs,
         )
 
