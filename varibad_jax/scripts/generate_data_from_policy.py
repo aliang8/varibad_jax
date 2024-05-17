@@ -149,6 +149,8 @@ def main(_):
 
     # TODO: this is a hack for now
 
+    observations = transitions.observation
+
     if config.env.env_name == "xland":
         info = {
             "agent_position": transitions.state.agent.position,
@@ -157,17 +159,14 @@ def main(_):
             "goal": transitions.state.goal_encoding,
             "rule": transitions.state.rule_encoding,
         }
-        # info = transitions.state
+
+        # agent_pos = transitions.state.agent.position
+        # agent_dir = transitions.state.agent.direction
+        # observations = jnp.concatenate([agent_pos, agent_dir[:, None]], axis=-1)
     else:
         info = {}
-    #     agent_pos = transitions.state.agent.position  # [B, T, 2]
-    #     agent_dir = transitions.state.agent.direction  # [B, T]
-    #     observations = jnp.concatenate([agent_pos, agent_dir[:, :, None]], axis=-1)
-    #     # observations = transitions.state.grid
 
-    # else:
-    observations = transitions.observation
-    next_observations = transitions.observation[:, 1:]
+    next_observations = observations[:, 1:]
 
     # append the last observation
     next_observations = jnp.concatenate(
@@ -185,8 +184,6 @@ def main(_):
         f"observations shape: {observations.shape}, rewards shape: {rewards.shape}, actions shape: {actions.shape}"
     )
 
-    # actions - [T, B, 1]
-    # observations - [T, B, ...]
     data = dict(
         observations=observations,
         next_observations=next_observations,

@@ -42,12 +42,17 @@ class DownsamplingBlock(hk.Module):
         )(x)
         # logging.info(f"conv shape: {x.shape}")
         if self.add_bn:
-            x = hk.BatchNorm(create_offset=True, create_scale=True, decay_rate=0.9)(
-                x, is_training
-            )
+            x = hk.BatchNorm(
+                create_offset=True,
+                create_scale=True,
+                decay_rate=0.9,
+                data_format="channels_first",
+            )(x, is_training)
+
         if self.add_residual:
             x = ResidualBlock(self.num_channels, **self.init_kwargs)(x)
             # logging.info(f"residual shape: {x.shape}")
+
         if self.add_max_pool:
             x = hk.MaxPool(
                 window_shape=(2, 2),
@@ -91,9 +96,13 @@ class UpsamplingBlock(hk.Module):
             **self.init_kwargs,
         )(x)
         if self.add_bn:
-            x = hk.BatchNorm(create_offset=True, create_scale=True, decay_rate=0.9)(
-                x, is_training
-            )
+            x = hk.BatchNorm(
+                create_offset=True,
+                create_scale=True,
+                decay_rate=0.9,
+                data_format="channels_first",
+            )(x, is_training)
+
         if self.add_residual:
             x = ResidualBlock(self.num_channels, **self.init_kwargs)(x)
         x = nn.gelu(x)
@@ -204,7 +213,13 @@ class ImageDecoder(hk.Module):
         self.num_output_channels = num_output_channels
         self.init_kwargs = dict(w_init=w_init, b_init=b_init)
 
-    def __call__(self, x, intermediates: List[jnp.ndarray] = None, is_training=True):
+    def __call__(
+        self,
+        x,
+        intermediates: List[jnp.ndarray] = None,
+        context: jnp.ndarray = None,
+        is_training=True,
+    ):
         logging.info(f"decoder is training: {is_training}")
 
         if x.ndim > 4:
@@ -225,14 +240,21 @@ class ImageDecoder(hk.Module):
             )(x)
             logging.info(f"decoder layer {i} shape: {x.shape}")
             if self.add_bn:
-                x = hk.BatchNorm(create_offset=True, create_scale=True, decay_rate=0.9)(
-                    x, is_training
-                )
+                x = hk.BatchNorm(
+                    create_offset=True,
+                    create_scale=True,
+                    decay_rate=0.9,
+                    data_format="channels_first",
+                )(x, is_training)
             x = nn.gelu(x)
 
         # last layer
         # this is just to get the right number of channels, doesn't change the spatial dimensions
         # also remember no activation after this
+        final_conv_inp = x
+        if context is not None:
+            final_conv_inp = jnp.concatenate([x, context], axis=1)
+
         x = hk.Conv2D(
             output_channels=self.num_output_channels,
             kernel_shape=1,
@@ -240,7 +262,7 @@ class ImageDecoder(hk.Module):
             padding="SAME",
             data_format="NCHW",
             **self.init_kwargs,
-        )(x)
+        )(final_conv_inp)
         logging.info(f"final conv layer shape: {x.shape}")
 
         if x.ndim > 4:

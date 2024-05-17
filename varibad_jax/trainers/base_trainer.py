@@ -70,8 +70,8 @@ class BaseTrainer:
             if self.config.use_wb:
                 self.wandb_run = wandb.init(
                     # set the wandb project where this run will be logged
-                    entity="glamor",
-                    project="varibad_jax",
+                    entity=config.wandb_entity,
+                    project=config.wandb_project,
                     name=self.config.exp_name,
                     notes=self.config.notes,
                     tags=self.config.tags,
@@ -84,6 +84,7 @@ class BaseTrainer:
         if self.config.env.env_name == "procgen":
             # not jax jit compatible
             self.envs = make_procgen_envs(**self.config.env)
+            self.config.env.num_envs = self.config.num_eval_rollouts
             self.eval_envs = make_procgen_envs(training=False, **self.config.env)
             self.obs_shape = self.envs.single_observation_space.shape
             self.continuous_actions = False

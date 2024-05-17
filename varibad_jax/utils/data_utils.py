@@ -142,6 +142,7 @@ class DataStager:
         chunk_len: int,
         obs_depth: int = 3,
         seq_len: int = 2,
+        num_transitions: int = -1,
     ) -> None:
 
         self.seq_len = seq_len
@@ -153,6 +154,12 @@ class DataStager:
 
         self.td = _create_tensordict(self.chunk_len * len(self.files), self.obs_depth)
         self.td_unfolded = _unfold_td(self.td, self.seq_len, 1)
+
+        if num_transitions != -1:
+            self.td_unfolded = self.td_unfolded[:num_transitions]
+
+        logging.info(f"num transitions: {len(self.td_unfolded['obs'])}")
+
         self._load()
 
     def _load(self):
@@ -211,14 +218,23 @@ def load_data(config: ConfigDict, rng: npr.RandomState, steps_per_rollout: int):
 
     if config.env.env_name == "procgen":
         train_data = DataStager(
-            files=list((data_dir / config.env.env_id / "train").glob("*.npz")),
+            files=list(
+                (
+                    data_dir / "procgen" / "expert_data" / config.env.env_id / "train"
+                ).glob("*.npz")
+            ),
             chunk_len=TRAIN_CHUNK_LEN,
-            seq_len=3,
+            seq_len=2 + config.data.context_len,
+            num_transitions=config.data.num_transitions,
         )
         eval_data = DataStager(
-            files=list((data_dir / config.env.env_id / "test").glob("*.npz")),
+            files=list(
+                (
+                    data_dir / "procgen" / "expert_data" / config.env.env_id / "test"
+                ).glob("*.npz")
+            ),
             chunk_len=TEST_CHUNK_LEN,
-            seq_len=3,
+            seq_len=2 + config.data.context_len,
         )
         return train_data, eval_data
 
@@ -407,8 +423,8 @@ class LAPODataset(Dataset):
             v = v.unfold(0, self.data_cfg.context_len + 2, 1).movedim(-1, 1)
             self.data[k] = v
 
-        # filter trajectories where the first observation is not done
-        mask = self.data["dones"][:, -2]
+        # filter trajectories where the any of the previous observations are done
+        mask = self.data["dones"][:, :-1].any(axis=-1)
         for k, v in self.data.items():
             self.data[k] = v[torch.where(~mask)]
 

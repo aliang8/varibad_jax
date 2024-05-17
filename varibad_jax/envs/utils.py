@@ -6,10 +6,11 @@ from functools import partial
 from typing import ClassVar, Optional
 
 import varibad_jax.envs
+from varibad_jax.envs.xland.wrappers import FullyObservableWrapper
 from varibad_jax.envs.gridworld_jax import GridNavi
 from varibad_jax.envs.wrappers import BAMDPWrapper, GymAutoResetWrapper, BasicWrapper
 
-# from procgen import ProcgenEnv
+from procgen import ProcgenEnv
 from xminigrid.benchmarks import Benchmark, load_benchmark, load_benchmark_from_path
 from xminigrid.rendering.text_render import print_ruleset
 
@@ -63,6 +64,7 @@ def make_envs(
     preloaded_benchmark: str = "",
     env_kwargs=dict(),
     training: bool = True,
+    full_observability: bool = True,
     **kwargs,
 ):
     if training == False:
@@ -91,6 +93,9 @@ def make_envs(
             ruleset = loaded_benchmark.get_ruleset(ruleset_id=ruleset_id)
             print_ruleset(ruleset)
             env_params = env_params.replace(ruleset=ruleset)
+
+        if full_observability:
+            env = FullyObservableWrapper(env)
 
     if training:
         env = GymAutoResetWrapper(env)

@@ -50,6 +50,14 @@ register_xminigrid(
     view_size=3,
 )
 
+register_xminigrid(
+    id="XLand-MiniGrid-TwoGoals-R1-7x7-3",
+    entry_point="varibad_jax.envs.xland.two_goals:TwoGoals",
+    grid_type="R1",
+    height=7,
+    width=7,
+    view_size=3,
+)
 
 register_xminigrid(
     id="XLand-MiniGrid-TwoGoals-R1-7x7-5",
@@ -57,6 +65,24 @@ register_xminigrid(
     grid_type="R1",
     height=7,
     width=7,
+    view_size=5,
+)
+
+register_xminigrid(
+    id="XLand-MiniGrid-TwoGoals-R1-9x9-3",
+    entry_point="varibad_jax.envs.xland.two_goals:TwoGoals",
+    grid_type="R1",
+    height=9,
+    width=9,
+    view_size=3,
+)
+
+register_xminigrid(
+    id="XLand-MiniGrid-TwoGoals-R1-9x9-5",
+    entry_point="varibad_jax.envs.xland.two_goals:TwoGoals",
+    grid_type="R1",
+    height=9,
+    width=9,
     view_size=5,
 )
 

@@ -27,7 +27,11 @@ class BCAgent(BaseAgent):
 
     @hk.transform_with_state
     def model(
-        self, states: jnp.ndarray, task: jnp.ndarray, is_training: bool, **kwargs
+        self,
+        states: jnp.ndarray,
+        task: jnp.ndarray = None,
+        is_training: bool = True,
+        **kwargs,
     ):
         # predicts the latent action
         policy = ActorCritic(

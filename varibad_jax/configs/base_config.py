@@ -47,6 +47,7 @@ def get_config(config_string: str = None):
                 image_obs=True,
                 symbolic_obs=True,
                 task_dim=5,  # TODO: tbd fix this
+                full_observability=False,
             )
         ),
         "procgen": ConfigDict(
@@ -57,6 +58,7 @@ def get_config(config_string: str = None):
                 image_obs=True,
                 gamma=0.999,
                 num_episodes_per_rollout=1,
+                task_dim=1,
             )
         ),
     }
@@ -101,6 +103,8 @@ def get_config(config_string: str = None):
     config.group_name = ""
     config.ray_logdir = "ray_results"
     config.overwrite = True
+    config.wandb_entity = "glamor"
+    config.wandb_project = "varibad_jax"
 
     # for rollout visualization
     config.fps = 5

@@ -40,7 +40,7 @@ psh = {
         "num_processes": "np",
         "steps_per_rollout": "steps",
     },
-    "data": {"num_trajs": "nt"},
+    "data": {"num_trajs": "nt", "context_len": "cl", "num_transitions": "nt"},
     "vae": {
         "lr": "vlr",
         "kl_weight": "klw",

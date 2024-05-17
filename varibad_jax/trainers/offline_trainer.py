@@ -18,7 +18,7 @@ import einops
 import tqdm
 from functools import partial
 from collections import defaultdict as dd
-from varibad_jax.utils.rollout import run_rollouts
+from varibad_jax.utils.rollout import run_rollouts, run_rollouts_procgen
 
 from varibad_jax.trainers.base_trainer import BaseTrainer
 import varibad_jax.utils.general_utils as gutl
@@ -67,16 +67,17 @@ class OfflineTrainer(BaseTrainer):
         #     self.train_dataset = jtu.tree_map(fn, self.train_dataset)
         #     self.eval_dataset = jtu.tree_map(fn, self.eval_dataset)
 
-        # import ipdb
-
-        # ipdb.set_trace()
-
         if self.config.env.env_name == "procgen":
-            self.train_dataloader = self.train_dataset.get_iter(self.config.batch_size)
-            self.eval_dataloader = self.eval_dataset.get_iter(self.config.batch_size)
+            self.train_dataloader = self.train_dataset.get_iter(
+                self.config.data.batch_size
+            )
+            self.eval_dataloader = self.eval_dataset.get_iter(
+                self.config.data.batch_size
+            )
             # number of batches ot iterate over each epoch of training
             self.num_train_batches = 50
             self.num_eval_batches = 2
+            obs_shape = (64, 64, 3)
         else:
             self.train_dataloader = create_data_loader(
                 self.train_dataset, data_cfg=config.data
@@ -93,7 +94,7 @@ class OfflineTrainer(BaseTrainer):
 
             obs_shape = self.train_dataset["observations"].shape[1:]
 
-        # test dataloader
+        # print batch item shapes
         batch = next(iter(self.train_dataloader))
 
         fn = lambda x, y: logging.info(f"{jax.tree_util.keystr(x)}: {y.shape}")
@@ -176,6 +177,8 @@ class OfflineTrainer(BaseTrainer):
             # iterate over batches of data
             start_time = time.time()
             epoch_metrics = dd(list)
+            # for _ in range(self.num_train_batches):
+            #     batch = next(self.train_dataloader)
             for batch in self.train_dataloader:
                 if "info" in batch:
                     del batch["info"]
@@ -212,6 +215,8 @@ class OfflineTrainer(BaseTrainer):
 
         # run on eval batches
         if self.eval_dataloader is not None:
+            # for _ in range(self.num_eval_batches):
+            #     batch = next(self.eval_dataloader)
             for batch in self.eval_dataloader:
                 if "info" in batch:
                     del batch["info"]
@@ -233,16 +238,25 @@ class OfflineTrainer(BaseTrainer):
 
         # run rollouts
         if hasattr(self.model, "get_action") and self.config.run_eval_rollouts:
-            rollout_metrics, *_ = run_rollouts(
-                rng=next(self.rng_seq),
-                agent=self.model,
-                env=self.eval_envs,
-                config=self.config,
-                action_dim=self.model.input_action_dim,
-                steps_per_rollout=self.steps_per_rollout,
-                wandb_run=self.wandb_run,
-                prompts=self.eval_prompts,
-            )
+            if self.config.env.env_name == "procgen":
+                rollout_metrics, *_ = run_rollouts_procgen(
+                    rng=next(self.rng_seq),
+                    agent=self.model,
+                    env=self.eval_envs,
+                    config=self.config,
+                    wandb_run=self.wandb_run,
+                )
+            else:
+                rollout_metrics, *_ = run_rollouts(
+                    rng=next(self.rng_seq),
+                    agent=self.model,
+                    env=self.eval_envs,
+                    config=self.config,
+                    action_dim=self.model.input_action_dim,
+                    steps_per_rollout=self.steps_per_rollout,
+                    wandb_run=self.wandb_run,
+                    prompts=self.eval_prompts,
+                )
             eval_metrics.update(rollout_metrics)
 
         # save model

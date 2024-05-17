@@ -99,6 +99,9 @@ class LatentFDM(hk.Module):
             action_expand = einops.repeat(actions, "b dl 1 1 -> b dl h w", h=h, w=w)
 
             x = jnp.concatenate([context, action_expand], axis=1)
+            # x = context
+
+            # jax.debug.breakpoint()
             logging.info(f"shape after concat: {x.shape}")
 
             _, intermediates = self.state_embed(
@@ -107,8 +110,12 @@ class LatentFDM(hk.Module):
             embeddings = intermediates[-1]
             # inject actions into the middle of the u-net (this is also done in LAPO)
             intermediates[-1] = actions
+
             next_state_pred = self.state_decoder(
-                embeddings, intermediates=intermediates, is_training=is_training
+                embeddings,
+                intermediates=intermediates,
+                context=context,
+                is_training=is_training,
             )
 
             if self.use_transformer_idm:
@@ -128,6 +135,7 @@ class LatentFDM(hk.Module):
             # predict next state
             next_state_pred = self.state_decoder(model_input)
 
+        # next_state_pred = jnp.tanh(next_state_pred) / 2
         return next_state_pred
 
 

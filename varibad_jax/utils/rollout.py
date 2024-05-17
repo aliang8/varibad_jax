@@ -28,6 +28,62 @@ class RolloutStats:
     success: jnp.ndarray
 
 
+@chex.dataclass
+class Transition:
+    observation: jnp.ndarray
+    action: jnp.ndarray
+    reward: jnp.ndarray
+    done: jnp.ndarray
+
+
+def run_rollouts_procgen(rng, agent, config: ConfigDict, env, wandb_run=None):
+    logging.info("Rollout procgen...")
+    obs = env.reset()
+
+    rng, policy_rng = jax.random.split(rng, 2)
+
+    dones = jnp.zeros((config.num_eval_rollouts,))
+    ep_returns = jnp.zeros((config.num_eval_rollouts,))
+    ep_lengths = jnp.zeros((config.num_eval_rollouts,))
+    transitions = []
+
+    rollout_time = time.time()
+
+    while not jnp.all(dones):
+        obs = obs.astype(jnp.float32)
+        (policy_output, _), _ = agent.get_action(
+            policy_rng, env_state=obs, is_training=False
+        )
+        action = policy_output.action
+        obs, reward, done, _ = env.step(action)
+
+        transition = Transition(
+            observation=obs,
+            action=action,
+            reward=reward,
+            done=done,
+        )
+
+        transitions.append(transition)
+
+        for i in range(config.num_eval_rollouts):
+            if not done[i]:
+                ep_returns = ep_returns.at[i].set(ep_returns[i] + reward[i])
+                ep_lengths = ep_lengths.at[i].set(ep_lengths[i] + 1)
+
+        # if wandb_run is not None:
+        #     wandb_run.log({"procgen_rollouts": wandb.Video(np.array(obs), fps=5)})
+
+    rollout_time = time.time() - rollout_time
+
+    eval_metrics = {
+        "episode_return": jnp.mean(ep_returns),
+        "avg_length": jnp.mean(ep_lengths),
+        "rollout_time": rollout_time / config.num_eval_rollouts,
+    }
+    return eval_metrics, transitions
+
+
 def run_rollouts(
     rng: jax.random.PRNGKey,
     agent,

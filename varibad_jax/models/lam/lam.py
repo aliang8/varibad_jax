@@ -215,6 +215,8 @@ class LatentActionDecoder(BaseModel):
             is_training=False,
         )
 
+        # jax.debug.breakpoint()
+
         obs_pred = model_output.next_obs_pred
         if self.lam_cfg.model.idm.image_obs:
             obs_pred = einops.rearrange(obs_pred, "b c h w -> b h w c")
@@ -246,12 +248,17 @@ class LatentActionDecoder(BaseModel):
             acc = 0.0
             # cm_plot = None
         else:
+            # logging.info(
+            #     f"action logits: {action_pred.logits.shape}, gt_actions: {gt_actions.shape}"
+            # )
+            if gt_actions.shape[-1] == 1:
+                gt_actions = gt_actions.squeeze(axis=-1)
             loss = optax.softmax_cross_entropy_with_integer_labels(
-                action_pred.logits, gt_actions.squeeze().astype(jnp.int32)
+                action_pred.logits, gt_actions.astype(jnp.int32)
             )
-            acc = action_pred.action == gt_actions.squeeze()
+            acc = action_pred.action == gt_actions
+            jax.debug.breakpoint()
             # breakpoint_if_cond(acc.mean())
-            # jax.debug.breakpoint()
 
         if self.lam_cfg.model.idm.use_transformer:
             # jax.debug.breakpoint()
