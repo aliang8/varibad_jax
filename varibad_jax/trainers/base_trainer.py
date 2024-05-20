@@ -92,11 +92,14 @@ class BaseTrainer:
             self.input_action_dim = 1
         else:
             self.envs, self.env_params = make_envs(**self.config.env)
-            self.eval_envs, _ = make_envs(training=False, **self.config.env)
+            self.eval_envs, self.eval_env_params = make_envs(
+                training=False, **self.config.env
+            )
             logging.info(f"env params: {self.env_params}")
+            logging.info(f"eval env params: {self.eval_env_params}")
 
-            self.jit_reset = jax.vmap(jax.jit(self.envs.reset), in_axes=(None, 0))
-            self.jit_step = jax.vmap(jax.jit(self.envs.step), in_axes=(None, 0, 0))
+            # self.jit_reset = jax.vmap(jax.jit(self.envs.reset), in_axes=(None, 0))
+            # self.jit_step = jax.vmap(jax.jit(self.envs.step), in_axes=(None, 0, 0))
 
             self.obs_shape = self.envs.observation_space.shape
             self.continuous_actions = not isinstance(

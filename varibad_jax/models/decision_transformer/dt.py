@@ -123,7 +123,8 @@ class DecisionTransformerAgent(BaseAgent):
             loss = loss.sum() / batch.mask.sum()
 
             acc = policy_output.action == actions.squeeze(axis=-1)
-            acc = jnp.mean(acc)
+            acc *= batch.mask
+            acc = acc.sum() / batch.mask.sum()
 
         metrics = {"bc_loss": loss, "entropy": entropy, "decoded_acc": acc}
 

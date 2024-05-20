@@ -96,19 +96,46 @@ register_xminigrid(
 
 
 register_xminigrid(
-    id="MiniGrid-GoToDoor-R1-7x7",
+    id="MiniGrid-GoToDoor-R1-7x7-3",
     entry_point="varibad_jax.envs.xland.go_to_door:GoToDoor",
     height=7,
     width=7,
-    view_size=5,
+    view_size=3,
 )
 
 register_xminigrid(
-    id="MiniGrid-GoToDoor-R1-9x9",
+    id="MiniGrid-GoToDoor-R1-9x9-3",
     entry_point="varibad_jax.envs.xland.go_to_door:GoToDoor",
     height=9,
     width=9,
-    view_size=5,
+    view_size=3,
+)
+
+register_xminigrid(
+    id="MiniGrid-GoToDoorRandomColors-R1-9x9-3",
+    entry_point="varibad_jax.envs.xland.go_to_door:GoToDoor",
+    height=9,
+    width=9,
+    view_size=3,
+    random_color=True,
+)
+
+register_xminigrid(
+    id="MiniGrid-GoToDoorDiffColor-R1-9x9-3",
+    entry_point="varibad_jax.envs.xland.go_to_door:GoToDoor",
+    height=9,
+    width=9,
+    view_size=3,
+    new_color=True,
+)
+
+register_xminigrid(
+    id="MiniGrid-GoToDoorShiftDoors-R1-9x9-3",
+    entry_point="varibad_jax.envs.xland.go_to_door:GoToDoor",
+    height=9,
+    width=9,
+    view_size=3,
+    shift_doors=True,
 )
 
 

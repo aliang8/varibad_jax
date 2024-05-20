@@ -11,14 +11,16 @@ def get_config(config_string: str = None):
     config.data.dataset_name = "minigrid_easy"
     config.data.data_type = "trajectories"
     config.data.num_trajs = 1000
+    config.data.num_trajs_per_batch = 2
+    config.data.resample_prompts_every_eval = True
 
     config.env.env_id = "XLand-MiniGrid-TwoGoals-R1-7x7-3"
     config.env.num_episodes_per_rollout = 1
     config.env.full_observability = True
 
     config.model.use_lr_scheduler = False
-    config.model.policy.task_conditioning = True
-    config.model.policy.demo_conditioning = False
+    config.model.policy.task_conditioning = False
+    config.model.policy.demo_conditioning = True
     config.embedding_dim = 128
 
     config.num_rollouts_collect = 10_000

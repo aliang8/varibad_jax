@@ -1,40 +1,38 @@
-from varibad_jax.configs.offline_config import get_config as get_offline_config
+from varibad_jax.configs.xland.minigrid_gotodoor.base import (
+    get_config as get_base_config,
+)
 
 
 def get_config(config_string: str = None):
-    config_string = "dt_lam_agent-xland-5x5"
-    config = get_offline_config(config_string)
+    config_string = "dt_lam_agent-xland-9x9"
+    config = get_base_config(config_string)
 
     config.exp_name = "dt_lam_agent"
-    config.visualize_rollouts = True
 
-    config.data.dataset_name = "minigrid_gotodoor"
     config.data.data_type = "trajectories"
     config.data.context_len = 0
-    config.data.num_trajs = -1
-    config.data.train_frac = 0.95
+    config.data.num_trajs = 1000
+    config.data.train_frac = 1.0
     config.data.num_trajs_per_batch = 2  # ICL hyperparameter
-
-    config.env.env_id = "MiniGrid-GoToDoor-R1-7x7"
-    config.env.ruleset_id = -1
-    config.env.num_episodes_per_rollout = 1
-    config.env.steps_per_rollout = 30
+    config.data.resample_prompts_every_eval = True
 
     config.model.use_lr_scheduler = False
     config.model.latent_action_dim = 64
-    config.model.lam_ckpt = "/scr/aliang80/varibad_jax/varibad_jax/results/lam/nt--1/eid-XLand-MiniGridCustom-R1-7x7/en-xland/steps-20/b-0.05/code_d-64/n_codes-60"
-    config.model.latent_action_decoder_ckpt = "/scr/aliang80/varibad_jax/varibad_jax/results/action_decoder/nt-1000/eid-XLand-MiniGridCustom-R1-7x7/en-xland/steps-20/"
+    config.model.lam_ckpt = "/scr/aliang80/varibad_jax/varibad_jax/results/lam/nt--1/eid-MiniGrid-GoToDoorRandomColors-R1-9x9-3/en-xland/b-0.05/code_d-64/n_codes-60"
+    config.model.latent_action_decoder_ckpt = "/scr/aliang80/varibad_jax/varibad_jax/results/action_decoder/nt-1000/eid-MiniGrid-GoToDoorRandomColors-R1-9x9-3/en-xland/"
 
-    config.embedding_dim = 64
+    config.embedding_dim = 128
+    config.data.batch_size = 8
 
-    config.num_rollouts_collect = 10_000
-    config.eval_interval = 10
-    config.num_epochs = 200
+    config.num_evals = 40
+    config.num_epochs = 2000
     config.run_eval_rollouts = True
+    # config.save_key = "success"
 
     config.keys_to_include = {
-        "env": {"env_name": 1, "env_id": 1, "steps_per_rollout": 1},
-        "data": {"num_trajs": 1},
+        "seed": 1,
+        "env": {"env_name": 1, "env_id": 1, "eval_env_id": 1},
+        "data": {"num_trajs": 1, "num_trajs_per_batch": 1},
     }
 
     return config

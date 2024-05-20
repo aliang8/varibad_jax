@@ -36,11 +36,17 @@ psh = {
     "env": {
         "env_name": "en",
         "env_id": "eid",
+        "eval_env_id": "eval_id",
         "num_frames": "nf",
         "num_processes": "np",
         "steps_per_rollout": "steps",
     },
-    "data": {"num_trajs": "nt", "context_len": "cl", "num_transitions": "nt"},
+    "data": {
+        "num_trajs": "nt",
+        "context_len": "cl",
+        "num_transitions": "nt",
+        "num_trajs_per_batch": "tpb",
+    },
     "vae": {
         "lr": "vlr",
         "kl_weight": "klw",
@@ -67,10 +73,11 @@ psh = {
 
 # run with ray tune
 param_space = {
-    # "seed": tune.grid_search([1, 2]),
-    # "data": {"num_trajs": tune.grid_search([5, 100, 1000])},
+    "seed": tune.grid_search([0, 1, 2]),
     "data": {"num_trajs": tune.grid_search([100, 500, 1000])},
+    # "data": {"num_trajs_per_batch": tune.grid_search([2, 3, 4])},
     # "model": {"entropy_coeff": tune.grid_search([0.02, 0.05, 0.1])},
+    # "model": {"idm": {"num_codes": tune.grid_search([6, 60, 100])}},
 }
 
 

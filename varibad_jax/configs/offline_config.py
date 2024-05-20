@@ -82,6 +82,7 @@ def get_config(config_string: str = None):
             mlp_layer_sizes=[128, 128],
             gaussian_policy=False,
             use_rnn_policy=False,
+            demo_conditioning=False,
         )
     )
 

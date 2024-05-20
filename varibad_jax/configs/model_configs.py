@@ -4,7 +4,7 @@ from ml_collections import config_dict
 transformer_config = config_dict.ConfigDict(
     dict(
         name="transformer",
-        hidden_dim=64,
+        hidden_dim=128,
         num_heads=8,
         num_layers=2,
         attn_size=32,
@@ -17,18 +17,6 @@ transformer_config = config_dict.ConfigDict(
 
 base = 16
 image_encoder_configs = {
-    "9x9": config_dict.ConfigDict(
-        # assumes a 9x9x2 observation
-        # order is [output_channels, kernel_size, stride, padding]
-        dict(
-            name="image_encoder",
-            arch=[
-                [16, 3, 2, "VALID"],
-                [32, 3, 2, "VALID"],
-                [32, 3, 2, "VALID"],
-            ],
-        )
-    ),
     "3x3": config_dict.ConfigDict(
         dict(
             name="image_encoder",
@@ -133,6 +121,20 @@ image_decoder_configs = {
             arch=[
                 [64, 2, 1, "VALID"],
                 [32, 2, 1, "VALID"],
+                [32, 3, 1, "VALID"],
+                [16, 3, 1, "VALID"],
+            ],
+            add_bn=True,
+            add_residual=True,
+            num_output_channels=3,
+        )
+    ),
+    "9x9": config_dict.ConfigDict(
+        dict(
+            name="image_encoder",
+            arch=[
+                [64, 3, 1, "VALID"],
+                [32, 3, 1, "VALID"],
                 [32, 3, 1, "VALID"],
                 [16, 3, 1, "VALID"],
             ],

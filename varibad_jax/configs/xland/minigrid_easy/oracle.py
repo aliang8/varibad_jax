@@ -10,8 +10,6 @@ def get_config(config_string: str = None):
     config.visualize_rollouts = True
 
     config.env.env_id = "XLand-MiniGrid-TwoGoals-R1-9x9-3"
-    config.env.num_episodes_per_rollout = 1
-    config.env.steps_per_rollout = 30
     config.num_frames = 20_000_000
     config.env.full_observability = True
 

@@ -188,7 +188,8 @@ def run_rollouts(
 
             # generate the images
             videos = []
-            for rollout_indx in range(config.num_eval_rollouts_render):
+            num_render = min(config.num_eval_rollouts_render, len(trajectories))
+            for rollout_indx in range(num_render):
                 images = []
                 for step, timestep in enumerate(trajectories[rollout_indx]):
                     img = env.render(env.env_params, timestep)
@@ -247,10 +248,6 @@ def eval_rollout_dt(
 
         prompt = subsample_data(prompts, episode)
 
-        # import ipdb
-
-        # ipdb.set_trace()
-
         timestep = env_reset(config, reset_rng, env, jit_reset, prompt=prompt)
         timesteps = [timestep]
         traj_actions = []
@@ -271,7 +268,6 @@ def eval_rollout_dt(
         rewards = np.zeros((1, max_traj_len, 1))
         mask = np.zeros((1, max_traj_len))
         start_index = 0
-        traj_index = None
 
         if config.model.policy.task_conditioning:
             if config.env.env_name == "gridworld":
@@ -287,7 +283,7 @@ def eval_rollout_dt(
         ):
             # logging.info("adding prompt info before trajectory")
             # prepend prompt into the input tokens
-            prompt_steps = prompt["mask"].sum()
+            prompt_steps = int(prompt["mask"].sum())
 
             # filter prompt for steps
             filtered_prompt = jtu.tree_map(lambda x: x[:prompt_steps], prompt)
@@ -307,8 +303,8 @@ def eval_rollout_dt(
 
             rewards[:, :prompt_steps] = filtered_prompt["rewards"].reshape(1, -1, 1)
             mask[:, :prompt_steps] = 1.0
-            traj_index = np.ones((1, max_traj_len))
-            traj_index[:, :prompt_steps] = 1.0
+            traj_index = np.zeros((1, max_traj_len))
+            traj_index[:, :prompt_steps] = filtered_prompt["traj_index"][:prompt_steps]
             traj_index = jnp.array(traj_index)
 
             start_index = prompt_steps
@@ -336,8 +332,11 @@ def eval_rollout_dt(
             observation = observation.astype(jnp.float32)
             observations = observations.at[0, stats.length].set(observation)
             mask = mask.at[0, stats.length].set(1.0)
+
             if config.model.policy.demo_conditioning:
-                traj_index = traj_index.at[0, stats.length].set(2.0)
+                traj_index = traj_index.at[0, stats.length].set(
+                    config.data.num_trajs_per_batch - 1
+                )
 
             policy_output, _ = jit_apply(
                 policy_rng,
@@ -413,9 +412,9 @@ def env_reset(config: ConfigDict, rng, env, reset_fn: Callable, prompt: dict = N
         elif config.env.env_name == "xland":
             # reset the state of the environment to be the same as the prompt
             # agent position and dir will be randomized still
-            agent_position = prompt["info"]["agent_position"][0]
-            agent_direction = prompt["info"]["agent_direction"][0]
-            grid = prompt["info"]["grid"][0]
+            agent_position = prompt["info"]["agent_position"][0].astype(jnp.int32)
+            agent_direction = prompt["info"]["agent_direction"][0].astype(jnp.int32)
+            grid = prompt["info"]["grid"][0].astype(jnp.uint8)
 
             # # find out where the goal is
             # goal_tile = TILES_REGISTRY[Tiles.BALL, Colors.YELLOW]
@@ -427,8 +426,8 @@ def env_reset(config: ConfigDict, rng, env, reset_fn: Callable, prompt: dict = N
             # new_tile = TILES_REGISTRY[Tiles.BALL, Colors.RED]
             # jax.debug.breakpoint()
 
-            goal_encoding = prompt["info"]["goal"][0]
-            rule_encoding = prompt["info"]["rule"][0]
+            goal_encoding = prompt["info"]["goal"][0].astype(jnp.uint8)
+            rule_encoding = prompt["info"]["rule"][0].astype(jnp.uint8)
             agent_state = AgentState(position=agent_position, direction=agent_direction)
             state = State(
                 key=rng,
@@ -439,8 +438,12 @@ def env_reset(config: ConfigDict, rng, env, reset_fn: Callable, prompt: dict = N
                 rule_encoding=rule_encoding,
                 carry=EnvCarry(),
             )
+
+        # import ipdb
+
+        # ipdb.set_trace()
         timestep = reset_fn(
-            env.env_params, reset_rng, state=state, randomize_agent=False
+            env.env_params, reset_rng, state=state, randomize_agent=True
         )
     else:
         timestep = reset_fn(env.env_params, reset_rng)

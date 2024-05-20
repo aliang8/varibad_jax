@@ -10,7 +10,7 @@ class FullyObservableWrapper(Wrapper):
         grid_shape = grid.shape
 
         # add extra dimension for the agent's dir
-        full_obs = jnp.zeros((grid_shape[0], grid_shape[1], 3))
+        full_obs = jnp.zeros((grid_shape[0], grid_shape[1], 3), dtype=jnp.uint8)
         full_obs = full_obs.at[:, :, :-1].set(grid)
 
         agent_pos = timestep.state.agent.position

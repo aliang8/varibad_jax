@@ -69,6 +69,7 @@ def make_envs(
 ):
     if training == False:
         seed += 1000
+        env_id = kwargs.get("eval_env_id", env_id)
 
     # setup environment
     if env_name == "gridworld":

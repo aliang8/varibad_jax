@@ -48,6 +48,8 @@ def main(_):
     config_p = ConfigDict(config_p)
     print(config_p)
 
+    # config_p.env.env_id = "MiniGrid-GoToDoorDiffColor-R1-9x9-3"
+    config_p.env.ruleset_id = -1
     envs, env_params = make_envs(**config_p.env, training=False)
     continuous_actions = not isinstance(envs.action_space, gym.spaces.Discrete)
 

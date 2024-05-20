@@ -1,4 +1,5 @@
 from absl import logging
+import copy
 import jax
 import chex
 import time
@@ -138,7 +139,9 @@ class OfflineTrainer(BaseTrainer):
 
     def sample_prompts(self):
         eval_prompts = None
-        if self.config.data.holdout_tasks or self.config.model.name == "dt_lam_agent":
+        if self.config.data.holdout_tasks or (
+            "policy" in self.config.model and self.config.model.policy.demo_conditioning
+        ):
             if (
                 len(self.eval_dataset["observations"]) == 0
             ):  # use full training set if no eval
@@ -149,16 +152,19 @@ class OfflineTrainer(BaseTrainer):
                 num_trajs = self.eval_dataset["observations"].shape[0]
                 sample_dataset = self.eval_dataset
 
-            if num_trajs < self.config.num_eval_rollouts:
-                replace = True
-            else:
-                replace = False
-
-            prompt_idxs = npr.choice(
-                num_trajs, size=self.config.num_eval_rollouts, replace=replace
-            )
-            eval_prompts = subsample_data(sample_dataset, prompt_idxs)
-
+            # if num_trajs < self.config.num_eval_rollouts:
+            #     replace = True
+            # else:
+            #     replace = False
+            data_cfg = copy.deepcopy(self.config.data)
+            data_cfg.num_trajs_per_batch -= 1
+            data_cfg.batch_size = self.config.num_eval_rollouts
+            loader = create_data_loader(sample_dataset, data_cfg)
+            # prompt_idxs = npr.choice(
+            #     num_trajs, size=self.config.num_eval_rollouts, replace=replace
+            # )
+            # eval_prompts = subsample_data(sample_dataset, prompt_idxs)
+            eval_prompts = next(iter(loader))
         return eval_prompts
 
     def train(self):
