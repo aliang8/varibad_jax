@@ -31,6 +31,7 @@ def get_config(config_string: str = None):
             burstiness=0.5,
             holdout_tasks=False,
             resample_prompts_every_eval=False,
+            add_labelling=False,
         )
     )
 
@@ -69,7 +70,7 @@ def get_config(config_string: str = None):
             use_rtg=False,
             image_obs=config.env.get_ref("image_obs"),
             task_conditioning=False,
-            demo_conditioning=True,
+            demo_conditioning=False,
         )
     )
     bc_config = ConfigDict(
@@ -132,6 +133,8 @@ def get_config(config_string: str = None):
                 ),
                 beta_loss_weight=1.0,
                 context_len=config.data.get_ref("context_len"),
+                add_labelling=config.data.get_ref("add_labelling"),
+                mlp_layer_sizes=[128, 128],
             )
         ),
         "latent_action_decoder": ConfigDict(
@@ -170,6 +173,15 @@ def get_config(config_string: str = None):
                 name="vpt_bc",
                 image_obs=config.env.get_ref("image_obs"),
                 policy=bc_config,
+            )
+        ),
+        "vpt_icl_agent": ConfigDict(
+            dict(
+                name="vpt_icl_agent",
+                policy=dt_config,
+                image_obs=config.env.get_ref("image_obs"),
+                image_encoder_config=image_encoder_config,
+                vpt_idm_ckpt="",
             )
         ),
         "lam_agent": ConfigDict(

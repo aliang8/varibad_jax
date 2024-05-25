@@ -46,6 +46,7 @@ psh = {
         "context_len": "cl",
         "num_transitions": "nt",
         "num_trajs_per_batch": "tpb",
+        "add_labelling": "al",
     },
     "vae": {
         "lr": "vlr",
@@ -66,15 +67,25 @@ psh = {
         "pass_latent_to_policy": "pltp",
         "pass_task_to_policy": "pttp",
         "name": "pn",
+        "idm_nt": "idm_nt",
         "entropy_coeff": "ent_c",
-        "idm": {"beta": "b", "num_codes": "n_codes", "code_dim": "code_d"},
+        "idm": {
+            "beta": "b",
+            "num_codes": "n_codes",
+            "code_dim": "code_d",
+            "use_state_diff": "usd",
+        },
     },
 }
 
 # run with ray tune
 param_space = {
+    "model": {"idm_nt": tune.grid_search([10, 20])},
+    # "data": {"num_trajs": tune.grid_search([10, 15, 20, 50, 75])},
+    "data": {"num_trajs": tune.grid_search([50, 100, 500, 1000])},
+    # "data": {"num_trajs": tune.grid_search([10, 20, 50, 100, 500, 1000])},
     "seed": tune.grid_search([0, 1, 2]),
-    "data": {"num_trajs": tune.grid_search([100, 500, 1000])},
+    # "data": {"num_trajs": tune.grid_search([100, 500, 1000, 5000])},
     # "data": {"num_trajs_per_batch": tune.grid_search([2, 3, 4])},
     # "model": {"entropy_coeff": tune.grid_search([0.02, 0.05, 0.1])},
     # "model": {"idm": {"num_codes": tune.grid_search([6, 60, 100])}},

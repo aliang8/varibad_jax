@@ -20,6 +20,7 @@ def get_config(config_string: str = None):
     config.num_frames = 20_000_000
     config.num_evals = 40
     config.env.full_observability = True
+    config.env.eval_env_ids = ["MiniGrid-GoToDoorRandomColors-R1-9x9-3"]
 
     config.model.entropy_coeff = 0.05
     config.model.policy.pass_task_to_policy = True

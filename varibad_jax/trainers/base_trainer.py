@@ -1,4 +1,5 @@
 from absl import app, logging
+import copy
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -57,11 +58,13 @@ class BaseTrainer:
                 logging.info(f"overwriting existing experiment dir {self.exp_dir}")
                 shutil.rmtree(self.exp_dir, ignore_errors=True)
 
+            self.log_dir = self.exp_dir / "logs"
             self.ckpt_dir = self.exp_dir / "model_ckpts"
             self.video_dir = self.exp_dir / "videos"
             self.exp_dir.mkdir(parents=True, exist_ok=True)
             self.ckpt_dir.mkdir(parents=True, exist_ok=True)
             self.video_dir.mkdir(parents=True, exist_ok=True)
+            self.log_dir.mkdir(parents=True, exist_ok=True)
 
             # save config to json file readable
             with open(self.exp_dir / "config.json", "w") as f:
@@ -81,6 +84,7 @@ class BaseTrainer:
                 )
 
         # create env
+        logging.info("creating environments...")
         if self.config.env.env_name == "procgen":
             # not jax jit compatible
             self.envs = make_procgen_envs(**self.config.env)
@@ -88,18 +92,23 @@ class BaseTrainer:
             self.eval_envs = make_procgen_envs(training=False, **self.config.env)
             self.obs_shape = self.envs.single_observation_space.shape
             self.continuous_actions = False
-            self.action_dim = self.envs.single_action_space.n
             self.input_action_dim = 1
+            self.action_dim = self.envs.single_action_space.n
         else:
             self.envs, self.env_params = make_envs(**self.config.env)
-            self.eval_envs, self.eval_env_params = make_envs(
-                training=False, **self.config.env
-            )
-            logging.info(f"env params: {self.env_params}")
-            logging.info(f"eval env params: {self.eval_env_params}")
+            logging.info(f"env [{self.config.env.env_id}] params: {self.env_params}")
 
-            # self.jit_reset = jax.vmap(jax.jit(self.envs.reset), in_axes=(None, 0))
-            # self.jit_step = jax.vmap(jax.jit(self.envs.step), in_axes=(None, 0, 0))
+            # create envs for each scenario we want to evaluate on
+            self.eval_envs = {}
+            for env_id in self.config.env.eval_env_ids:
+                env_cfg = copy.deepcopy(self.config.env)
+                env_cfg.env_id = env_id
+                eval_envs, eval_env_params = make_envs(training=False, **env_cfg)
+                self.eval_envs[env_id] = (eval_envs, eval_env_params)
+                logging.info(f"eval env [{env_id}] params: {eval_env_params}")
+
+            self.jit_reset = jax.vmap(jax.jit(self.envs.reset), in_axes=(None, 0))
+            self.jit_step = jax.vmap(jax.jit(self.envs.step), in_axes=(None, 0, 0))
 
             self.obs_shape = self.envs.observation_space.shape
             self.continuous_actions = not isinstance(
@@ -172,6 +181,6 @@ class BaseTrainer:
 
         # also save model to ckpt everytime we run evaluation
         ckpt_file = Path(self.ckpt_dir) / f"ckpt_{iter:04d}.pkl"
-        logging.debug(f"saving checkpoint to {ckpt_file}")
+        logging.info(f"saving checkpoint to {ckpt_file}")
         with open(ckpt_file, "wb") as f:
             pickle.dump(ckpt_dict, f)

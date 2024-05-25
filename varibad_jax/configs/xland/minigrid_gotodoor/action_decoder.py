@@ -11,15 +11,14 @@ def get_config(config_string: str = None):
 
     config.data.data_type = "lapo"
     config.data.context_len = 0
-    config.data.num_trajs = 2000
-    config.data.train_frac = 0.9
+    config.data.num_trajs = 20
 
     config.model.use_lr_scheduler = False
     config.model.latent_action_dim = 64
-    config.model.lam_ckpt = "/scr/aliang80/varibad_jax/varibad_jax/results/lam/nt--1/eid-XLand-MiniGridCustom-R1-7x7/en-xland/steps-20/b-0.05/code_d-64/n_codes-60"
+    config.model.lam_ckpt = "/scr/aliang80/varibad_jax/varibad_jax/results/lam/nt-9000/eid-MiniGrid-GoToDoorRandomColors-R1-9x9-3/en-xland/b-0.05/code_d-64/n_codes-60/usd-True"
 
     config.num_evals = 20
-    config.num_epochs = 500
+    config.num_epochs = 2000
     config.save_key = "acc"
 
     config.keys_to_include = {

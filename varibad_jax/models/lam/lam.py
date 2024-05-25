@@ -1,6 +1,6 @@
 from absl import logging
 from typing import Tuple
-
+import re
 import jax
 import json
 import chex
@@ -71,6 +71,21 @@ class LatentActionModel(BaseModel):
             latent_actions=idm_output["latent_actions"],
         )
 
+    @hk.transform_with_state
+    def predict_action(self, latent_actions, is_training):
+        x = hk.nets.MLP(
+            self.config.mlp_layer_sizes,
+            activation=nn.gelu,
+            activate_final=True,
+            **self.init_kwargs,
+        )(latent_actions)
+        action_output = ActionHead(
+            gaussian_policy=False,
+            is_continuous=self.is_continuous,
+            action_dim=self.action_dim,
+        )(x, is_training)
+        return action_output
+
     def _init_model(self):
         t, bs = 2 + self.config.context_len, 2
         dummy_states = np.zeros((bs, t, *self.observation_shape), dtype=np.float32)
@@ -82,10 +97,28 @@ class LatentActionModel(BaseModel):
             states=dummy_states,
             is_training=True,
         )
+
+        if self.config.add_labelling:
+            dummy_latent = np.zeros((bs, t, self.config.idm.code_dim), dtype=np.float32)
+
+            action_head_params, action_head_state = self.predict_action.init(
+                self._init_key,
+                self,
+                dummy_latent,
+                is_training=True,
+            )
+            params.update(action_head_params)
+            state.update(action_head_state)
+
         return params, state
 
     def loss_fn(
-        self, params: hk.Params, state: hk.State, rng: jax.random.PRNGKey, batch: Tuple
+        self,
+        params: hk.Params,
+        state: hk.State,
+        rng: jax.random.PRNGKey,
+        batch: Tuple,
+        is_training: bool,
     ):
         logging.info(f"lam loss function, observations: {batch.observations.shape}")
 
@@ -95,7 +128,7 @@ class LatentActionModel(BaseModel):
             rng,
             self,
             states=batch.observations.astype(jnp.float32),
-            is_training=True,
+            is_training=is_training,
         )
 
         # loss for IDM is VQVAE loss + recon
@@ -136,6 +169,41 @@ class LatentActionModel(BaseModel):
             "total_loss": recon_loss + lam_output.vq_loss,
         }
         loss = self.config.beta_loss_weight * lam_output.vq_loss + recon_loss
+
+        if batch.labelled is not None:
+            # if the transition is labelled, we can compute action decoding loss
+            latent_actions = lam_output.latent_actions
+            action_pred, action_state = self.predict_action.apply(
+                params,
+                state,
+                rng,
+                self,
+                latent_actions=latent_actions,
+                is_training=is_training,
+            )
+
+            gt_actions = batch.actions[:, -2]
+
+            if gt_actions.shape[-1] == 1:
+                gt_actions = gt_actions.squeeze(axis=-1)
+
+            action_pred_loss = optax.softmax_cross_entropy_with_integer_labels(
+                action_pred.logits, gt_actions.astype(jnp.int32)
+            )
+            mask = batch.labelled[:, -2]
+            action_pred_loss *= mask
+            action_pred_loss = action_pred_loss.sum() / mask.sum()
+
+            acc = action_pred.action == gt_actions
+            acc *= mask
+            acc = acc.sum() / mask.sum()
+
+            metrics.update({"action_pred_loss": action_pred_loss, "acc": acc})
+            state.update(action_state)
+            loss += action_pred_loss
+        else:
+            metrics.update({"action_pred_loss": 0.0, "acc": 0.0})
+
         return loss, (metrics, state)
 
 
@@ -162,8 +230,8 @@ class LatentActionDecoder(BaseModel):
                 input_action_dim=self.input_action_dim,
                 continuous_actions=self.is_continuous,
                 load_from_ckpt=True,
-                ckpt_file=Path(self.config.lam_ckpt) / "model_ckpts" / "ckpt_0100.pkl",
-                # ckpt_dir=Path(self.config.lam_ckpt),
+                # ckpt_file=Path(self.config.lam_ckpt) / "model_ckpts" / "ckpt_0100.pkl",
+                ckpt_dir=Path(self.config.lam_ckpt),
             )
         else:
             self.lam = lam
@@ -201,7 +269,12 @@ class LatentActionDecoder(BaseModel):
         return params, state
 
     def loss_fn(
-        self, params: hk.Params, state: hk.State, rng: jax.random.PRNGKey, batch
+        self,
+        params: hk.Params,
+        state: hk.State,
+        rng: jax.random.PRNGKey,
+        batch,
+        is_training: bool,
     ):
         observations = batch.observations
 
@@ -235,7 +308,7 @@ class LatentActionDecoder(BaseModel):
             decoder_key,
             self,
             latent_actions=latent_actions,
-            is_training=True,
+            is_training=is_training,
         )
 
         if self.lam_cfg.model.idm.use_transformer:
@@ -314,14 +387,18 @@ class LatentActionBaseAgent(BaseAgent):
             self.lam_cfg.model,
             key=lam_key,
             load_from_ckpt=True,
-            ckpt_file=Path(self.config.lam_ckpt) / "model_ckpts" / "ckpt_0100.pkl",
-            # ckpt_dir=Path(self.config.lam_ckpt),
+            # ckpt_file=Path(self.config.lam_ckpt) / "model_ckpts" / "ckpt_0100.pkl",
+            ckpt_dir=Path(self.config.lam_ckpt),
             **extra_kwargs,
         )
 
         # load pretrained latent action decoder
         if hasattr(self.config, "latent_action_decoder_ckpt"):
-            config_file = Path(self.config.latent_action_decoder_ckpt) / "config.json"
+            ckpt_path = self.config.latent_action_decoder_ckpt
+            if "idm_nt" in self.config and self.config.idm_nt != -1:
+                ckpt_path = re.sub(r"nt-\d+", f"nt-{self.config.idm_nt}", ckpt_path)
+
+            config_file = Path(ckpt_path) / "config.json"
             with open(config_file, "r") as f:
                 self.latent_action_decoder_cfg = ConfigDict(json.load(f))
 
@@ -330,7 +407,7 @@ class LatentActionBaseAgent(BaseAgent):
                 config=self.latent_action_decoder_cfg.model,
                 key=decoder_key,
                 load_from_ckpt=True,
-                ckpt_dir=Path(self.config.latent_action_decoder_ckpt),
+                ckpt_dir=Path(ckpt_path),
                 **extra_kwargs,
             )
 
@@ -400,7 +477,12 @@ class LatentActionAgent(LatentActionBaseAgent):
         return params, state
 
     def loss_fn(
-        self, params: hk.Params, state: hk.State, rng: jax.random.PRNGKey, batch: Tuple
+        self,
+        params: hk.Params,
+        state: hk.State,
+        rng: jax.random.PRNGKey,
+        batch: Tuple,
+        is_training: bool,
     ):
         logging.info(f"lam loss function, observations: {batch.observations.shape}")
 
@@ -434,7 +516,7 @@ class LatentActionAgent(LatentActionBaseAgent):
             self,
             states=observations[:, -2].astype(jnp.float32),
             task=batch.tasks[:, -2],
-            is_training=True,
+            is_training=is_training,
         )
         loss = optax.squared_error(action_output.action, latent_actions)
         loss = jnp.mean(loss)
@@ -463,7 +545,7 @@ class LatentActionAgent(LatentActionBaseAgent):
             decoder_key,
             self.latent_action_decoder,
             latent_actions=action_output.action,
-            is_training=True,
+            is_training=False,
         )
         decoded_acc = decoded_action_output.action == gt_actions.squeeze()
         decoded_acc = jnp.mean(decoded_acc)

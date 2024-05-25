@@ -64,7 +64,12 @@ class BCAgent(BaseAgent):
         return params, state
 
     def loss_fn(
-        self, params: hk.Params, state: hk.State, rng: jax.random.PRNGKey, batch: Tuple
+        self,
+        params: hk.Params,
+        state: hk.State,
+        rng: jax.random.PRNGKey,
+        batch: Tuple,
+        is_training: bool,
     ):
         logging.info(f"bc loss function, observations: {batch.observations.shape}")
 
@@ -78,7 +83,7 @@ class BCAgent(BaseAgent):
             self,
             states=batch.observations.astype(jnp.float32),
             task=batch.tasks,
-            is_training=True,
+            is_training=is_training,
         )
 
         gt_actions = batch.actions

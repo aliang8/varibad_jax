@@ -1,11 +1,12 @@
 from absl import logging
+import re
+import json
 import copy
 import jax
 import chex
 import time
 import pickle
 from ml_collections import ConfigDict
-import numpy.random as npr
 from pathlib import Path
 import jax.tree_util as jtu
 import jax.numpy as jnp
@@ -40,14 +41,12 @@ from varibad_jax.models.lam.lam import (
     LatentActionAgent,
     LatentActionDecoder,
 )
-from varibad_jax.models.vpt.vpt import VPT, VPTAgent
+from varibad_jax.models.vpt.vpt import VPT, VPTAgent, VPTDTAgent
 
 
 class OfflineTrainer(BaseTrainer):
     def __init__(self, config: ConfigDict):
         super().__init__(config)
-
-        rng = npr.RandomState(config.seed)
 
         try:
             steps_per_rollout = (
@@ -57,11 +56,58 @@ class OfflineTrainer(BaseTrainer):
         except:
             steps_per_rollout = None
 
-        self.train_dataset, self.eval_dataset = load_data(
-            config=config, rng=rng, steps_per_rollout=steps_per_rollout
+        data_load_time = time.time()
+        self.train_dataset, self.eval_dataset, self.prompt_dataset = load_data(
+            config=config, rng=next(self.rng_seq)
         )
+        logging.info(f"data loading time: {time.time() - data_load_time}")
+
         # these are trajectories
-        self.eval_prompts = self.sample_prompts()
+        self.prompts = self.sample_prompts()
+
+        # # add labels
+        # if "vpt_bc" in self.config.model.name or "lam" in self.config.model.name:
+        #     # edit action labels
+
+        #     # first load pretrained model
+        #     # load pretrained IDM for predicting the latent actions from observations
+        #     ckpt_path = self.config.model.vpt_idm_ckpt
+
+        #     if self.config.model.idm_nt != -1:
+        #         ckpt_path = re.sub(
+        #             r"nt-\d+", f"nt-{self.config.model.idm_nt}", ckpt_path
+        #         )
+
+        #     config = Path(ckpt_path) / "config.json"
+        #     with open(config, "r") as f:
+        #         vpt_cfg = ConfigDict(json.load(f))
+
+        #     key, vpt_key = jax.random.split(next(self.rng_seq), 2)
+
+        #     vpt = VPT(
+        #         config=vpt_cfg.model,
+        #         key=vpt_key,
+        #         load_from_ckpt=True,
+        #         ckpt_dir=Path(ckpt_path),
+        #         observation_shape=(1, 1),  # doesn't matter
+        #         action_dim=self.action_dim,
+        #         input_action_dim=self.input_action_dim,
+        #         continuous_actions=self.continuous_actions,
+        #         task_dim=self.config.env.task_dim,
+        #     )
+
+        #     # predict the action from observations with pretrained model
+        #     vpt_action_pred, _ = vpt.model.apply(
+        #         vpt._ts.params,
+        #         vpt._ts.state,
+        #         vpt_key,
+        #         vpt,
+        #         states=batch.observations.astype(jnp.float32),
+        #         is_training=False,
+        #     )
+        #     import ipdb
+
+        #     ipdb.set_trace()
 
         if self.config.env.env_name == "procgen":
             self.train_dataloader = self.train_dataset.get_iter(
@@ -80,13 +126,14 @@ class OfflineTrainer(BaseTrainer):
             )
             logging.info(f"Number of train batches: {len(self.train_dataloader)}")
 
-            if len(self.eval_dataset["observations"]) > 0:
-                self.eval_dataloader = create_data_loader(
-                    self.eval_dataset, data_cfg=config.data
-                )
-                logging.info(f"Number of eval batches: {len(self.eval_dataloader)}")
-            else:
-                self.eval_dataloader = None
+            self.eval_dataloaders = {}
+            for eval_env_id, eval_dataset in self.eval_dataset.items():
+                if len(eval_dataset["observations"]) > 0:
+                    eval_dataloader = create_data_loader(
+                        eval_dataset, data_cfg=config.data
+                    )
+                    logging.info(f"Number of eval batches: {len(eval_dataloader)}")
+                    self.eval_dataloaders[eval_env_id] = eval_dataloader
 
             if config.data.data_type == "trajectories":
                 obs_shape = self.train_dataset["observations"].shape[2:]
@@ -115,6 +162,8 @@ class OfflineTrainer(BaseTrainer):
             model_cls = VPT
         elif self.config.model.name == "vpt_bc":
             model_cls = VPTAgent
+        elif self.config.model.name == "vpt_icl_agent":
+            model_cls = VPTDTAgent
         else:
             raise ValueError(f"Unknown model name: {self.config.model.name}")
 
@@ -138,49 +187,31 @@ class OfflineTrainer(BaseTrainer):
         logging.info(f"evaluating model every: {self.eval_every}")
 
     def sample_prompts(self):
-        eval_prompts = None
+        assert self.prompt_dataset is not None
+
+        prompts = {}
         if self.config.data.holdout_tasks or (
             "policy" in self.config.model and self.config.model.policy.demo_conditioning
         ):
-            if (
-                len(self.eval_dataset["observations"]) == 0
-            ):  # use full training set if no eval
-                num_trajs = self.train_dataset["observations"].shape[0]
-                sample_dataset = self.train_dataset
-            else:
-                # sample a couple of trajectories from the evaluation dataset for inference
-                num_trajs = self.eval_dataset["observations"].shape[0]
-                sample_dataset = self.eval_dataset
+            for env_id, prompt_dataset in self.prompt_dataset.items():
+                data_cfg = copy.deepcopy(self.config.data)
+                data_cfg.num_trajs_per_batch -= 1
+                data_cfg.batch_size = self.config.num_eval_rollouts
+                loader = create_data_loader(prompt_dataset, data_cfg)
+                prompts[env_id] = next(iter(loader))
 
-            # if num_trajs < self.config.num_eval_rollouts:
-            #     replace = True
-            # else:
-            #     replace = False
-            data_cfg = copy.deepcopy(self.config.data)
-            data_cfg.num_trajs_per_batch -= 1
-            data_cfg.batch_size = self.config.num_eval_rollouts
-            loader = create_data_loader(sample_dataset, data_cfg)
-            # prompt_idxs = npr.choice(
-            #     num_trajs, size=self.config.num_eval_rollouts, replace=replace
-            # )
-            # eval_prompts = subsample_data(sample_dataset, prompt_idxs)
-            eval_prompts = next(iter(loader))
-        return eval_prompts
+        return prompts
 
     def train(self):
         # first eval
         if not self.config.skip_first_eval:
             eval_metrics = self.eval(epoch=0)
 
-            if self.wandb_run is not None:
-                metrics = gutl.prefix_dict_keys(eval_metrics, prefix="eval/")
-                self.wandb_run.log(metrics)
-
         # train
         for epoch in tqdm.tqdm(range(self.config.num_epochs), desc="epochs"):
             # iterate over batches of data
             start_time = time.time()
-            epoch_metrics = dd(list)
+            train_ep_metrics = dd(list)
             # for _ in range(self.num_train_batches):
             #     batch = next(self.train_dataloader)
             for batch in self.train_dataloader:
@@ -189,39 +220,70 @@ class OfflineTrainer(BaseTrainer):
                 batch = Batch(**batch)
                 metrics = self.model.update(next(self.rng_seq), batch)
                 for k, v in metrics.items():
-                    epoch_metrics[k].append(v)
+                    train_ep_metrics[k].append(v)
 
-            for k, v in epoch_metrics.items():
-                epoch_metrics[k] = jnp.mean(jnp.array(v))
+            for k, v in train_ep_metrics.items():
+                train_ep_metrics[k] = jnp.mean(jnp.array(v))
 
             epoch_time = time.time() - start_time
-            epoch_metrics["time/epoch"] = epoch_time
-            epoch_metrics["misc/lr"] = self.model._ts.opt_state.hyperparams["lr"]
+            train_ep_metrics["time/epoch"] = epoch_time
+            train_ep_metrics["misc/lr"] = self.model._ts.opt_state.hyperparams["lr"]
 
             if ((epoch + 1) % self.eval_every) == 0:
-                eval_metrics = self.eval(epoch + 1)
+                print("train: ", train_ep_metrics)
+                eval_metrics = self.eval(epoch=epoch + 1)
 
-                print("train: ", epoch_metrics)
-                print("eval: ", eval_metrics)
-
-                if self.wandb_run is not None:
-                    eval_metrics = gutl.prefix_dict_keys(eval_metrics, prefix="eval/")
-                    self.wandb_run.log(eval_metrics, step=epoch + 1, commit=False)
+                if self.config.data.resample_prompts_every_eval:
+                    logging.info("getting new set of demo eval prompts")
+                    # get new set of prompts for evaluation
+                    self.prompts = self.sample_prompts()
 
             if self.wandb_run is not None:
-                metrics = gutl.prefix_dict_keys(epoch_metrics, prefix="train/")
-                self.wandb_run.log(metrics, step=epoch + 1)
+                metrics = gutl.prefix_dict_keys(train_ep_metrics, prefix="train/")
+
+                if ((epoch + 1) % self.eval_every) == 0:
+                    for eval_env_id, env_eval_metrics in eval_metrics.items():
+                        prefixed_eval_metrics = gutl.prefix_dict_keys(
+                            env_eval_metrics, prefix=f"{eval_env_id}/eval/"
+                        )
+                        metrics.update(prefixed_eval_metrics)
+
+                self.wandb_run.log(metrics)
 
         self.eval(epoch=self.config.num_epochs)
 
     def eval(self, epoch: int):
+        metrics = {}
+        for eval_env_id in self.eval_dataloaders.keys():
+            eval_metrics = self.eval_env(epoch, eval_env_id)
+            metrics[eval_env_id] = eval_metrics
+
+            # save model
+            if self.config.mode == "train" and self.config.env.env_id == eval_env_id:
+                self.save_model(self.model.save_dict, eval_metrics, epoch)
+
+            # write to log file
+            log_eval_metrics = dict(
+                jtu.tree_map(lambda x: np.round(float(x), 2), eval_metrics)
+            )
+
+            with open(self.log_dir / f"eval_{eval_env_id}.txt", "a+") as f:
+                f.write(f"{epoch}, {log_eval_metrics}\n")
+
+            logging.info(f"eval [{eval_env_id}]: {log_eval_metrics}")
+
+        return metrics
+
+    def eval_env(self, epoch: int, eval_env_id: str):
         eval_metrics = dd(list)
 
         # run on eval batches
-        if self.eval_dataloader is not None:
+        if self.eval_dataloaders is not None:
             # for _ in range(self.num_eval_batches):
             #     batch = next(self.eval_dataloader)
-            for batch in self.eval_dataloader:
+
+            eval_dataloader = self.eval_dataloaders[eval_env_id]
+            for batch in eval_dataloader:
                 if "info" in batch:
                     del batch["info"]
 
@@ -234,11 +296,6 @@ class OfflineTrainer(BaseTrainer):
 
             for k, v in eval_metrics.items():
                 eval_metrics[k] = jnp.mean(jnp.array(v))
-
-        if self.config.data.resample_prompts_every_eval:
-            logging.info("getting new set of eval prompts")
-            # get new set of prompts for evaluation
-            self.eval_prompts = self.sample_prompts()
 
         # run rollouts
         if hasattr(self.model, "get_action") and self.config.run_eval_rollouts:
@@ -254,17 +311,17 @@ class OfflineTrainer(BaseTrainer):
                 rollout_metrics, *_ = run_rollouts(
                     rng=next(self.rng_seq),
                     agent=self.model,
-                    env=self.eval_envs,
+                    env=self.eval_envs[eval_env_id][0],
+                    env_id=eval_env_id,
                     config=self.config,
                     action_dim=self.model.input_action_dim,
                     steps_per_rollout=self.steps_per_rollout,
                     wandb_run=self.wandb_run,
-                    prompts=self.eval_prompts,
+                    prompts=(
+                        self.prompts[eval_env_id]
+                        if eval_env_id in self.prompts
+                        else None
+                    ),
                 )
             eval_metrics.update(rollout_metrics)
-
-        # save model
-        if self.config.mode == "train":
-            self.save_model(self.model.save_dict, eval_metrics, epoch)
-
         return eval_metrics

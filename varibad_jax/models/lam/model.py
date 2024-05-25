@@ -156,6 +156,7 @@ class LatentActionIDM(hk.Module):
         super().__init__(name="LatentActionIDM")
 
         init_kwargs = dict(w_init=w_init, b_init=b_init)
+        self.config = config
         self.image_obs = config.image_obs
         self.use_transformer = config.use_transformer
 
@@ -217,6 +218,10 @@ class LatentActionIDM(hk.Module):
         Output:
             vq_outputs: dict
         """
+        if self.config.use_state_diff:
+            # compute the difference between states
+            states = states[:, 1:] - states[:, :-1]
+
         if self.use_transformer:
             # first embed the states
             if self.image_obs:

@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import pickle
 from PIL import Image
+import numpy as np
 import jax
 import tqdm
 import json
@@ -23,6 +24,10 @@ from varibad_jax.utils.rollout import run_rollouts
 from varibad_jax.models.varibad.varibad import VariBADModel
 from varibad_jax.agents.ppo.ppo import PPOAgent
 from varibad_jax.models.base import RandomActionAgent
+from varibad_jax.utils.data_utils import (
+    merge_trajectories,
+    split_data_into_trajectories,
+)
 
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.01"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
@@ -99,6 +104,7 @@ def main(_):
         agent=agent,
         belief_model=belief_model,
         env=envs,
+        env_id=config_p.env.env_id,
         config=config_p,
         action_dim=input_action_dim,
     )
@@ -128,8 +134,6 @@ def main(_):
         / f"{config.data.dataset_name}_eid-{config_p.env.env_id}_n-{config.num_rollouts_collect}"
     )
     data_dir.mkdir(exist_ok=True, parents=True)
-    data_file = data_dir / "dataset.pkl"
-    metadata_file = data_dir / "metadata.json"
     dataset_size = actions.shape[0]
 
     logging.info(f"dataset size: {dataset_size}")
@@ -204,11 +208,36 @@ def main(_):
         "ckpt_dir": str(model_ckpt_dir),
         "avg_ep_return": float(eval_metrics["episode_return"]),
     }
+    data_file = data_dir / "dataset.pkl"
+    metadata_file = data_dir / "metadata.json"
+
     with open(data_file, "wb") as f:
         pickle.dump(data, f)
 
     with open(metadata_file, "w") as f:
         json.dump(metadata, f)
+
+    # save a trajectories version of this as well
+    del data["successes"]
+    trajectory_data, max_len = split_data_into_trajectories(data)
+
+    # # save a version that is unpadded
+    # traj_data_file = data_dir / "traj_dataset_unpadded.pkl"
+    # with open(traj_data_file, "wb") as f:
+    #     pickle.dump(trajectory_data, f)
+
+    # now save a version that is padded
+    trajectory_data = merge_trajectories(
+        trajectory_data, jnp.arange(config.num_rollouts_collect), pad_to=max_len
+    )
+    trajectory_data["successes"] = successes
+
+    # convert to numpy arrays
+    trajectory_data = jtu.tree_map(lambda x: np.asarray(x), trajectory_data)
+
+    traj_data_file = data_dir / "traj_dataset.pkl"
+    with open(traj_data_file, "wb") as f:
+        pickle.dump(trajectory_data, f)
 
 
 if __name__ == "__main__":

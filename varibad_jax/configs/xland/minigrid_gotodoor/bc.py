@@ -20,7 +20,7 @@ def get_config(config_string: str = None):
     # config.save_key = "success"
 
     config.keys_to_include = {
-        "env": {"env_name": 1, "env_id": 1, "eval_env_id": 1},
+        "env": {"env_name": 1, "env_id": 1},
         "data": {"num_trajs": 1},
     }
 

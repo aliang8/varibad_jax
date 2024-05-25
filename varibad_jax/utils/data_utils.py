@@ -1,4 +1,5 @@
 from absl import logging
+import copy
 import math
 import jax
 import chex
@@ -17,6 +18,62 @@ from collections.abc import Generator
 from torch.utils.data import Dataset, DataLoader
 
 
+def merge_trajectories(data, indices: jnp.ndarray, pad_to: int = 0):
+    if pad_to == 0:
+        # just concatenate the trajectories together without padding
+        for k, v in data.items():
+            if isinstance(v, dict):
+                for kk, vv in v.items():
+                    data[k][kk] = jnp.concatenate([vv[i] for i in indices])
+            else:
+                data[k] = jnp.concatenate([v[i] for i in indices])
+
+    else:
+        for k, v in data.items():
+            if isinstance(v, dict):
+                for kk, vv in v.items():
+                    data[k][kk] = [vv[i] for i in indices]
+            else:
+                data[k] = [v[i] for i in indices]
+
+        # pad everything to the max length
+        data = jtu.tree_map(
+            lambda x: jnp.pad(
+                x,
+                ((0, pad_to - x.shape[0]), *[(0, 0)] * (len(x.shape) - 1)),
+                mode="constant",
+            ),
+            data,
+        )
+
+        # stack the trajectories together
+        stacked_data = {}
+        for k, v in data.items():
+            if isinstance(v, dict):
+                stacked_data[k] = {}
+                for kk, vv in v.items():
+                    stacked_data[k][kk] = jnp.stack(vv)
+            else:
+                stacked_data[k] = jnp.stack(v)
+
+        data = stacked_data
+    return data
+
+
+def split_data_into_trajectories(data):
+    dones = data["dones"]
+    # get indices where the trajectory ends
+    traj_ends = jnp.where(dones)[0]
+    traj_ends = jnp.concatenate([jnp.array([-1]), traj_ends])
+    traj_lens = traj_ends[1:] - traj_ends[:-1]
+    max_len = int(traj_lens.max())
+    data["mask"] = jnp.ones_like(data["dones"])
+
+    # split each data by done
+    data = jtu.tree_map(lambda x: jnp.split(x, jnp.where(dones)[0] + 1)[:-1], data)
+    return data, max_len
+
+
 @chex.dataclass
 class Batch:
     observations: jnp.ndarray
@@ -28,6 +85,7 @@ class Batch:
     mask: jnp.ndarray = None
     successes: jnp.ndarray = None
     traj_index: jnp.ndarray = None
+    labelled: jnp.ndarray = None
 
 
 # def load_procgen_data(data_dir: str, env_id: str, stage: str = "train"):
@@ -214,46 +272,7 @@ class DataStager:
                 yield numpy_batch
 
 
-def convert_to_trajectories(data):
-    dones = data["dones"]
-    # get indices where the trajectory ends
-    traj_ends = jnp.where(dones)[0]
-    traj_ends = jnp.concatenate([jnp.array([-1]), traj_ends])
-    traj_lens = traj_ends[1:] - traj_ends[:-1]
-    max_len = int(traj_lens.max())
-
-    data["mask"] = jnp.ones_like(data["dones"])
-
-    # split each data by done
-    data = tree_map(lambda x: jnp.split(x, jnp.where(dones)[0] + 1)[:-1], data)
-
-    if "successes" in data:
-        del data["successes"]
-
-    # pad everything to the max length
-    data = tree_map(
-        lambda x: jnp.pad(
-            x,
-            ((0, max_len - x.shape[0]), *[(0, 0)] * (len(x.shape) - 1)),
-            mode="constant",
-        ),
-        data,
-    )
-    # stack the trajectories together
-    stacked_data = {}
-    for k, v in data.items():
-        if isinstance(v, dict):
-            stacked_data[k] = {}
-            for kk, vv in v.items():
-                stacked_data[k][kk] = jnp.stack(vv)
-        else:
-            stacked_data[k] = jnp.stack(v)
-
-    data = stacked_data
-    return data
-
-
-def load_data(config: ConfigDict, rng: npr.RandomState, steps_per_rollout: int):
+def load_data(config: ConfigDict, rng: jax.random.PRNGKey):
     data_dir = Path(config.root_dir) / config.data.data_dir
 
     if config.env.env_name == "procgen":
@@ -279,32 +298,43 @@ def load_data(config: ConfigDict, rng: npr.RandomState, steps_per_rollout: int):
         return train_data, eval_data
 
     # load dataset
-    dataset_name = f"{config.data.dataset_name}_eid-{config.env.env_id}_n-{config.num_rollouts_collect}"
-    data_path = data_dir / dataset_name / "dataset.pkl"
-    logging.info(f"loading data from {data_path}")
+    training_env_id = config.env.env_id
+    dataset_name = f"{config.data.dataset_name}_eid-{training_env_id}_n-{config.num_rollouts_collect}"
+
+    file = "traj_dataset.pkl"
+    data_path = data_dir / dataset_name / file
+    logging.info(f"loading {config.data.data_type} data from {data_path}")
     with open(data_path, "rb") as f:
         data = pickle.load(f)
 
     num_data = data["observations"].shape[0]
     logging.info(f"num data: {num_data}")
 
-    # also load eval dataset
-    if config.env.env_id != config.env.eval_env_id:
-        dataset_name = f"{config.data.dataset_name}_eid-{config.env.eval_env_id}_n-500"
-        eval_dataset_path = data_dir / dataset_name / "dataset.pkl"
-        logging.info(f"loading eval data from {eval_dataset_path}")
-        with open(eval_dataset_path, "rb") as f:
-            eval_data = pickle.load(f)
-        num_eval_data = eval_data["observations"].shape[0]
-        logging.info(f"num eval data: {num_eval_data}")
+    # if we have different eval envs, load the data for that as well
+    eval_datasets = {}
+    for env_id in config.env.eval_env_ids:
+        if env_id != training_env_id:
+            dataset_name = f"{config.data.dataset_name}_eid-{env_id}_n-{config.num_rollouts_collect}"
+            eval_dataset_path = data_dir / dataset_name / file
 
-        # combine the two datasets
-        data = jtu.tree_map(
-            lambda x, y: np.concatenate([x, y], axis=0), data, eval_data
-        )
+            if not eval_dataset_path.exists():
+                logging.info(f"eval dataset not found at {eval_dataset_path}")
+                continue
 
-        if "successes" in eval_data:
-            del eval_data["successes"]
+            logging.info(f"loading eval data from {eval_dataset_path}")
+            with open(eval_dataset_path, "rb") as f:
+                eval_data = pickle.load(f)
+
+            if isinstance(eval_data["observations"], list):
+                num_eval_data = len(eval_data["observations"])
+            else:
+                num_eval_data = eval_data["observations"].shape[0]
+            logging.info(f"num eval data: {num_eval_data}")
+
+            if "successes" in eval_data:
+                del eval_data["successes"]
+
+            eval_datasets[env_id] = eval_data
 
     if "successes" in data:
         del data["successes"]
@@ -331,90 +361,107 @@ def load_data(config: ConfigDict, rng: npr.RandomState, steps_per_rollout: int):
     fn = lambda x, y: logging.info(f"{jax.tree_util.keystr(x)}: {y.shape}")
     jtu.tree_map_with_path(fn, data)
 
+    num_train_trajs = config.data.num_trajs
+    if num_train_trajs > -1:
+        num_train_trajs = min(num_train_trajs, num_data)
+    else:
+        num_train_trajs = num_data
+
+    all_indices = jnp.arange(num_data)
+    rng, perm_rng = jax.random.split(rng)
+    all_indices = jax.random.permutation(perm_rng, all_indices)
+    train_indices = all_indices[:num_train_trajs]
+    eval_indices = all_indices[num_train_trajs:][:1000]
+
+    train_data = subsample_data(data, train_indices)
+
+    if config.data.add_labelling:
+        rng, labelling_rng = jax.random.split(rng)
+        # select a couple trajectories to use as trainin
+        labelled_indices = jax.random.permutation(labelling_rng, train_indices)[
+            : config.data.num_labelled
+        ]
+        t = train_data["observations"].shape[1]
+        labelled = jnp.zeros((num_train_trajs, t))
+        labelled = labelled.at[labelled_indices].set(1)
+        train_data["labelled"] = labelled
+
+    if config.data.data_type != "trajectories":
+        fn = lambda x: x[train_data["mask"]]
+        train_data = jtu.tree_map(fn, train_data)
+
+    eval_data = {}
+    eval_data[training_env_id] = subsample_data(data, eval_indices)
+    for env_id, env_eval_data in eval_datasets.items():
+        num_data = env_eval_data["observations"].shape[0]
+        indices = jnp.arange(num_data)
+        rng, perm_rng = jax.random.split(rng)
+        eval_indices = jax.random.permutation(perm_rng, indices)
+        eval_indices = eval_indices[:1000]
+        eval_data[env_id] = subsample_data(env_eval_data, eval_indices)
+
+    if config.data.data_type != "trajectories":
+        for env_id, env_eval_data in eval_data.items():
+            fn = lambda x: x[env_eval_data["mask"]]
+            eval_data[env_id] = jtu.tree_map(fn, eval_data[env_id])
+
+    prompt_data = {}
+    if config.data.data_type == "trajectories":
+        prompt_data[training_env_id] = data
+        for env_id, env_eval_data in eval_datasets.items():
+            prompt_data[env_id] = env_eval_data
+
     # logic for creating an unseen set of heldout tasks
     # assuming tasks are the same over timesteps
-    if config.data.holdout_tasks:
-        if config.env.env_name == "gridworld":
-            tasks = data["tasks"][:, 0]
-            unique_tasks = np.unique(tasks, axis=0)
+    # if config.data.holdout_tasks:
+    #     if config.env.env_name == "gridworld":
+    #         tasks = data["tasks"][:, 0]
+    #         unique_tasks = np.unique(tasks, axis=0)
 
-            # sample a few to be heldout tasks
-            indices = rng.choice(range(len(unique_tasks)), size=4, replace=False)
-            heldout_tasks = unique_tasks[indices]
+    #         # sample a few to be heldout tasks
+    #         indices = rng.choice(range(len(unique_tasks)), size=4, replace=False)
+    #         heldout_tasks = unique_tasks[indices]
 
-            logging.info(f"heldout tasks: {heldout_tasks}")
+    #         logging.info(f"heldout tasks: {heldout_tasks}")
 
-            eval_mask = (heldout_tasks[:, None] == tasks).all(axis=2).any(axis=0)
-        elif config.env.env_name == "xland":
-            # the task is defined by the environment state
-            # which is the agent's position and the goal position
-            grid = data["info"]["grid"]
-            agent_pos = data["info"]["agent_position"]
-            agent_dir = data["info"]["agent_direction"]
+    #         eval_mask = (heldout_tasks[:, None] == tasks).all(axis=2).any(axis=0)
+    #     elif config.env.env_name == "xland":
+    #         # the task is defined by the environment state
+    #         # which is the agent's position and the goal position
+    #         grid = data["info"]["grid"]
+    #         agent_pos = data["info"]["agent_position"]
+    #         agent_dir = data["info"]["agent_direction"]
 
-            # filter trajectories based on agent starting pos + goal location
-            ic_mask = (agent_pos[:, 0, 0] < 3) & (agent_pos[:, 0, 1] < 3)
-            from xminigrid.core.constants import (
-                TILES_REGISTRY,
-                Colors,
-                Tiles,
-                NUM_COLORS,
-            )
+    #         # filter trajectories based on agent starting pos + goal location
+    #         ic_mask = (agent_pos[:, 0, 0] < 3) & (agent_pos[:, 0, 1] < 3)
+    #         from xminigrid.core.constants import (
+    #             TILES_REGISTRY,
+    #             Colors,
+    #             Tiles,
+    #             NUM_COLORS,
+    #         )
 
-            goal_tile = TILES_REGISTRY[Tiles.BALL, Colors.YELLOW]
-            goal_locs = jnp.array(
-                list(zip(*jnp.where((grid[:, 0] == goal_tile).sum(axis=-1))))
-            )
-            goal_mask = (goal_locs[:, 1] >= 3) & (goal_locs[:, 2] >= 3)
-            # eval_mask = ic_mask & goal_mask
-            eval_mask = goal_mask
-            logging.info(
-                f"number of filtered trajectories for evaluation: {eval_mask.sum()}"
-            )
+    #         goal_tile = TILES_REGISTRY[Tiles.BALL, Colors.YELLOW]
+    #         goal_locs = jnp.array(
+    #             list(zip(*jnp.where((grid[:, 0] == goal_tile).sum(axis=-1))))
+    #         )
+    #         goal_mask = (goal_locs[:, 1] >= 3) & (goal_locs[:, 2] >= 3)
+    #         # eval_mask = ic_mask & goal_mask
+    #         eval_mask = goal_mask
+    #         logging.info(
+    #             f"number of filtered trajectories for evaluation: {eval_mask.sum()}"
+    #         )
 
-        train_data = subsample_data(data, ~eval_mask)
-        eval_data = subsample_data(data, eval_mask)
+    #     train_data = subsample_data(data, ~eval_mask)
+    #     eval_data = subsample_data(data, eval_mask)
 
-        if num_trajs > -1:
-            dones = data["dones"]
-            traj = jnp.cumsum(dones)
-            end_idx = jnp.argmax(traj >= num_trajs) + 1
-            train_indices = jnp.arange(end_idx)
-            train_data = subsample_data(train_data, train_indices)
-    else:
-        dataset_size = data["observations"].shape[0]
-        num_total_trajs = data["dones"].sum()
-        num_trajs = config.data.num_trajs
-        if num_trajs > -1:
-            num_trajs = min(num_trajs, num_total_trajs)
-        else:
-            num_trajs = num_total_trajs
-
-        num_train_trajs = math.ceil(num_trajs * config.data.train_frac)
-        dones = data["dones"]
-        traj = jnp.cumsum(dones)
-        train_end_idx = jnp.argmax(traj >= num_train_trajs) + 1
-        end_idx = jnp.argmax(traj >= num_trajs) + 1
-
-        train_indices = jnp.arange(end_idx)[:train_end_idx]
-        eval_indices = jnp.arange(end_idx)[train_end_idx:]
-
-        # split into train and eval
-        train_data = subsample_data(data, train_indices)
-
-        if config.env.env_id == config.env.eval_env_id:
-            eval_data = subsample_data(data, eval_indices)
-
-    if config.data.data_type == "trajectories":
-        logging.info("converting data to trajectories")
-        train_data = convert_to_trajectories(train_data)
-        if eval_data["observations"].shape[0] > 0:
-            eval_data = convert_to_trajectories(eval_data)
-
-    logging.info(f"num training data: {train_data['observations'].shape[0]}")
-    logging.info(f"num eval data: {eval_data['observations'].shape[0]}")
-
-    return train_data, eval_data
+    #     if num_trajs > -1:
+    #         dones = data["dones"]
+    #         traj = jnp.cumsum(dones)
+    #         end_idx = jnp.argmax(traj >= num_trajs) + 1
+    #         train_indices = jnp.arange(end_idx)
+    #         train_data = subsample_data(train_data, train_indices)
+    return train_data, eval_data, prompt_data
 
 
 class TransitionsDataset(Dataset):

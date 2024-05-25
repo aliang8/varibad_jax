@@ -18,8 +18,9 @@ def get_config(config_string: str = None):
 
     config.model.use_lr_scheduler = False
     config.model.latent_action_dim = 64
-    config.model.lam_ckpt = "/scr/aliang80/varibad_jax/varibad_jax/results/lam/nt--1/eid-MiniGrid-GoToDoorRandomColors-R1-9x9-3/en-xland/b-0.05/code_d-64/n_codes-60"
-    config.model.latent_action_decoder_ckpt = "/scr/aliang80/varibad_jax/varibad_jax/results/action_decoder/nt-1000/eid-MiniGrid-GoToDoorRandomColors-R1-9x9-3/en-xland/"
+    config.model.lam_ckpt = "/scr/aliang80/varibad_jax/varibad_jax/results/lam/nt-9000/eid-MiniGrid-GoToDoorRandomColors-R1-9x9-3/en-xland/b-0.05/code_d-64/n_codes-60/usd-True"
+    config.model.latent_action_decoder_ckpt = "/scr/aliang80/varibad_jax/varibad_jax/ray_results/action_decoder/action_decoder/nt-20/eid-MiniGrid-GoToDoorRandomColors-R1-9x9-3/en-xland/"
+    config.model.idm_nt = 20
 
     config.embedding_dim = 128
     config.data.batch_size = 8
@@ -31,8 +32,9 @@ def get_config(config_string: str = None):
 
     config.keys_to_include = {
         "seed": 1,
-        "env": {"env_name": 1, "env_id": 1, "eval_env_id": 1},
+        "env": {"env_name": 1, "env_id": 1},
         "data": {"num_trajs": 1, "num_trajs_per_batch": 1},
+        "model": {"idm_nt": 1},
     }
 
     return config

@@ -102,10 +102,12 @@ class BaseModel:
 
     @partial(jax.jit, static_argnums=(0, 4))
     def update_model(self, ts, rng, batch, update_model):
-        logging.info("updating model")
+        if update_model:
+            logging.info("updating model")
+
         (loss, (metrics, new_state)), grads = jax.value_and_grad(
             self.loss_fn, has_aux=True
-        )(ts.params, ts.state, rng, batch)
+        )(ts.params, ts.state, rng, batch, is_training=update_model)
         if update_model:
             grads, new_opt_state = self.opt.update(grads, ts.opt_state, ts.params)
             new_params = optax.apply_updates(ts.params, grads)

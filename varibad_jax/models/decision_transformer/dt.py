@@ -58,7 +58,12 @@ class DecisionTransformerAgent(BaseAgent):
         return params, state
 
     def loss_fn(
-        self, params: hk.Params, state: hk.State, rng: jax.random.PRNGKey, batch: Tuple
+        self,
+        params: hk.Params,
+        state: hk.State,
+        rng: jax.random.PRNGKey,
+        batch: Tuple,
+        is_training: bool,
     ):
         observations = batch.observations
         actions = batch.actions
@@ -94,7 +99,7 @@ class DecisionTransformerAgent(BaseAgent):
             mask=mask,
             prompt=prompt,
             traj_index=batch.traj_index,
-            is_training=True,
+            is_training=is_training,
         )
 
         if policy_output.entropy is not None:
@@ -183,7 +188,12 @@ class LatentDTAgent(LatentActionBaseAgent, DecisionTransformerAgent):
         return latent_actions
 
     def loss_fn(
-        self, params: hk.Params, state: hk.State, rng: jax.random.PRNGKey, batch: Batch
+        self,
+        params: hk.Params,
+        state: hk.State,
+        rng: jax.random.PRNGKey,
+        batch: Batch,
+        is_training: bool,
     ):
         # observations should be B, T, ...
         logging.info(
@@ -197,7 +207,9 @@ class LatentDTAgent(LatentActionBaseAgent, DecisionTransformerAgent):
             lam_key, batch.observations.astype(jnp.float32)
         )
         batch.actions = latent_actions
-        return DecisionTransformerAgent.loss_fn(self, params, state, policy_key, batch)
+        return DecisionTransformerAgent.loss_fn(
+            self, params, state, policy_key, batch, is_training
+        )
 
     @partial(jax.jit, static_argnames=("self", "is_training"))
     def get_action_jit(self, ts, rng, env_state, task=None, **kwargs):

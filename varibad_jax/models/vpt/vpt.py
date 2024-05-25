@@ -1,6 +1,7 @@
 from absl import logging
 from typing import Tuple
 
+import re
 import jax
 import json
 import chex
@@ -16,10 +17,12 @@ from functools import partial
 from pathlib import Path
 from ml_collections.config_dict import ConfigDict
 
+from varibad_jax.utils.data_utils import Batch
 from varibad_jax.models.base import BaseModel
 from varibad_jax.models.vpt.model import IDM
 from varibad_jax.models.base import BaseAgent
 from varibad_jax.agents.actor_critic import ActorCritic, ActorCriticInput
+from varibad_jax.models.decision_transformer.dt import DecisionTransformerAgent
 
 
 class VPT(BaseModel):
@@ -49,7 +52,12 @@ class VPT(BaseModel):
         return params, state
 
     def loss_fn(
-        self, params: hk.Params, state: hk.State, rng: jax.random.PRNGKey, batch: Tuple
+        self,
+        params: hk.Params,
+        state: hk.State,
+        rng: jax.random.PRNGKey,
+        batch: Tuple,
+        is_training: bool,
     ):
         logging.info(f"vpt loss function, observations: {batch.observations.shape}")
 
@@ -59,7 +67,7 @@ class VPT(BaseModel):
             rng,
             self,
             states=batch.observations.astype(jnp.float32),
-            is_training=True,
+            is_training=is_training,
         )
 
         if self.config.idm.use_transformer:
@@ -95,7 +103,12 @@ class VPTAgent(BaseAgent):
         super().__init__(*args, **kwargs)
 
         # load pretrained IDM for predicting the latent actions from observations
-        config = Path(self.config.vpt_idm_ckpt) / "config.json"
+        ckpt_path = self.config.vpt_idm_ckpt
+
+        if "idm_nt" in self.config and self.config.idm_nt != -1:
+            ckpt_path = re.sub(r"nt-\d+", f"nt-{self.config.idm_nt}", ckpt_path)
+
+        config = Path(ckpt_path) / "config.json"
         with open(config, "r") as f:
             self.vpt_cfg = ConfigDict(json.load(f))
 
@@ -103,11 +116,12 @@ class VPTAgent(BaseAgent):
 
         del kwargs["config"]
         del kwargs["key"]
+
         self.vpt = VPT(
             config=self.vpt_cfg.model,
             key=vpt_key,
             load_from_ckpt=True,
-            ckpt_dir=Path(self.config.vpt_idm_ckpt),
+            ckpt_dir=Path(ckpt_path),
             **kwargs,
         )
 
@@ -145,7 +159,12 @@ class VPTAgent(BaseAgent):
         return params, state
 
     def loss_fn(
-        self, params: hk.Params, state: hk.State, rng: jax.random.PRNGKey, batch: Tuple
+        self,
+        params: hk.Params,
+        state: hk.State,
+        rng: jax.random.PRNGKey,
+        batch: Tuple,
+        is_training: bool,
     ):
         logging.info(f"lam loss function, observations: {batch.observations.shape}")
 
@@ -178,7 +197,7 @@ class VPTAgent(BaseAgent):
             self,
             states=observations[:, -2].astype(jnp.float32),
             task=batch.tasks[:, -2],
-            is_training=True,
+            is_training=is_training,
         )
 
         # action prediction
@@ -197,3 +216,80 @@ class VPTAgent(BaseAgent):
 
         metrics = {"bc_loss": loss, "acc": acc}
         return loss, (metrics, state)
+
+
+class VPTDTAgent(DecisionTransformerAgent, VPTAgent):
+    def __init__(self, *args, **kwargs):
+        VPTAgent.__init__(self, *args, **kwargs)
+
+    def _init_model(self):
+        return DecisionTransformerAgent._init_model(self)
+
+    def label_trajectory_with_actions(self, rng, observations):
+        b = observations.shape[0]
+
+        # we need to unfold the observations to feed into
+        # the latent action model
+        if not self.vpt_cfg.model.idm.use_transformer:
+            windows = []
+            window_size = 2 + self.vpt_cfg.model.context_len
+            for i in range(observations.shape[1] - window_size + 1):
+                window = observations[:, i : i + window_size]
+                windows.append(window)
+
+            windows = jnp.stack(windows, axis=1)
+            observations = einops.rearrange(windows, "b t ... -> (b t) ...")
+
+        vpt_output, _ = self.vpt.model.apply(
+            self.vpt._ts.params,
+            self.vpt._ts.state,
+            rng,
+            self.vpt,
+            states=observations,
+            is_training=False,
+        )
+        actions = vpt_output.action
+
+        if not self.vpt_cfg.model.idm.use_transformer:
+            # need to reshape it back, squeeze because the lam predicts a single action
+            actions = einops.rearrange(actions, "(b t) ... -> b t ...", b=b)
+
+            # we're going to be missing the last action
+            # just repeat it for now
+            actions = jnp.concatenate([actions, actions[:, -2:-1]], axis=1)
+
+        return actions
+
+    def loss_fn(
+        self,
+        params: hk.Params,
+        state: hk.State,
+        rng: jax.random.PRNGKey,
+        batch: Batch,
+        is_training: bool,
+    ):
+        # observations should be B, T, ...
+        logging.info(f"VPT DT loss function, observations: {batch.observations.shape}")
+
+        vpt_key, policy_key = jax.random.split(rng, 2)
+
+        # predict the latent action from observations with pretrained model
+        actions = self.label_trajectory_with_actions(
+            vpt_key, batch.observations.astype(jnp.float32)
+        )
+        acc = actions == batch.actions.squeeze()
+        batch.actions = actions
+        loss, (metrics, new_state) = DecisionTransformerAgent.loss_fn(
+            self, params, state, policy_key, batch, is_training
+        )
+        metrics["acc"] = jnp.mean(acc)
+        return loss, (metrics, new_state)
+
+    @partial(jax.jit, static_argnames=("self", "is_training"))
+    def get_action_jit(self, ts, rng, env_state, task=None, **kwargs):
+        logging.info("inside get action for VPTDTAgent")
+        key, action_key = jax.random.split(rng, 2)
+        vpt_output, state = self.model.apply(
+            ts.params, ts.state, action_key, self, env_state, task, **kwargs
+        )
+        return vpt_output, state

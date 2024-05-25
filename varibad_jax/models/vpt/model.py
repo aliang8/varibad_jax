@@ -32,6 +32,7 @@ class IDM(hk.Module):
         super().__init__(name="IDM")
 
         init_kwargs = dict(w_init=w_init, b_init=b_init)
+        self.config = config
         self.image_obs = config.image_obs
         self.use_transformer = config.use_transformer
 
@@ -81,6 +82,11 @@ class IDM(hk.Module):
         Output:
             action_output
         """
+        logging.info("inside IDM")
+
+        if self.config.use_state_diff:
+            states = states[:, 1:] - states[:, :-1]
+
         if self.use_transformer:
             # first embed the states
             if self.image_obs:

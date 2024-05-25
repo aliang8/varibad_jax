@@ -208,7 +208,8 @@ class RLTrainer(BaseTrainer):
             eval_metrics, *_ = run_rollouts(
                 rng=next(self.rng_seq),
                 agent=self.agent,
-                env=self.eval_envs,
+                env=self.eval_envs[self.config.env.env_id][0],
+                env_id=self.config.env.env_id,
                 config=self.config,
                 steps_per_rollout=self.steps_per_rollout,
                 action_dim=self.input_action_dim,
@@ -320,7 +321,8 @@ class RLTrainer(BaseTrainer):
                 eval_metrics, *_ = run_rollouts(
                     rng=next(self.rng_seq),
                     agent=self.agent,
-                    env=self.eval_envs,
+                    env=self.eval_envs[self.config.env.env_id][0],
+                    env_id=self.config.env.env_id,
                     config=self.config,
                     steps_per_rollout=self.steps_per_rollout,
                     action_dim=self.input_action_dim,

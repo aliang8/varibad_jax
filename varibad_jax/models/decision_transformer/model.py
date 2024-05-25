@@ -1,3 +1,4 @@
+from absl import logging
 import einops
 import haiku as hk
 import jax
@@ -53,6 +54,8 @@ class DecisionTransformer(hk.Module):
         is_training: bool = True,
         **kwargs
     ) -> jax.Array:
+        logging.info("inside DT")
+
         # [B, T*3, D]
         embeddings = self.transformer(
             states=states,

@@ -91,6 +91,7 @@ def run_rollouts(
     agent,
     config: ConfigDict,
     env: Environment,
+    env_id: str,
     action_dim: int,
     wandb_run=None,
     prompts=None,
@@ -111,7 +112,7 @@ def run_rollouts(
 
     if config.trainer == "vae":
         rollout_fn = eval_rollout_with_belief_model
-    elif "dt" in config.model.name:
+    elif "dt" in config.model.name or "icl" in config.model.name:
         rollout_fn = eval_rollout_dt
         rollout_kwargs["max_traj_len"] = 100
     else:
@@ -216,7 +217,9 @@ def run_rollouts(
 
             videos = np.array(videos)
             videos = einops.rearrange(videos, "n t h w c -> n t c h w")
-            wandb_run.log({"eval_rollouts": wandb.Video(np.array(videos), fps=5)})
+            wandb_run.log(
+                {f"{env_id}/eval_rollouts": wandb.Video(np.array(videos), fps=5)}
+            )
 
     return eval_metrics, (trajectories, actions, successes)
 
@@ -311,6 +314,7 @@ def eval_rollout_dt(
             prompt = None
         else:
             prompt = None
+            traj_index = None
 
         # first return-to-go is the desired return value
         # this is probably environment / task specific
@@ -333,7 +337,10 @@ def eval_rollout_dt(
             observations = observations.at[0, stats.length].set(observation)
             mask = mask.at[0, stats.length].set(1.0)
 
-            if config.model.policy.demo_conditioning:
+            if (
+                config.model.policy.demo_conditioning
+                and config.data.num_trajs_per_batch > 1
+            ):
                 traj_index = traj_index.at[0, stats.length].set(
                     config.data.num_trajs_per_batch - 1
                 )

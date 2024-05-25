@@ -35,6 +35,7 @@ class EnvParams(struct.PyTreeNode):
     random_color: bool = struct.field(pytree_node=False, default=False)
     new_color: bool = struct.field(pytree_node=False, default=False)
     shift_doors: bool = struct.field(pytree_node=False, default=False)
+    show_task: bool = struct.field(pytree_node=False, default=True)
 
 
 class GoToDoor(CustomXLandMiniGrid):
@@ -131,7 +132,9 @@ class GoToDoor(CustomXLandMiniGrid):
         )
 
         # also spawn a ball in the environment to indicate which door is the goal
-        ball = TILES_REGISTRY[Tiles.BALL, goal_tile[-1]]
+        if params.show_task:
+            ball = TILES_REGISTRY[Tiles.BALL, goal_tile[-1]]
+
         mask = jnp.ones((grid.shape[0], grid.shape[1]), dtype=jnp.bool_)
         mask = mask.at[adj_tile[0], adj_tile[1]].set(
             False
@@ -142,9 +145,14 @@ class GoToDoor(CustomXLandMiniGrid):
 
         mask = mask.at[int(params.height // 2), int(params.width // 2)].set(False)
 
-        ball_coords, agent_coords = sample_coordinates(keys[3], grid, num=2, mask=mask)
-        # grid = grid.at[ball_coords[0], ball_coords[1]].set(ball)
-        grid = grid.at[int(params.height // 2), int(params.width // 2)].set(ball)
+        if params.show_task:
+            ball_coords, agent_coords = sample_coordinates(
+                keys[3], grid, num=2, mask=mask
+            )
+            # grid = grid.at[ball_coords[0], ball_coords[1]].set(ball)
+            grid = grid.at[int(params.height // 2), int(params.width // 2)].set(ball)
+        else:
+            agent_coords = sample_coordinates(keys[3], grid, num=1, mask=mask)[0]
 
         agent = AgentState(position=agent_coords, direction=sample_direction(keys[4]))
         state = State(
