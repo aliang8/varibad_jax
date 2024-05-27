@@ -18,59 +18,62 @@ from collections.abc import Generator
 from torch.utils.data import Dataset, DataLoader
 
 
-def merge_trajectories(data, indices: jnp.ndarray, pad_to: int = 0):
+def merge_trajectories(data, indices: np.ndarray, pad_to: int = 0):
     if pad_to == 0:
         # just concatenate the trajectories together without padding
         for k, v in data.items():
             if isinstance(v, dict):
                 for kk, vv in v.items():
-                    data[k][kk] = jnp.concatenate([vv[i] for i in indices])
+                    data[k][kk] = np.concatenate([vv[i] for i in indices])
             else:
-                data[k] = jnp.concatenate([v[i] for i in indices])
-
+                data[k] = np.concatenate([v[i] for i in indices])
+        return data
     else:
+        selected_data = {}
         for k, v in data.items():
             if isinstance(v, dict):
+                selected_data[k] = {}
                 for kk, vv in v.items():
-                    data[k][kk] = [vv[i] for i in indices]
+                    selected_data[k][kk] = [vv[i] for i in indices]
             else:
-                data[k] = [v[i] for i in indices]
+                selected_data[k] = [v[i] for i in indices]
 
         # pad everything to the max length
-        data = jtu.tree_map(
+        padded_data = jtu.tree_map(
             lambda x: jnp.pad(
                 x,
                 ((0, pad_to - x.shape[0]), *[(0, 0)] * (len(x.shape) - 1)),
                 mode="constant",
             ),
-            data,
+            selected_data,
         )
 
         # stack the trajectories together
         stacked_data = {}
-        for k, v in data.items():
+        for k, v in padded_data.items():
             if isinstance(v, dict):
                 stacked_data[k] = {}
                 for kk, vv in v.items():
-                    stacked_data[k][kk] = jnp.stack(vv)
+                    stacked_data[k][kk] = np.stack(vv)
             else:
-                stacked_data[k] = jnp.stack(v)
+                stacked_data[k] = np.stack(v)
 
-        data = stacked_data
-    return data
+        return stacked_data
 
 
 def split_data_into_trajectories(data):
     dones = data["dones"]
     # get indices where the trajectory ends
-    traj_ends = jnp.where(dones)[0]
-    traj_ends = jnp.concatenate([jnp.array([-1]), traj_ends])
+    traj_ends = np.where(dones)[0]
+    traj_ends = np.concatenate([np.array([-1]), traj_ends])
     traj_lens = traj_ends[1:] - traj_ends[:-1]
     max_len = int(traj_lens.max())
-    data["mask"] = jnp.ones_like(data["dones"])
+    data["mask"] = np.ones_like(data["dones"])
+    print("max_len: ", max_len)
+    print("num trajs: ", len(traj_lens))
 
     # split each data by done
-    data = jtu.tree_map(lambda x: jnp.split(x, jnp.where(dones)[0] + 1)[:-1], data)
+    data = jtu.tree_map(lambda x: np.split(x, np.where(dones)[0] + 1)[:-1], data)
     return data, max_len
 
 
@@ -84,31 +87,10 @@ class Batch:
     tasks: jnp.ndarray = None
     mask: jnp.ndarray = None
     successes: jnp.ndarray = None
+    timestep: jnp.ndarray = None
     traj_index: jnp.ndarray = None
     labelled: jnp.ndarray = None
 
-
-# def load_procgen_data(data_dir: str, env_id: str, stage: str = "train"):
-#     data_path = Path(data_dir) / env_id / stage
-
-#     data_files = list(data_path.glob("*.npz"))
-#     logging.info(f"num data files: {len(data_files)}")
-
-#     dataset = dd(list)
-
-#     for f in tqdm.tqdm(data_files):
-#         data = np.load(f)
-#         dataset["observations"].append(data["obs"])
-#         dataset["actions"].append(data["ta"])
-#         dataset["rewards"].append(data["rewards"])
-#         dataset["dones"].append(data["done"])
-#         dataset["next_observations"].append(data["obs"])
-
-#     for k in dataset.keys():
-#         dataset[k] = np.concatenate(dataset[k], axis=0)
-#         logging.info(f"{k}: {dataset[k].shape}")
-
-#     return dataset
 
 import random
 import torch
@@ -161,37 +143,9 @@ class NumpyLoader(data.DataLoader):
         )
 
 
-def _create_tensordict(length: int, obs_depth) -> TensorDict:
-    return TensorDict(
-        {
-            "obs": torch.zeros(length, obs_depth, 64, 64, dtype=torch.uint8),
-            "ta": torch.zeros(length, dtype=torch.long),
-            "done": torch.zeros(length, dtype=torch.bool),
-            "rewards": torch.zeros(length),
-            "ep_returns": torch.zeros(length),
-            "values": torch.zeros(length),
-        },
-        batch_size=length,
-        device="cpu",
-    )
-
-
-def _unfold_td(td: TensorDictBase, seq_len: int, unfold_step: int = 1):
-    """
-    Unfolds the given TensorDict along the time dimension.
-    The unfolded TensorDict shares its underlying storage with the original TensorDict.
-    """
-    res_batch_size = (td.batch_size[0] - seq_len + 1,)
-    td = td.apply(
-        lambda x: x.unfold(0, seq_len, unfold_step).movedim(-1, 1),
-        batch_size=res_batch_size,
-    )
-    return td
-
-
-def normalize_obs(obs: torch.Tensor) -> torch.Tensor:
-    assert not torch.is_floating_point(obs)
-    return obs.float() / 255 - 0.5
+def normalize_obs(obs: np.ndarray) -> np.ndarray:
+    # assert not torch.is_floating_point(obs)
+    return obs.astype(np.float64) / 255 - 0.5
 
 
 class DataStager:
@@ -201,23 +155,27 @@ class DataStager:
         chunk_len: int,
         obs_depth: int = 3,
         seq_len: int = 2,
-        num_transitions: int = -1,
     ) -> None:
 
         self.seq_len = seq_len
-        self.td: TensorDict = None  # type: ignore
+        self.np_d = None  # type: ignore
         self.obs_depth = obs_depth
         self.files = files
         self.chunk_len = chunk_len
         random.shuffle(self.files)
 
-        self.td = _create_tensordict(self.chunk_len * len(self.files), self.obs_depth)
-        self.td_unfolded = _unfold_td(self.td, self.seq_len, 1)
-
-        if num_transitions != -1:
-            self.td_unfolded = self.td_unfolded[:num_transitions]
-
-        logging.info(f"num transitions: {len(self.td_unfolded['obs'])}")
+        num_transitions = self.chunk_len * len(self.files)
+        self.np_d = {
+            "observations": np.zeros(
+                (num_transitions, 64, 64, self.obs_depth), dtype=np.uint8
+            ),
+            "actions": np.zeros(num_transitions, dtype=np.int64),
+            "dones": np.zeros(num_transitions, dtype=np.int64),
+            "rewards": np.zeros(num_transitions),
+            "next_observations": np.zeros(
+                (num_transitions, 64, 64, self.obs_depth), dtype=np.uint8
+            ),
+        }
 
         self._load()
 
@@ -226,13 +184,23 @@ class DataStager:
             self._load_chunk(path, i)
 
     def _load_chunk(self, path: Path, i: int):
+        keys_map = {
+            "observations": "obs",
+            "actions": "ta",
+            "dones": "done",
+            "rewards": "rewards",
+            "next_observations": "obs",
+        }
+
         data = np.load(path)
-        for k in self.td.keys():
-            v = torch.from_numpy(data[k])
-            if k == "obs":
-                v = v.permute(0, 3, 1, 2)
+        for k in self.np_d.keys():
+            v = data[keys_map[k]]
+            if k == "observations" or k == "next_observations":
+                v = normalize_obs(v)
+
+            # print(v.shape, self.chunk_len)
             assert len(v) == self.chunk_len, v.shape
-            self.td[k][i * self.chunk_len : (i + 1) * self.chunk_len] = v
+            self.np_d[k][i * self.chunk_len : (i + 1) * self.chunk_len] = v
 
     def get_iter(
         self,
@@ -240,70 +208,55 @@ class DataStager:
         shuffle=True,
         drop_last=True,
     ) -> Generator[TensorDict, None, None]:
+        def collate_fn(batch):
+            batch = batch.to_dict()
+            return tree_map(lambda x: x.numpy(), batch)
+
         dataloader = DataLoader(
-            self.td_unfolded,
+            self.np_d_unfolded,
             batch_size=batch_size,
             shuffle=shuffle,
             drop_last=drop_last,
-            collate_fn=lambda x: x,
+            collate_fn=collate_fn,
         )
-        # dataloader = NumpyLoader(
-        #     self.td_unfolded,
-        #     batch_size=batch_size,
-        #     shuffle=shuffle,
-        #     drop_last=drop_last,
-        # )
-        # data = next(iter(dataloader))
-
-        while True:
-            for batch in dataloader:
-                batch["obs"] = normalize_obs(batch["obs"])
-                batch["obs"] = einops.rearrange(batch["obs"], "B T C H W -> B T H W C")
-
-                numpy_batch = Batch(
-                    **{
-                        "observations": batch["obs"].numpy(),
-                        "actions": batch["ta"].numpy(),
-                        "rewards": batch["rewards"].numpy(),
-                        "dones": batch["done"].numpy(),
-                        "next_observations": batch["obs"].numpy(),
-                    }
-                )
-                yield numpy_batch
+        return dataloader
 
 
 def load_data(config: ConfigDict, rng: jax.random.PRNGKey):
     data_dir = Path(config.root_dir) / config.data.data_dir
 
-    if config.env.env_name == "procgen":
-        train_data = DataStager(
-            files=list(
-                (
-                    data_dir / "procgen" / "expert_data" / config.env.env_id / "train"
-                ).glob("*.npz")
-            ),
-            chunk_len=TRAIN_CHUNK_LEN,
-            seq_len=2 + config.data.context_len,
-            num_transitions=config.data.num_transitions,
-        )
-        eval_data = DataStager(
-            files=list(
-                (
-                    data_dir / "procgen" / "expert_data" / config.env.env_id / "test"
-                ).glob("*.npz")
-            ),
-            chunk_len=TEST_CHUNK_LEN,
-            seq_len=2 + config.data.context_len,
-        )
-        return train_data, eval_data
-
     # load dataset
     training_env_id = config.env.env_id
-    dataset_name = f"{config.data.dataset_name}_eid-{training_env_id}_n-{config.num_rollouts_collect}"
 
+    if config.env.env_name == "procgen":
+        # load each chunk of data separately
+        dataset_name = (
+            Path("procgen") / "expert_data" / training_env_id / "train" / "chunks"
+        )
+        files = list((data_dir / dataset_name).glob("*.npz"))
+
+        all_data = {
+            "observations": np.zeros((500 * 10, 2515, 64, 64, 3), dtype=np.uint8),
+            "actions": np.zeros((500 * 10, 2515), dtype=np.int64),
+            "dones": np.zeros((500 * 10, 2515), dtype=np.int64),
+            "rewards": np.zeros((500 * 10, 2515)),
+            "mask": np.zeros((500 * 10, 2515)),
+            "next_observations": np.zeros((500 * 10, 2515, 64, 64, 3), dtype=np.uint8),
+        }
+        for i, f in enumerate(tqdm.tqdm(files, desc="loading chunks")):
+            data = np.load(f)
+            for k, v in tqdm.tqdm(data.items(), desc="loading data"):
+                all_data[k][i * 500 : (i + 1) * 500] = v
+
+        import ipdb
+
+        ipdb.set_trace()
+
+    dataset_name = f"{config.data.dataset_name}_eid-{training_env_id}_n-{config.num_rollouts_collect}"
     file = "traj_dataset.pkl"
     data_path = data_dir / dataset_name / file
     logging.info(f"loading {config.data.data_type} data from {data_path}")
+
     with open(data_path, "rb") as f:
         data = pickle.load(f)
 
@@ -512,6 +465,8 @@ class TrajectoryDataset(Dataset):
         data["traj_index"] = np.zeros(self.max_traj_len, dtype=np.int32)
         traj1_len = data["mask"].sum()
         data["traj_index"][:traj1_len] = 0
+        data["timestep"] = np.zeros(self.max_traj_len, dtype=np.int32)
+        data["timestep"][:traj1_len] = np.arange(traj1_len)
 
         if self.data_cfg.num_trajs_per_batch > 1:
             for indx in range(self.data_cfg.num_trajs_per_batch - 1):
@@ -550,6 +505,9 @@ class TrajectoryDataset(Dataset):
                         # print(k, data[k].shape)
 
                 data["traj_index"][traj1_len : traj1_len + other_traj_len] = indx + 1
+                data["timestep"][traj1_len : traj1_len + other_traj_len] = np.arange(
+                    other_traj_len
+                )
 
         fn = lambda x: torch.Tensor(x)
         data = tree_map(fn, data)

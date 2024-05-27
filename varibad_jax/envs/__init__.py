@@ -127,6 +127,7 @@ register_xminigrid(
     width=9,
     view_size=3,
     new_color=True,
+    random_color=True,
 )
 
 register_xminigrid(
@@ -136,6 +137,17 @@ register_xminigrid(
     width=9,
     view_size=3,
     shift_doors=True,
+    random_color=True,
+)
+
+register_xminigrid(
+    id="MiniGrid-GoToDoorNoBall-R1-9x9-3",
+    entry_point="varibad_jax.envs.xland.go_to_door:GoToDoor",
+    height=9,
+    width=9,
+    view_size=3,
+    show_task=False,
+    random_color=True,
 )
 
 

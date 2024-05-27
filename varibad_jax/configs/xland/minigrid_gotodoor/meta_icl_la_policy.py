@@ -7,7 +7,7 @@ def get_config(config_string: str = None):
     config_string = "dt_lam_agent-xland-9x9"
     config = get_base_config(config_string)
 
-    config.exp_name = "dt_lam_agent"
+    config.exp_name = "dt_lam_agent_1"
 
     config.data.data_type = "trajectories"
     config.data.context_len = 0
@@ -21,6 +21,7 @@ def get_config(config_string: str = None):
     config.model.lam_ckpt = "/scr/aliang80/varibad_jax/varibad_jax/results/lam/nt-9000/eid-MiniGrid-GoToDoorRandomColors-R1-9x9-3/en-xland/b-0.05/code_d-64/n_codes-60/usd-True"
     config.model.latent_action_decoder_ckpt = "/scr/aliang80/varibad_jax/varibad_jax/ray_results/action_decoder/action_decoder/nt-20/eid-MiniGrid-GoToDoorRandomColors-R1-9x9-3/en-xland/"
     config.model.idm_nt = 20
+    config.model.policy.demo_conditioning = True
 
     config.embedding_dim = 128
     config.data.batch_size = 8

@@ -109,13 +109,17 @@ class OfflineTrainer(BaseTrainer):
 
         #     ipdb.set_trace()
 
+        self.eval_dataloaders = {}
+
         if self.config.env.env_name == "procgen":
             self.train_dataloader = self.train_dataset.get_iter(
                 self.config.data.batch_size
             )
-            self.eval_dataloader = self.eval_dataset.get_iter(
-                self.config.data.batch_size
-            )
+            for eval_env_id in self.eval_dataset.keys():
+                self.eval_dataloaders[eval_env_id] = self.eval_dataset.get_iter(
+                    self.config.data.batch_size
+                )
+
             # number of batches ot iterate over each epoch of training
             self.num_train_batches = 50
             self.num_eval_batches = 2
@@ -125,8 +129,6 @@ class OfflineTrainer(BaseTrainer):
                 self.train_dataset, data_cfg=config.data
             )
             logging.info(f"Number of train batches: {len(self.train_dataloader)}")
-
-            self.eval_dataloaders = {}
             for eval_env_id, eval_dataset in self.eval_dataset.items():
                 if len(eval_dataset["observations"]) > 0:
                     eval_dataloader = create_data_loader(
@@ -193,6 +195,7 @@ class OfflineTrainer(BaseTrainer):
         if self.config.data.holdout_tasks or (
             "policy" in self.config.model and self.config.model.policy.demo_conditioning
         ):
+            logging.info("sampling new prompts for evaluation")
             for env_id, prompt_dataset in self.prompt_dataset.items():
                 data_cfg = copy.deepcopy(self.config.data)
                 data_cfg.num_trajs_per_batch -= 1

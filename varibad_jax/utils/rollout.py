@@ -310,6 +310,10 @@ def eval_rollout_dt(
             traj_index[:, :prompt_steps] = filtered_prompt["traj_index"][:prompt_steps]
             traj_index = jnp.array(traj_index)
 
+            dt_timestep = np.zeros((1, max_traj_len))
+            dt_timestep[:, :prompt_steps] = filtered_prompt["timestep"][:prompt_steps]
+            dt_timestep = jnp.array(dt_timestep)
+
             start_index = prompt_steps
             prompt = None
         else:
@@ -344,6 +348,7 @@ def eval_rollout_dt(
                 traj_index = traj_index.at[0, stats.length].set(
                     config.data.num_trajs_per_batch - 1
                 )
+                dt_timestep = dt_timestep.at[0, stats.length].set(step)
 
             policy_output, _ = jit_apply(
                 policy_rng,
@@ -353,6 +358,7 @@ def eval_rollout_dt(
                 rewards=rewards if config.model.policy.use_rtg else None,
                 mask=mask,
                 prompt=prompt,
+                timestep=dt_timestep,
                 traj_index=traj_index,
                 is_training=False,
             )

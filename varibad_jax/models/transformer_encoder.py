@@ -181,6 +181,7 @@ class SARTransformerEncoder(hk.Module):
         mask: jax.Array,  # [T, B]
         rewards: jax.Array = None,  # [T, B, 1]
         prompt: jax.Array = None,
+        timestep: jax.Array = None,  # [T, B]
         traj_index: jax.Array = None,
         is_training: bool = True,
         **kwargs,
@@ -215,7 +216,10 @@ class SARTransformerEncoder(hk.Module):
         if prompt is not None:
             prompt_embed = self.prompt_embed(prompt)
 
-        timestep_embed = self.timestep_embed(jnp.arange(T)[None].repeat(B, axis=0))
+        if timestep is None:
+            timestep = jnp.arange(T)[None].repeat(B, axis=0)
+
+        timestep_embed = self.timestep_embed(timestep.astype(jnp.int32))
 
         if rewards is not None:
             reward_embed = self.reward_embed(rewards)

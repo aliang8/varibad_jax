@@ -29,6 +29,7 @@ class DecisionTransformerAgent(BaseAgent):
         t, bs = 2, 2
         dummy_states = np.zeros((bs, t, *self.observation_shape), dtype=np.float32)
         dummy_actions = np.zeros((bs, t, self.input_action_dim))
+        dummy_timesteps = np.zeros((bs, t))
 
         if self.config.policy.use_rtg:
             dummy_rewards = np.zeros((bs, t, 1))
@@ -52,6 +53,7 @@ class DecisionTransformerAgent(BaseAgent):
             rewards=dummy_rewards,
             mask=dummy_mask,
             prompt=dummy_prompt,
+            timestep=dummy_timesteps,
             traj_index=dummy_traj_index,
             is_training=True,
         )
@@ -98,6 +100,7 @@ class DecisionTransformerAgent(BaseAgent):
             rewards=rewards,
             mask=mask,
             prompt=prompt,
+            timestep=batch.timestep,
             traj_index=batch.traj_index,
             is_training=is_training,
         )

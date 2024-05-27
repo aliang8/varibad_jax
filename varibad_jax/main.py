@@ -80,11 +80,11 @@ psh = {
 
 # run with ray tune
 param_space = {
-    "model": {"idm_nt": tune.grid_search([10, 20])},
+    "model": {"idm_nt": tune.grid_search([20])},
     # "data": {"num_trajs": tune.grid_search([10, 15, 20, 50, 75])},
     "data": {"num_trajs": tune.grid_search([50, 100, 500, 1000])},
     # "data": {"num_trajs": tune.grid_search([10, 20, 50, 100, 500, 1000])},
-    "seed": tune.grid_search([0, 1, 2]),
+    "seed": tune.grid_search([2]),
     # "data": {"num_trajs": tune.grid_search([100, 500, 1000, 5000])},
     # "data": {"num_trajs_per_batch": tune.grid_search([2, 3, 4])},
     # "model": {"entropy_coeff": tune.grid_search([0.02, 0.05, 0.1])},
@@ -171,7 +171,7 @@ def create_exp_name(param_space, config):
     jtu.tree_map_with_path(add_to_trial_str, config["keys_to_include"])
 
     trial_str = trial_str[:-1]
-    print("trial_str: ", trial_str)
+    # print("trial_str: ", trial_str)
     return trial_str
 
 

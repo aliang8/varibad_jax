@@ -11,8 +11,9 @@ def get_config(config_string: str = None):
 
     # config.env.env_id = "MiniGrid-GoToDoor-R1-9x9-3"
     # config.env.env_id = "MiniGrid-GoToDoorDiffColor-R1-9x9-3"
-    # config.env.env_id = "MiniGrid-GoToDoorShiftDoors-R1-9x9-3"
-    config.env.env_id = "MiniGrid-GoToDoorRandomColors-R1-9x9-3"
+    config.env.env_id = "MiniGrid-GoToDoorShiftDoors-R1-9x9-3"
+    # config.env.env_id = "MiniGrid-GoToDoorRandomColors-R1-9x9-3"
+    # config.env.env_id = "MiniGrid-GoToDoorNoBall-R1-9x9-3"
 
     config.env.ruleset_id = -1
     config.env.num_episodes_per_rollout = 1
@@ -20,7 +21,8 @@ def get_config(config_string: str = None):
     config.num_frames = 20_000_000
     config.num_evals = 40
     config.env.full_observability = True
-    config.env.eval_env_ids = ["MiniGrid-GoToDoorRandomColors-R1-9x9-3"]
+    # config.env.eval_env_ids = ["MiniGrid-GoToDoorRandomColors-R1-9x9-3"]
+    config.env.eval_env_ids = [config.env.env_id]
 
     config.model.entropy_coeff = 0.05
     config.model.policy.pass_task_to_policy = True

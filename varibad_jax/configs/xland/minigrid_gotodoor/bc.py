@@ -8,7 +8,7 @@ from varibad_jax.configs.xland.minigrid_gotodoor.base import (
 def get_config(config_string: str = None):
     config_string = "bc-xland-9x9"
     config = get_base_config(config_string)
-    config.exp_name = "bc"
+    config.exp_name = "bc_1"
 
     config.data.data_type = "transitions"
     config.data.num_trajs = 1000
