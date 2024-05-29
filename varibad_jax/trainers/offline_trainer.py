@@ -111,36 +111,34 @@ class OfflineTrainer(BaseTrainer):
 
         self.eval_dataloaders = {}
 
-        if self.config.env.env_name == "procgen":
-            self.train_dataloader = self.train_dataset.get_iter(
-                self.config.data.batch_size
-            )
-            for eval_env_id in self.eval_dataset.keys():
-                self.eval_dataloaders[eval_env_id] = self.eval_dataset.get_iter(
-                    self.config.data.batch_size
-                )
+        # if self.config.env.env_name == "procgen":
+        #     self.train_dataloader = self.train_dataset.get_iter(
+        #         self.config.data.batch_size
+        #     )
+        #     for eval_env_id in self.eval_dataset.keys():
+        #         self.eval_dataloaders[eval_env_id] = self.eval_dataset.get_iter(
+        #             self.config.data.batch_size
+        #         )
 
-            # number of batches ot iterate over each epoch of training
-            self.num_train_batches = 50
-            self.num_eval_batches = 2
-            obs_shape = (64, 64, 3)
+        #     # number of batches ot iterate over each epoch of training
+        #     self.num_train_batches = 50
+        #     self.num_eval_batches = 2
+        #     obs_shape = (64, 64, 3)
+        # else:
+        self.train_dataloader = create_data_loader(
+            self.train_dataset, data_cfg=config.data
+        )
+        logging.info(f"Number of train batches: {len(self.train_dataloader)}")
+        for eval_env_id, eval_dataset in self.eval_dataset.items():
+            if len(eval_dataset["observations"]) > 0:
+                eval_dataloader = create_data_loader(eval_dataset, data_cfg=config.data)
+                logging.info(f"Number of eval batches: {len(eval_dataloader)}")
+                self.eval_dataloaders[eval_env_id] = eval_dataloader
+
+        if config.data.data_type == "trajectories":
+            obs_shape = self.train_dataset["observations"].shape[2:]
         else:
-            self.train_dataloader = create_data_loader(
-                self.train_dataset, data_cfg=config.data
-            )
-            logging.info(f"Number of train batches: {len(self.train_dataloader)}")
-            for eval_env_id, eval_dataset in self.eval_dataset.items():
-                if len(eval_dataset["observations"]) > 0:
-                    eval_dataloader = create_data_loader(
-                        eval_dataset, data_cfg=config.data
-                    )
-                    logging.info(f"Number of eval batches: {len(eval_dataloader)}")
-                    self.eval_dataloaders[eval_env_id] = eval_dataloader
-
-            if config.data.data_type == "trajectories":
-                obs_shape = self.train_dataset["observations"].shape[2:]
-            else:
-                obs_shape = self.train_dataset["observations"].shape[1:]
+            obs_shape = self.train_dataset["observations"].shape[1:]
 
         # print batch item shapes
         batch = next(iter(self.train_dataloader))

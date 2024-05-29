@@ -7,7 +7,7 @@ def get_config(config_string: str = None):
     config_string = "dt_lam_agent-xland-9x9"
     config = get_base_config(config_string)
 
-    config.exp_name = "dt_lam_agent_1"
+    config.exp_name = "dt_lam_agent"
 
     config.data.data_type = "trajectories"
     config.data.context_len = 0

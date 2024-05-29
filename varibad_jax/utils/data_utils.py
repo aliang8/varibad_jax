@@ -1,4 +1,5 @@
 from absl import logging
+import time
 import copy
 import math
 import jax
@@ -223,42 +224,28 @@ class DataStager:
 
 
 def load_data(config: ConfigDict, rng: jax.random.PRNGKey):
+    start_data_loading = time.time()
     data_dir = Path(config.root_dir) / config.data.data_dir
 
     # load dataset
     training_env_id = config.env.env_id
 
     if config.env.env_name == "procgen":
-        # load each chunk of data separately
-        dataset_name = (
-            Path("procgen") / "expert_data" / training_env_id / "train" / "chunks"
-        )
-        files = list((data_dir / dataset_name).glob("*.npz"))
+        dataset_name = Path("procgen") / "expert_data" / training_env_id / "train"
+        file = "train_trajs.npz"
+    else:
+        dataset_name = f"{config.data.dataset_name}_eid-{training_env_id}_n-{config.num_rollouts_collect}"
+        file = "traj_dataset.pkl"
 
-        all_data = {
-            "observations": np.zeros((500 * 10, 2515, 64, 64, 3), dtype=np.uint8),
-            "actions": np.zeros((500 * 10, 2515), dtype=np.int64),
-            "dones": np.zeros((500 * 10, 2515), dtype=np.int64),
-            "rewards": np.zeros((500 * 10, 2515)),
-            "mask": np.zeros((500 * 10, 2515)),
-            "next_observations": np.zeros((500 * 10, 2515, 64, 64, 3), dtype=np.uint8),
-        }
-        for i, f in enumerate(tqdm.tqdm(files, desc="loading chunks")):
-            data = np.load(f)
-            for k, v in tqdm.tqdm(data.items(), desc="loading data"):
-                all_data[k][i * 500 : (i + 1) * 500] = v
-
-        import ipdb
-
-        ipdb.set_trace()
-
-    dataset_name = f"{config.data.dataset_name}_eid-{training_env_id}_n-{config.num_rollouts_collect}"
-    file = "traj_dataset.pkl"
     data_path = data_dir / dataset_name / file
     logging.info(f"loading {config.data.data_type} data from {data_path}")
 
-    with open(data_path, "rb") as f:
-        data = pickle.load(f)
+    if config.env.env_name == "procgen":
+        data = np.load(data_path, allow_pickle=True)
+        data = dict(data)
+    else:
+        with open(data_path, "rb") as f:
+            data = pickle.load(f)
 
     num_data = data["observations"].shape[0]
     logging.info(f"num data: {num_data}")
@@ -267,7 +254,12 @@ def load_data(config: ConfigDict, rng: jax.random.PRNGKey):
     eval_datasets = {}
     for env_id in config.env.eval_env_ids:
         if env_id != training_env_id:
-            dataset_name = f"{config.data.dataset_name}_eid-{env_id}_n-{config.num_rollouts_collect}"
+            if config.env.env_name == "procgen":
+                dataset_name = Path("procgen") / "expert_data" / env_id / "test"
+                file = "test_trajs.npz"
+            else:
+                dataset_name = f"{config.data.dataset_name}_eid-{env_id}_n-{config.num_rollouts_collect}"
+
             eval_dataset_path = data_dir / dataset_name / file
 
             if not eval_dataset_path.exists():
@@ -275,8 +267,12 @@ def load_data(config: ConfigDict, rng: jax.random.PRNGKey):
                 continue
 
             logging.info(f"loading eval data from {eval_dataset_path}")
-            with open(eval_dataset_path, "rb") as f:
-                eval_data = pickle.load(f)
+            if config.env.env_name == "procgen":
+                data = np.load(eval_dataset_path, allow_pickle=True)
+                data = dict(data)
+            else:
+                with open(eval_dataset_path, "rb") as f:
+                    eval_data = pickle.load(f)
 
             if isinstance(eval_data["observations"], list):
                 num_eval_data = len(eval_data["observations"])
@@ -340,8 +336,13 @@ def load_data(config: ConfigDict, rng: jax.random.PRNGKey):
         train_data["labelled"] = labelled
 
     if config.data.data_type != "trajectories":
-        fn = lambda x: x[train_data["mask"]]
-        train_data = jtu.tree_map(fn, train_data)
+
+        def apply_mask(x):
+            flatten_first_two = x.reshape(-1, *x.shape[2:])
+            mask = train_data["mask"].reshape(-1)
+            return flatten_first_two[mask]
+
+        train_data = jtu.tree_map(apply_mask, train_data)
 
     eval_data = {}
     eval_data[training_env_id] = subsample_data(data, eval_indices)
@@ -355,8 +356,14 @@ def load_data(config: ConfigDict, rng: jax.random.PRNGKey):
 
     if config.data.data_type != "trajectories":
         for env_id, env_eval_data in eval_data.items():
-            fn = lambda x: x[env_eval_data["mask"]]
-            eval_data[env_id] = jtu.tree_map(fn, eval_data[env_id])
+            eval_d = eval_data[env_id]
+
+            def apply_mask(x):
+                flatten_first_two = x.reshape(-1, *x.shape[2:])
+                mask = eval_d["mask"].reshape(-1)
+                return flatten_first_two[mask]
+
+            eval_data[env_id] = jtu.tree_map(apply_mask, eval_d)
 
     prompt_data = {}
     if config.data.data_type == "trajectories":
@@ -364,6 +371,7 @@ def load_data(config: ConfigDict, rng: jax.random.PRNGKey):
         for env_id, env_eval_data in eval_datasets.items():
             prompt_data[env_id] = env_eval_data
 
+    logging.info(f"loading data took: {time.time() - start_data_loading}")
     # logic for creating an unseen set of heldout tasks
     # assuming tasks are the same over timesteps
     # if config.data.holdout_tasks:

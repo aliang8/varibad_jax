@@ -12,8 +12,8 @@ def get_config(config_string: str = None):
     config.env.env_id = "MiniGrid-GoToDoorRandomColors-R1-9x9-3"
     config.env.eval_env_ids = [
         "MiniGrid-GoToDoorRandomColors-R1-9x9-3",
-        # "MiniGrid-GoToDoorDiffColor-R1-9x9-3",
-        # "MiniGrid-GoToDoorShiftDoors-R1-9x9-3",
+        "MiniGrid-GoToDoorDiffColor-R1-9x9-3",
+        "MiniGrid-GoToDoorShiftDoors-R1-9x9-3",
         "MiniGrid-GoToDoorNoBall-R1-9x9-3",
     ]
     # config.env.eval_env_id = "MiniGrid-GoToDoor-R1-9x9-3"

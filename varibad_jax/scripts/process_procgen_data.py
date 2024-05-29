@@ -31,26 +31,36 @@ if __name__ == "__main__":
         num_trajs = len(trajs["observations"])
         print(f"num trajs: {num_trajs}")
 
+        # truncate each trajectory to desired length
+        truncate_len = 200
+        for k in trajs.keys():
+            for traj in range(len(trajs[k])):
+                trajs[k][traj] = trajs[k][traj][:truncate_len]
+
         # number of trajectories per chunk
         traj_chunk_size = 500
 
-        chunks_dir = split_data_dir / "chunks"
-        chunks_dir.mkdir(exist_ok=True)
+        # chunks_dir = split_data_dir / "chunks"
+        # chunks_dir.mkdir(exist_ok=True)
 
-        # need to save the trajectories in chunks and compress the data
-        for indx, start in enumerate(range(0, num_trajs, traj_chunk_size)):
-            chunk = np.arange(start, min(start + traj_chunk_size, num_trajs))
-            chunk_file = chunks_dir / f"chunk_{indx}.npz"
+        # # need to save the trajectories in chunks and compress the data
+        # for indx, start in enumerate(range(0, num_trajs, traj_chunk_size)):
+        #     chunk = np.arange(start, min(start + traj_chunk_size, num_trajs))
+        #     chunk_file = chunks_dir / f"chunk_{indx}.npz"
 
-            chunk_traj_data = merge_trajectories(
-                trajs,
-                indices=chunk,
-                pad_to=max_len,
-            )
+        #     chunk_traj_data = merge_trajectories(
+        #         trajs,
+        #         indices=chunk,
+        #         pad_to=max_len,
+        #     )
 
-            with open(chunk_file, "wb") as f:
-                np.savez_compressed(f, **chunk_traj_data)
+        # with open(chunk_file, "wb") as f:
+        #     np.savez_compressed(f, **chunk_traj_data)
 
-            print(f"chunk saved to: {chunk_file}")
+        # print(f"chunk saved to: {chunk_file}")
+
+        trajs = merge_trajectories(trajs, indices=np.arange(num_trajs), pad_to=200)
+        with open(split_data_dir / f"{split}_trajs.npz", "wb") as f:
+            np.savez_compressed(f, **trajs)
 
         print(f"done processing {split} data")

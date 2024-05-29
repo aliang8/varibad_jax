@@ -7,8 +7,8 @@ def get_config(config_string: str = None):
     config_string = "lam_agent-xland-9x9"
     config = get_base_config(config_string)
 
-    # config.exp_name = "lam_agent"
-    config.exp_name = "la_bc_1"
+    config.exp_name = "lam_agent"
+    # config.exp_name = "la_bc_1"
     config.data.data_type = "lapo"
     config.data.context_len = 0
     config.data.num_trajs = 500

@@ -7,7 +7,7 @@ def get_config(config_string: str = None):
     config_string = "vpt_bc-xland-9x9"
     config = get_base_config(config_string)
 
-    config.exp_name = "vpt_bc_1"
+    config.exp_name = "vpt_bc"
 
     config.data.data_type = "lapo"
     config.data.context_len = 0

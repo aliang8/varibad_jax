@@ -84,7 +84,7 @@ param_space = {
     # "data": {"num_trajs": tune.grid_search([10, 15, 20, 50, 75])},
     "data": {"num_trajs": tune.grid_search([50, 100, 500, 1000])},
     # "data": {"num_trajs": tune.grid_search([10, 20, 50, 100, 500, 1000])},
-    "seed": tune.grid_search([2]),
+    "seed": tune.grid_search([0]),
     # "data": {"num_trajs": tune.grid_search([100, 500, 1000, 5000])},
     # "data": {"num_trajs_per_batch": tune.grid_search([2, 3, 4])},
     # "model": {"entropy_coeff": tune.grid_search([0.02, 0.05, 0.1])},
