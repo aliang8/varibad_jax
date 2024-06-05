@@ -76,6 +76,7 @@ class TransformerEncoder(hk.Module):
         attn_size: int,
         dropout_rate: float,
         widening_factor: int = 4,
+        causal: bool = True,
         **kwargs,
     ):
         super().__init__()
@@ -84,6 +85,7 @@ class TransformerEncoder(hk.Module):
         self.attn_size = attn_size
         self.dropout_rate = dropout_rate
         self.widening_factor = widening_factor
+        self.causal = causal
 
         initializer = hk.initializers.VarianceScaling(2 / self.num_layers)
 
@@ -116,8 +118,10 @@ class TransformerEncoder(hk.Module):
 
         # Compute causal mask for autoregressive sequence modelling.
         mask = mask[:, None, None, :]  # [B, H=1, T'=1, T]
-        causal_mask = np.tril(np.ones((1, 1, seq_len, seq_len)))  # [B=1, H=1, T, T]
-        mask = mask * causal_mask  # [B, H=1, T, T]
+
+        if self.causal:
+            causal_mask = np.tril(np.ones((1, 1, seq_len, seq_len)))  # [B=1, H=1, T, T]
+            mask = mask * causal_mask  # [B, H=1, T, T]
 
         h = embeddings
         for i, layer in enumerate(self.layers):

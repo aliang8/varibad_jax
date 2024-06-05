@@ -14,8 +14,10 @@ def get_config(config_string: str = None):
     config.data.num_trajs = 20
 
     config.model.use_lr_scheduler = False
-    config.model.latent_action_dim = 64
-    config.model.lam_ckpt = "/scr/aliang80/varibad_jax/varibad_jax/results/lam/nt-9000/eid-MiniGrid-GoToDoorRandomColors-R1-9x9-3/en-xland/b-0.05/code_d-64/n_codes-60/usd-True"
+    config.model.latent_action_dim = 128
+    # config.model.lam_ckpt = "/scr/aliang80/varibad_jax/varibad_jax/results/lam/nt-9000/eid-MiniGrid-GoToDoorRandomColors-R1-9x9-3/en-xland/b-0.05/code_d-64/n_codes-60/usd-True"
+
+    config.model.lam_ckpt = "/scr/aliang80/varibad_jax/varibad_jax/results/test/al-False/nt-9000/eid-MiniGrid-GoToDoorRandomColors-R1-9x9-3/en-xland/b-0.05/code_d-128/n_codes-60/usd-True"
 
     config.num_evals = 20
     config.num_epochs = 2000

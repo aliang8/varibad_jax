@@ -24,7 +24,7 @@ from varibad_jax.trainers.meta_trainer import MetaRLTrainer
 from varibad_jax.trainers.offline_trainer import OfflineTrainer
 from varibad_jax.trainers.rl_trainer import RLTrainer
 
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.01"
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.5"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 _CONFIG = config_flags.DEFINE_config_file("config")
 
@@ -74,13 +74,14 @@ psh = {
             "num_codes": "n_codes",
             "code_dim": "code_d",
             "use_state_diff": "usd",
+            "idm_scale": "ids",
         },
     },
 }
 
 # run with ray tune
 param_space = {
-    "model": {"idm_nt": tune.grid_search([20])},
+    # "model": {"idm_nt": tune.grid_search([20])},
     # "data": {"num_trajs": tune.grid_search([10, 15, 20, 50, 75])},
     "data": {"num_trajs": tune.grid_search([50, 100, 500, 1000])},
     # "data": {"num_trajs": tune.grid_search([10, 20, 50, 100, 500, 1000])},
@@ -93,6 +94,8 @@ param_space = {
 
 
 def train_model_fn(config):
+    os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.5"
+    os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
     trial_dir = train.get_context().get_trial_dir()
     if trial_dir:
         print("Trial dir: ", trial_dir)

@@ -11,16 +11,16 @@ def get_config(config_string: str = None):
     config.exp_name = "bc"
 
     config.data.data_type = "transitions"
-    config.data.num_transitions = 5000
+    config.data.num_trajs = 500
 
     config.model.policy.pass_task_to_policy = False
 
     config.num_evals = 10
-    config.num_epochs = 5000
+    config.num_epochs = 150
 
     config.keys_to_include = {
         "env": {"env_name": 1, "env_id": 1},
-        "data": {"num_transitions": 1},
+        "data": {"num_trajs": 1},
     }
 
     return config

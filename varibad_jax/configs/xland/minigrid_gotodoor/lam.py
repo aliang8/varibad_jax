@@ -12,7 +12,7 @@ def get_config(config_string: str = None):
     config.data.data_type = "lapo"
     config.data.context_len = 0
     config.data.num_trajs = 9000
-    config.data.add_labelling = True
+    config.data.add_labelling = False
     config.data.num_labelled = 10
 
     config.embedding_dim = 256

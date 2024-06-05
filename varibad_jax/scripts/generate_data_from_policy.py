@@ -15,6 +15,7 @@ import json
 import jax.numpy as jnp
 import functools
 import haiku as hk
+import gymnax
 import gymnasium as gym
 import jax.tree_util as jtu
 from ml_collections import ConfigDict, FieldReference, FrozenConfigDict, config_flags
@@ -51,13 +52,15 @@ def main(_):
         config_p = json.load(f)
 
     config_p = ConfigDict(config_p)
+    config_p.env.env_name = config.env.env_name
     print(config_p)
 
     # config_p.env.env_id = "MiniGrid-GoToDoorDiffColor-R1-9x9-3"
     config_p.env.ruleset_id = -1
     envs, env_params = make_envs(**config_p.env, training=False)
-    continuous_actions = not isinstance(envs.action_space, gym.spaces.Discrete)
-
+    continuous_actions = not isinstance(
+        envs.action_space, gym.spaces.Discrete
+    ) and not isinstance(envs.action_space, gymnax.environments.spaces.Discrete)
     if continuous_actions:
         input_action_dim = action_dim = envs.action_space.shape[0]
     else:

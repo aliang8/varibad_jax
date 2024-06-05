@@ -25,10 +25,16 @@ def get_config(config_string: str = None):
     config.run_eval_rollouts = True
 
     config.keys_to_include = {
-        "seed": 1,
         "env": {"env_name": 1, "env_id": 1},
-        "data": {"num_trajs": 1},
-        "model": {"idm_nt": 1},
+        "data": {"num_trajs": 1, "add_labelling": 1},
+        "model": {
+            "idm": {
+                "beta": 1,
+                "num_codes": 1,
+                "code_dim": 1,
+                "use_state_diff": 1,
+            }
+        },
     }
 
     return config

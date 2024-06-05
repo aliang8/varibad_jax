@@ -20,7 +20,8 @@ import einops
 import tqdm
 from functools import partial
 from collections import defaultdict as dd
-from varibad_jax.utils.rollout import run_rollouts, run_rollouts_procgen
+from varibad_jax.utils.rollout import run_rollouts
+from varibad_jax.utils.rollout_procgen import run_rollouts_procgen
 
 from varibad_jax.trainers.base_trainer import BaseTrainer
 import varibad_jax.utils.general_utils as gutl
@@ -110,21 +111,6 @@ class OfflineTrainer(BaseTrainer):
         #     ipdb.set_trace()
 
         self.eval_dataloaders = {}
-
-        # if self.config.env.env_name == "procgen":
-        #     self.train_dataloader = self.train_dataset.get_iter(
-        #         self.config.data.batch_size
-        #     )
-        #     for eval_env_id in self.eval_dataset.keys():
-        #         self.eval_dataloaders[eval_env_id] = self.eval_dataset.get_iter(
-        #             self.config.data.batch_size
-        #         )
-
-        #     # number of batches ot iterate over each epoch of training
-        #     self.num_train_batches = 50
-        #     self.num_eval_batches = 2
-        #     obs_shape = (64, 64, 3)
-        # else:
         self.train_dataloader = create_data_loader(
             self.train_dataset, data_cfg=config.data
         )
@@ -215,7 +201,7 @@ class OfflineTrainer(BaseTrainer):
             train_ep_metrics = dd(list)
             # for _ in range(self.num_train_batches):
             #     batch = next(self.train_dataloader)
-            for batch in self.train_dataloader:
+            for batch in tqdm.tqdm(self.train_dataloader, desc="batches", disable=True):
                 if "info" in batch:
                     del batch["info"]
                 batch = Batch(**batch)
@@ -254,6 +240,7 @@ class OfflineTrainer(BaseTrainer):
         self.eval(epoch=self.config.num_epochs)
 
     def eval(self, epoch: int):
+        logging.info("running evaluation")
         metrics = {}
         for eval_env_id in self.eval_dataloaders.keys():
             eval_metrics = self.eval_env(epoch, eval_env_id)
@@ -276,6 +263,7 @@ class OfflineTrainer(BaseTrainer):
         return metrics
 
     def eval_env(self, epoch: int, eval_env_id: str):
+        logging.info(f"running evaluation for {eval_env_id}")
         eval_metrics = dd(list)
 
         # run on eval batches
@@ -284,16 +272,22 @@ class OfflineTrainer(BaseTrainer):
             #     batch = next(self.eval_dataloader)
 
             eval_dataloader = self.eval_dataloaders[eval_env_id]
-            for batch in eval_dataloader:
+            data_loading_time = time.time()
+            for batch in tqdm.tqdm(eval_dataloader, desc="eval batches"):
+                # logging.info(f"data loading time: {time.time() - data_loading_time}")
                 if "info" in batch:
                     del batch["info"]
 
                 batch = Batch(**batch)
+                update_time = time.time()
                 metrics = self.model.update(
                     next(self.rng_seq), batch, update_model=False
                 )
+                # logging.info(f"update time: {time.time() - update_time}")
                 for k, v in metrics.items():
                     eval_metrics[k].append(v)
+
+                data_loading_time = time.time()
 
             for k, v in eval_metrics.items():
                 eval_metrics[k] = jnp.mean(jnp.array(v))
@@ -301,28 +295,22 @@ class OfflineTrainer(BaseTrainer):
         # run rollouts
         if hasattr(self.model, "get_action") and self.config.run_eval_rollouts:
             if self.config.env.env_name == "procgen":
-                rollout_metrics, *_ = run_rollouts_procgen(
-                    rng=next(self.rng_seq),
-                    agent=self.model,
-                    env=self.eval_envs,
-                    config=self.config,
-                    wandb_run=self.wandb_run,
-                )
+                rollout_fn = run_rollouts_procgen
             else:
-                rollout_metrics, *_ = run_rollouts(
-                    rng=next(self.rng_seq),
-                    agent=self.model,
-                    env=self.eval_envs[eval_env_id][0],
-                    env_id=eval_env_id,
-                    config=self.config,
-                    action_dim=self.model.input_action_dim,
-                    steps_per_rollout=self.steps_per_rollout,
-                    wandb_run=self.wandb_run,
-                    prompts=(
-                        self.prompts[eval_env_id]
-                        if eval_env_id in self.prompts
-                        else None
-                    ),
-                )
+                rollout_fn = run_rollouts
+
+            rollout_metrics, *_ = rollout_fn(
+                rng=next(self.rng_seq),
+                agent=self.model,
+                env=self.eval_envs[eval_env_id][0],
+                env_id=eval_env_id,
+                config=self.config,
+                action_dim=self.model.input_action_dim,
+                # steps_per_rollout=self.steps_per_rollout,
+                wandb_run=self.wandb_run,
+                prompts=(
+                    self.prompts[eval_env_id] if eval_env_id in self.prompts else None
+                ),
+            )
             eval_metrics.update(rollout_metrics)
         return eval_metrics

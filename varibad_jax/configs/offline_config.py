@@ -32,6 +32,10 @@ def get_config(config_string: str = None):
             holdout_tasks=False,
             resample_prompts_every_eval=False,
             add_labelling=False,
+            load_latent_actions=False,
+            debug=False,
+            # for training DT
+            context_window=1,
         )
     )
 
@@ -43,7 +47,7 @@ def get_config(config_string: str = None):
 
     transformer_config.embedding_dim = config.get_ref("embedding_dim")
 
-    if "xland" in config_string or "procgen" in config_string:
+    if "gridworld" not in config_string:
         image_encoder_config = None
         for k, v in image_encoder_configs.items():
             if k in config_string:
@@ -78,7 +82,7 @@ def get_config(config_string: str = None):
             image_obs=config.env.get_ref("image_obs"),
             image_encoder_config=image_encoder_config,
             pass_latent_to_policy=False,
-            pass_task_to_policy=True,
+            pass_task_to_policy=False,
             embedding_dim=config.get_ref("embedding_dim"),
             mlp_layer_sizes=[128, 128],
             gaussian_policy=False,
@@ -111,7 +115,24 @@ def get_config(config_string: str = None):
                     #         out_channels=[16, 32, 32], out_features=256, impala_scale=4
                     #     )
                     # ),
-                    image_encoder_config=image_encoder_config,
+                    # image_encoder_config=image_encoder_config,
+                    # Impala CNN
+                    image_encoder_config=ConfigDict(
+                        dict(
+                            name="image_encoder",
+                            arch=[
+                                [16, 3, 1, "SAME"],
+                                [32, 3, 1, "SAME"],
+                                [32, 3, 1, "SAME"],
+                            ],
+                            add_bn=False,
+                            add_residual=True,
+                            add_max_pool=True,
+                            embedding_dim=256,
+                            mp_kernel_size=3,
+                            scale=4,
+                        )
+                    ),
                     use_transformer=False,
                     transformer_config=transformer_config,
                     embedding_dim=config.get_ref("embedding_dim"),
@@ -120,8 +141,12 @@ def get_config(config_string: str = None):
                     code_dim=16,
                     beta=0.25,
                     ema_decay=0.99,
+                    num_codebooks=2,
+                    num_discrete_latents=4,
+                    epsilon=1e-5,
                     policy_mlp_sizes=[128, 128],
                     state_embed_mlp_sizes=[128, 128],
+                    idm_scale=4,
                 ),
                 fdm=dict(
                     image_obs=config.env.get_ref("image_obs"),
@@ -135,6 +160,7 @@ def get_config(config_string: str = None):
                 context_len=config.data.get_ref("context_len"),
                 add_labelling=config.data.get_ref("add_labelling"),
                 mlp_layer_sizes=[128, 128],
+                normalize_pred=False,
             )
         ),
         "latent_action_decoder": ConfigDict(

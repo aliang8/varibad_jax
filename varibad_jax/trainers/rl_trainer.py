@@ -96,10 +96,14 @@ class RLTrainer(BaseTrainer):
                 task = prev_timestep.state.goal
             elif config.env.env_name == "xland":
                 task = prev_timestep.state.goal_encoding
+            elif config.env.env_name == "minatar":
+                task = None
 
-            if len(task.shape) == 1:
+            if task is not None and len(task.shape) == 1:
                 task = task[jnp.newaxis]
-            task = task.astype(jnp.float32)
+
+            if task is not None:
+                task = task.astype(jnp.float32)
 
             (policy_output, hstate), new_state = self.agent.get_action_jit(
                 ts,
@@ -270,7 +274,9 @@ class RLTrainer(BaseTrainer):
                 next(self.rng_seq),
                 env_state=timestep.observation.astype(jnp.float32),
                 hidden_state=hstate,
-                task=transitions.task[-1],  # get the most recent task
+                task=(
+                    transitions.task[-1] if transitions.task is not None else None
+                ),  # get the most recent task
                 is_training=True,
             )
 

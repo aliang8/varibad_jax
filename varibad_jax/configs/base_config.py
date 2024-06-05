@@ -59,6 +59,29 @@ def get_config(config_string: str = None):
                 gamma=0.999,
                 num_episodes_per_rollout=1,
                 task_dim=1,
+                steps_per_rollout=200,
+            )
+        ),
+        "minatar": ConfigDict(
+            dict(
+                env_name="minatar",
+                env_id="Breakout-MinAtar",
+                num_processes=16,
+                image_obs=True,
+                num_episodes_per_rollout=1,
+                task_dim=1,
+                steps_per_rollout=1000,
+            )
+        ),
+        "atari": ConfigDict(
+            dict(
+                env_name="atari",
+                env_id="Breakout",
+                num_envs=16,
+                image_obs=True,
+                num_episodes_per_rollout=1,
+                task_dim=1,
+                steps_per_rollout=100,
             )
         ),
     }
