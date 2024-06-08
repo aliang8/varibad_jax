@@ -16,11 +16,14 @@ import json
 import gymnax
 import shutil
 import jax.tree_util as jtu
+import tensorflow as tf
 from ml_collections import FrozenConfigDict
 from pathlib import Path
 from varibad_jax.envs.utils import make_envs, make_procgen_envs, make_atari_envs
 import gymnasium as gym
 from jax import config as jax_config
+
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # suppress debug warning messages
 
 
 class BaseTrainer:
@@ -33,6 +36,7 @@ class BaseTrainer:
         self.rng_seq = hk.PRNGSequence(config.seed)
         np.random.seed(config.seed)
         torch.manual_seed(config.seed)
+        tf.random.set_seed(config.seed)
 
         # setup log dirs
         # split exp_dir by ,
@@ -45,6 +49,13 @@ class BaseTrainer:
         self.ckpt_dir = self.exp_dir / "model_ckpts"
         self.video_dir = self.exp_dir / "videos"
         self.wandb_run = None
+
+        self.num_devices = jax.device_count()
+        self.num_local_devices = jax.local_device_count()
+
+        logging.info(
+            f"num_devices: {self.num_devices}, num_local_devices: {self.num_local_devices}"
+        )
 
         if self.config.mode == "train":
             if self.exp_dir.exists() and not self.config.overwrite:

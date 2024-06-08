@@ -1,4 +1,4 @@
-from varibad_jax.configs.procgen.bigfish.base import (
+from varibad_jax.configs.procgen.base import (
     get_config as get_base_config,
 )
 
@@ -11,7 +11,7 @@ def get_config(config_string: str = None):
     config.exp_name = "bc"
 
     config.data.data_type = "transitions"
-    config.data.num_trajs = 500
+    config.data.num_trajs = 100
 
     config.model.policy.pass_task_to_policy = False
 

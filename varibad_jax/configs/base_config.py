@@ -150,4 +150,6 @@ def get_config(config_string: str = None):
     # ray
     config.cpu = 5
     config.gpu = 0.1
+
+    config.num_xla_devices = 2
     return config

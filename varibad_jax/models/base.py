@@ -42,6 +42,7 @@ class BaseModel:
         load_from_ckpt: bool = False,
         ckpt_file: str = "",
         ckpt_dir: str = "",
+        num_devices: int = 1,
     ):
         self.config = config
         self.is_continuous = continuous_actions
@@ -49,6 +50,7 @@ class BaseModel:
         self.observation_shape = observation_shape
         self.input_action_dim = input_action_dim
         self.task_dim = task_dim
+        self.num_devices = num_devices
 
         self._init_key = key
         self._ts = TrainingState(params=None, state=None, opt_state=None)
@@ -75,16 +77,23 @@ class BaseModel:
                 else:
                     params, state = ckpt["params"], ckpt["state"]
         else:
-            params, state = self._init_model()
-        num_params = sum(p.size for p in jax.tree_util.tree_leaves(params))
+            # replicate init_key (same initial weights on all devices)
+            self._init_key = jnp.tile(self._init_key[None], (num_devices, 1))
+            params, state = self._init_model(self._init_key)
+
+        num_params = (
+            sum(p.size for p in jax.tree_util.tree_leaves(params)) / num_devices
+        )
         logging.info(f"number of {config.name} parameters: {num_params}")
 
         opt_state = self._init_opt(params)
         self._ts = TrainingState(params=params, state=state, opt_state=opt_state)
 
-    def _init_model(self):
+    @partial(jax.pmap, axis_name="device", static_broadcasted_argnums=(0,))
+    def _init_model(self, init_key: jax.random.PRNGKey):
         raise NotImplementedError
 
+    @partial(jax.pmap, axis_name="device", static_broadcasted_argnums=(0,))
     def _init_opt(self, params) -> None:
         """Initialize Adam optimizer for training."""
         if self.config.use_lr_scheduler:
@@ -100,7 +109,7 @@ class BaseModel:
         opt_state = self.opt.init(params)
         return opt_state
 
-    @partial(jax.jit, static_argnums=(0, 4))
+    @partial(jax.pmap, axis_name="device", static_broadcasted_argnums=(0, 4))
     def update_model(self, ts, rng, batch, update_model):
         if update_model:
             logging.info("updating model")
@@ -108,6 +117,10 @@ class BaseModel:
         (loss, (metrics, new_state)), grads = jax.value_and_grad(
             self.loss_fn, has_aux=True
         )(ts.params, ts.state, rng, batch, is_training=update_model)
+
+        # sync gradients
+        grads = jax.lax.pmean(grads, "device")
+
         if update_model:
             grads, new_opt_state = self.opt.update(grads, ts.opt_state, ts.params)
             new_params = optax.apply_updates(ts.params, grads)
@@ -117,10 +130,18 @@ class BaseModel:
         else:
             new_ts = ts
 
+        # sync metrics
+        metrics = jax.lax.pmean(metrics, "device")
         return new_ts, metrics
 
     def update(self, rng, batch, update_model=True):
+        rng = jax.random.split(rng, self.num_devices)
+        batch = jax.tree_util.tree_map(
+            lambda x: x.reshape((self.num_devices, -1, *x.shape[1:])), batch
+        )
+
         self._ts, metrics = self.update_model(self._ts, rng, batch, update_model)
+        metrics = jax.tree_util.tree_map(lambda x: x.mean(), metrics)
         return metrics
 
     @property
@@ -134,7 +155,11 @@ class BaseModel:
 class BaseAgent(BaseModel):
     @partial(jax.jit, static_argnames=("self", "is_training"))
     def get_action_jit(self, ts, rng, env_state, **kwargs):
-        return self.model.apply(ts.params, ts.state, rng, self, env_state, **kwargs)
+        # get first of params
+        params = jax.tree_util.tree_map(lambda x: x[0], ts.params)
+        state = jax.tree_util.tree_map(lambda x: x[0], ts.state)
+
+        return self.model.apply(params, state, rng, self, env_state, **kwargs)
 
     def get_action(self, rng, env_state, **kwargs):
         return self.get_action_jit(self._ts, rng, env_state, **kwargs)

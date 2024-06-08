@@ -83,8 +83,8 @@ class Batch:
     observations: jnp.ndarray
     actions: jnp.ndarray
     rewards: jnp.ndarray
-    next_observations: jnp.ndarray
-    dones: jnp.ndarray
+    next_observations: jnp.ndarray = None
+    dones: jnp.ndarray = None
     tasks: jnp.ndarray = None
     mask: jnp.ndarray = None
     successes: jnp.ndarray = None
@@ -92,6 +92,10 @@ class Batch:
     traj_index: jnp.ndarray = None
     labelled: jnp.ndarray = None
     latent_actions: jnp.ndarray = None
+    is_first: jnp.ndarray = None
+    is_last: jnp.ndarray = None
+    is_terminal: jnp.ndarray = None
+    discount: jnp.ndarray = None
 
 
 import random
@@ -164,7 +168,9 @@ class DataStager:
         self.obs_depth = obs_depth
         self.files = files
         self.chunk_len = chunk_len
-        random.shuffle(self.files)
+        # random.shuffle(self.files)
+        # sort files
+        self.files = sorted(self.files)
 
         num_transitions = self.chunk_len * len(self.files)
         self.np_d = {

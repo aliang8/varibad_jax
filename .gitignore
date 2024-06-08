@@ -24,3 +24,5 @@ varibad_jax/hello.txt
 varibad_jax/tmp.sh
 *.png
 *.pdf
+varibad_jax/tensorflow_datasets/*
+varibad_jax/scripts/procgen_dataset.egg-info

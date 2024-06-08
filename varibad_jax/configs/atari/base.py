@@ -7,10 +7,9 @@ def get_config(config_string: str = None):
     config.visualize_rollouts = True
 
     config.env.ruleset_id = -1
-    config.data.dataset_name = "procgen"
-    # config.env.env_id = "MiniGrid-GoToDoor-R1-9x9-3"
-    config.env.env_id = "bigfish"
-    config.env.eval_env_ids = ["bigfish"]
+    config.data.dataset_name = "rlu_atari_checkpoints_ordered"
+    config.env.env_id = "Pong"
+    config.env.eval_env_ids = ["Pong"]
 
     config.env.num_episodes_per_rollout = 1
     # config.env.steps_per_rollout = 30

@@ -45,7 +45,8 @@ class BCAgent(BaseAgent):
         policy_output = policy(policy_input, hidden_state=None)
         return policy_output
 
-    def _init_model(self):
+    @partial(jax.pmap, axis_name="device", static_broadcasted_argnums=(0,))
+    def _init_model(self, init_key: jax.random.PRNGKey):
         t, bs = 2, 2
         dummy_state = np.zeros((bs, t, *self.observation_shape), dtype=np.float32)
 
@@ -55,7 +56,7 @@ class BCAgent(BaseAgent):
             dummy_task = None
 
         params, state = self.model.init(
-            self._init_key,
+            init_key,
             self,
             states=dummy_state,
             task=dummy_task,

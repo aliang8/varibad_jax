@@ -1,4 +1,4 @@
-from varibad_jax.configs.procgen.bigfish.base import (
+from varibad_jax.configs.procgen.base import (
     get_config as get_base_config,
 )
 

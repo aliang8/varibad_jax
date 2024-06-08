@@ -31,6 +31,7 @@ from varibad_jax.utils.data_utils import (
     Batch,
     subsample_data,
 )
+from varibad_jax.utils.tfds_data_utils import load_data as load_data_tfds
 
 from varibad_jax.models.bc.bc import BCAgent
 from varibad_jax.models.decision_transformer.dt import (
@@ -58,79 +59,49 @@ class OfflineTrainer(BaseTrainer):
             steps_per_rollout = None
 
         data_load_time = time.time()
-        self.train_dataset, self.eval_dataset, self.prompt_dataset = load_data(
-            config=config, rng=next(self.rng_seq)
-        )
-        logging.info(f"data loading time: {time.time() - data_load_time}")
+        # self.train_dataset, self.eval_dataset, self.prompt_dataset = load_data_tfds(
+        #     config=config, rng=next(self.rng_seq)
+        # )
+
+        # logging.info(f"data loading time: {time.time() - data_load_time}")
 
         # these are trajectories
-        self.prompts = self.sample_prompts()
+        # self.prompts = self.sample_prompts()
 
-        # # add labels
-        # if "vpt_bc" in self.config.model.name or "lam" in self.config.model.name:
-        #     # edit action labels
+        # self.eval_dataloaders = {}
+        # self.train_dataloader = create_data_loader(
+        #     self.train_dataset, data_cfg=config.data
+        # )
+        # logging.info(f"Number of train batches: {len(self.train_dataloader)}")
+        # for eval_env_id, eval_dataset in self.eval_dataset.items():
+        #     if len(eval_dataset["observations"]) > 0:
+        #         eval_dataloader = create_data_loader(eval_dataset, data_cfg=config.data)
+        #         logging.info(f"Number of eval batches: {len(eval_dataloader)}")
+        #         self.eval_dataloaders[eval_env_id] = eval_dataloader
 
-        #     # first load pretrained model
-        #     # load pretrained IDM for predicting the latent actions from observations
-        #     ckpt_path = self.config.model.vpt_idm_ckpt
+        # if config.data.data_type == "trajectories":
+        #     obs_shape = self.train_dataset["observations"].shape[2:]
+        # else:
+        #     obs_shape = self.train_dataset["observations"].shape[1:]
 
-        #     if self.config.model.idm_nt != -1:
-        #         ckpt_path = re.sub(
-        #             r"nt-\d+", f"nt-{self.config.model.idm_nt}", ckpt_path
-        #         )
-
-        #     config = Path(ckpt_path) / "config.json"
-        #     with open(config, "r") as f:
-        #         vpt_cfg = ConfigDict(json.load(f))
-
-        #     key, vpt_key = jax.random.split(next(self.rng_seq), 2)
-
-        #     vpt = VPT(
-        #         config=vpt_cfg.model,
-        #         key=vpt_key,
-        #         load_from_ckpt=True,
-        #         ckpt_dir=Path(ckpt_path),
-        #         observation_shape=(1, 1),  # doesn't matter
-        #         action_dim=self.action_dim,
-        #         input_action_dim=self.input_action_dim,
-        #         continuous_actions=self.continuous_actions,
-        #         task_dim=self.config.env.task_dim,
-        #     )
-
-        #     # predict the action from observations with pretrained model
-        #     vpt_action_pred, _ = vpt.model.apply(
-        #         vpt._ts.params,
-        #         vpt._ts.state,
-        #         vpt_key,
-        #         vpt,
-        #         states=batch.observations.astype(jnp.float32),
-        #         is_training=False,
-        #     )
-        #     import ipdb
-
-        #     ipdb.set_trace()
-
-        self.eval_dataloaders = {}
-        self.train_dataloader = create_data_loader(
-            self.train_dataset, data_cfg=config.data
+        # update batch size
+        config.data.batch_size = config.data.batch_size * self.num_devices
+        self.train_dataloader, self.eval_dataloaders, self.prompt_dataloader = (
+            load_data_tfds(config=config, rng=next(self.rng_seq))
         )
-        logging.info(f"Number of train batches: {len(self.train_dataloader)}")
-        for eval_env_id, eval_dataset in self.eval_dataset.items():
-            if len(eval_dataset["observations"]) > 0:
-                eval_dataloader = create_data_loader(eval_dataset, data_cfg=config.data)
-                logging.info(f"Number of eval batches: {len(eval_dataloader)}")
-                self.eval_dataloaders[eval_env_id] = eval_dataloader
-
-        if config.data.data_type == "trajectories":
-            obs_shape = self.train_dataset["observations"].shape[2:]
-        else:
-            obs_shape = self.train_dataset["observations"].shape[1:]
 
         # print batch item shapes
         batch = next(iter(self.train_dataloader))
+        if config.data.data_type in ["lapo", "trajectories"]:
+            obs_shape = batch["observations"].shape[2:]
+        else:
+            obs_shape = batch["observations"].shape[1:]
 
-        fn = lambda x, y: logging.info(f"{jax.tree_util.keystr(x)}: {y.shape}")
-        jtu.tree_map_with_path(fn, batch)
+        for k, v in batch.items():
+            logging.info(f"{k}: {v.shape}")
+
+        # fn = lambda x, y: logging.info(f"{jax.tree_util.keystr(x)}: {y.shape}")
+        # jtu.tree_map_with_path(fn, batch)
 
         if self.config.model.name == "bc":
             model_cls = BCAgent
@@ -161,6 +132,7 @@ class OfflineTrainer(BaseTrainer):
             continuous_actions=self.continuous_actions,
             task_dim=self.config.env.task_dim,
             key=next(self.rng_seq),
+            num_devices=min(self.config.num_xla_devices, self.num_devices),
         )
 
         if self.config.num_evals != -1:
@@ -201,11 +173,14 @@ class OfflineTrainer(BaseTrainer):
             train_ep_metrics = dd(list)
             # for _ in range(self.num_train_batches):
             #     batch = next(self.train_dataloader)
-            for batch in tqdm.tqdm(self.train_dataloader, desc="batches", disable=True):
+            for batch in tqdm.tqdm(
+                self.train_dataloader.as_numpy_iterator(), desc="batches", disable=False
+            ):
                 if "info" in batch:
                     del batch["info"]
                 batch = Batch(**batch)
                 metrics = self.model.update(next(self.rng_seq), batch)
+
                 for k, v in metrics.items():
                     train_ep_metrics[k].append(v)
 
@@ -273,7 +248,9 @@ class OfflineTrainer(BaseTrainer):
 
             eval_dataloader = self.eval_dataloaders[eval_env_id]
             data_loading_time = time.time()
-            for batch in tqdm.tqdm(eval_dataloader, desc="eval batches"):
+            for batch in tqdm.tqdm(
+                eval_dataloader.as_numpy_iterator(), desc="eval batches"
+            ):
                 # logging.info(f"data loading time: {time.time() - data_loading_time}")
                 if "info" in batch:
                     del batch["info"]
@@ -308,9 +285,9 @@ class OfflineTrainer(BaseTrainer):
                 action_dim=self.model.input_action_dim,
                 # steps_per_rollout=self.steps_per_rollout,
                 wandb_run=self.wandb_run,
-                prompts=(
-                    self.prompts[eval_env_id] if eval_env_id in self.prompts else None
-                ),
+                # prompts=(
+                #     self.prompts[eval_env_id] if eval_env_id in self.prompts else None
+                # ),
             )
             eval_metrics.update(rollout_metrics)
         return eval_metrics

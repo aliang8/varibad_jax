@@ -36,6 +36,7 @@ def get_config(config_string: str = None):
             debug=False,
             # for training DT
             context_window=1,
+            num_frame_stack=4,
         )
     )
 

@@ -1,9 +1,11 @@
-from varibad_jax.configs.offline_config import get_config as get_offline_config
+from varibad_jax.configs.procgen.base import (
+    get_config as get_base_config,
+)
 
 
 def get_config(config_string: str = None):
     config_string = "lam-procgen-64x64"
-    config = get_offline_config(config_string)
+    config = get_base_config(config_string)
 
     config.exp_name = "lam"
 

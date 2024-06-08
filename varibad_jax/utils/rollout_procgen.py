@@ -286,7 +286,7 @@ def run_rollouts_procgen_dt(
 
 
 def run_rollouts_procgen_helper(
-    rng, agent, config: ConfigDict, env, env_id: str, wandb_run=None
+    rng, agent, config: ConfigDict, env, env_id: str, **kwargs
 ):
     # gym version needs to be gym==0.23.1 for this to work
     logging.info("rollout procgen...")

@@ -19,12 +19,13 @@ import jax.tree_util as jtu
 from pathlib import Path
 from ray import train, tune
 from ray.train import RunConfig, ScalingConfig
+import tensorflow as tf
 
 from varibad_jax.trainers.meta_trainer import MetaRLTrainer
 from varibad_jax.trainers.offline_trainer import OfflineTrainer
 from varibad_jax.trainers.rl_trainer import RLTrainer
 
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.5"
+# os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.25"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 _CONFIG = config_flags.DEFINE_config_file("config")
 
@@ -94,8 +95,19 @@ param_space = {
 
 
 def train_model_fn(config):
-    os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.5"
+    # os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.25"
     os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+
+    tf_config = tf.compat.v1.ConfigProto()
+    tf_config.gpu_options.allow_growth = True
+    tf.config.experimental.set_visible_devices([], "GPU")
+
+    # tf.config.gpu.set_per_process_memory_growth(True)
+    # prevent tf from preallocating all the gpu memory
+    gpus = tf.config.experimental.list_physical_devices("GPU")
+    for gpu in gpus:
+        tf.config.experimental.set_memory_growth(gpu, True)
+
     trial_dir = train.get_context().get_trial_dir()
     if trial_dir:
         print("Trial dir: ", trial_dir)

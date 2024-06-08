@@ -46,7 +46,7 @@ def make_procgen_envs(num_envs, env_id, gamma, **kwargs):
     envs.single_action_space = envs.action_space
     envs.single_observation_space = envs.observation_space["rgb"]
     envs.is_vector_env = True
-    envs = gym.wrappers.RecordEpisodeStatistics(envs)
+    # envs = gym.wrappers.RecordEpisodeStatistics(envs)
     envs = gym.wrappers.NormalizeReward(envs, gamma=gamma)
     envs = gym.wrappers.TransformReward(envs, lambda reward: np.clip(reward, -10, 10))
 

@@ -106,6 +106,25 @@ image_encoder_configs = {
             # scale=4,
         )
     ),
+    "84x84": config_dict.ConfigDict(
+        dict(
+            name="image_encoder",
+            arch=[
+                [base, 3, 1, "SAME"],
+                [base, 3, 1, "SAME"],
+                [base * 2, 3, 1, "SAME"],
+                [base * 4, 3, 1, "SAME"],
+                [base * 8, 3, 1, "SAME"],
+                [base * 16, 3, 1, "SAME"],
+                [base * 32, 2, 1, "SAME"],
+            ],
+            add_bn=True,
+            add_residual=True,
+            add_max_pool=True,
+            mp_kernel_size=2,
+            # scale=4,
+        )
+    ),
 }
 image_decoder_configs = {
     "3x3": config_dict.ConfigDict(
