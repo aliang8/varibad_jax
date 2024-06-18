@@ -34,7 +34,7 @@ class LAMOutput:
 
 def breakpoint_if_cond(x):
     # is_finite = jnp.isfinite(x).all()
-    stop = x < 0.00001
+    stop = x < 0.005
     # stop = x > 0.87
 
     def true_fn(x):
@@ -60,6 +60,10 @@ class LatentActionModel(BaseModel):
 
         # [B, C, H, W] or [B, T, C, H, W]
         next_state_pred = fdm(context, idm_output["quantize"], is_training=is_training)
+
+        if self.config.normalize_pred:
+            next_state_pred = jnp.tanh(next_state_pred) / 2
+
         logging.info(f"next_state_pred: {next_state_pred.shape}")
 
         return LAMOutput(
@@ -155,7 +159,6 @@ class LatentActionModel(BaseModel):
                 recon_loss = optax.squared_error(next_obs_pred, gt_next_obs)
                 recon_loss = jnp.mean(recon_loss)
                 # jax.debug.breakpoint()
-
                 # breakpoint_if_cond(recon_loss)
         else:
             recon_loss = optax.squared_error(next_obs_pred, batch.observations[:, -1])
@@ -171,6 +174,7 @@ class LatentActionModel(BaseModel):
         loss = self.config.beta_loss_weight * lam_output.vq_loss + recon_loss
 
         if batch.labelled is not None:
+            jax.debug.breakpoint()
             # if the transition is labelled, we can compute action decoding loss
             latent_actions = lam_output.latent_actions
             action_pred, action_state = self.predict_action.apply(
@@ -213,28 +217,28 @@ class LatentActionDecoder(BaseModel):
     IDM model learned with LAPO.
     """
 
-    def __init__(self, lam: BaseModel = None, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    # def __init__(self, lam: BaseModel = None, *args, **kwargs):
+    #     super().__init__(*args, **kwargs)
 
-        if lam is None:
-            # load pretrained latent action model
-            config = Path(self.config.lam_ckpt) / "config.json"
-            with open(config, "r") as f:
-                self.lam_cfg = ConfigDict(json.load(f))
+    #     if lam is None:
+    #         # load pretrained latent action model
+    #         config = Path(self.config.lam_ckpt) / "config.json"
+    #         with open(config, "r") as f:
+    #             self.lam_cfg = ConfigDict(json.load(f))
 
-            self.lam = LatentActionModel(
-                self.lam_cfg.model,  # TODO: fix me
-                key=self._init_key,
-                observation_shape=self.observation_shape,
-                action_dim=self.action_dim,
-                input_action_dim=self.input_action_dim,
-                continuous_actions=self.is_continuous,
-                load_from_ckpt=True,
-                # ckpt_file=Path(self.config.lam_ckpt) / "model_ckpts" / "ckpt_0100.pkl",
-                ckpt_dir=Path(self.config.lam_ckpt),
-            )
-        else:
-            self.lam = lam
+    #         self.lam = LatentActionModel(
+    #             self.lam_cfg.model,  # TODO: fix me
+    #             key=self._init_key,
+    #             observation_shape=self.observation_shape,
+    #             action_dim=self.action_dim,
+    #             input_action_dim=self.input_action_dim,
+    #             continuous_actions=self.is_continuous,
+    #             load_from_ckpt=True,
+    #             # ckpt_file=Path(self.config.lam_ckpt) / "model_ckpts" / "ckpt_0014.pkl",
+    #             ckpt_dir=Path(self.config.lam_ckpt),
+    #         )
+    #     else:
+    #         self.lam = lam
 
     @hk.transform_with_state
     def model(self, latent_actions, is_training=True):
@@ -276,30 +280,33 @@ class LatentActionDecoder(BaseModel):
         batch,
         is_training: bool,
     ):
-        observations = batch.observations
+        # observations = batch.observations
 
-        agent_key, decoder_key = jax.random.split(rng, 2)
+        # agent_key, decoder_key = jax.random.split(rng, 2)
 
-        model_output, _ = self.lam.model.apply(
-            self.lam._ts.params,
-            self.lam._ts.state,
-            agent_key,
-            self.lam,
-            states=observations.astype(jnp.float32),
-            is_training=False,
-        )
+        # model_output, _ = self.lam.model.apply(
+        #     self.lam._ts.params,
+        #     self.lam._ts.state,
+        #     agent_key,
+        #     self.lam,
+        #     states=observations.astype(jnp.float32),
+        #     is_training=False,
+        # )
 
         # jax.debug.breakpoint()
 
-        obs_pred = model_output.next_obs_pred
-        if self.lam_cfg.model.idm.image_obs:
-            obs_pred = einops.rearrange(obs_pred, "b c h w -> b h w c")
+        # obs_pred = model_output.next_obs_pred
+        # if self.lam_cfg.model.idm.image_obs:
+        #     obs_pred = einops.rearrange(obs_pred, "b c h w -> b h w c")
 
-        gt_next_obs = observations[:, -1]
-        recon_err = optax.squared_error(obs_pred, gt_next_obs)
-        recon_err = jnp.mean(recon_err)
+        # gt_next_obs = observations[:, -1]
+        # recon_err = optax.squared_error(obs_pred, gt_next_obs)
+        # recon_err = jnp.mean(recon_err)
 
-        latent_actions = model_output.latent_actions
+        # latent_actions = model_output.latent_actions
+
+        rng, decoder_key = jax.random.split(rng, 2)
+        latent_actions = batch.actions[:, -2]
 
         # decode latent action to ground truth action
         action_pred, state = self.model.apply(
@@ -342,7 +349,8 @@ class LatentActionDecoder(BaseModel):
             acc = jnp.mean(acc)
 
         loss = jnp.mean(loss)
-        metrics = {"action_loss": loss, "acc": acc, "recon_err": recon_err}
+        # metrics = {"action_loss": loss, "acc": acc, "recon_err": recon_err}
+        metrics = {"action_loss": loss, "acc": acc}
         return loss, (metrics, state)
 
 
@@ -381,16 +389,18 @@ class LatentActionBaseAgent(BaseAgent):
             continuous_actions=continuous_actions,
         )
 
-        lam_key, decoder_key = jax.random.split(self._init_key, 2)
+        # lam_key, decoder_key = jax.random.split(self._init_key, 2)
 
-        self.lam = LatentActionModel(
-            self.lam_cfg.model,
-            key=lam_key,
-            load_from_ckpt=True,
-            # ckpt_file=Path(self.config.lam_ckpt) / "model_ckpts" / "ckpt_0100.pkl",
-            ckpt_dir=Path(self.config.lam_ckpt),
-            **extra_kwargs,
-        )
+        # self.lam = LatentActionModel(
+        #     self.lam_cfg.model,
+        #     key=lam_key,
+        #     load_from_ckpt=True,
+        #     # ckpt_file=Path(self.config.lam_ckpt) / "model_ckpts" / "ckpt_0100.pkl",
+        #     ckpt_dir=Path(self.config.lam_ckpt),
+        #     **extra_kwargs,
+        # )
+
+        rng, decoder_key = jax.random.split(self._init_key, 2)
 
         # load pretrained latent action decoder
         if hasattr(self.config, "latent_action_decoder_ckpt"):
@@ -403,7 +413,7 @@ class LatentActionBaseAgent(BaseAgent):
                 self.latent_action_decoder_cfg = ConfigDict(json.load(f))
 
             self.latent_action_decoder = LatentActionDecoder(
-                lam=self.lam,
+                # lam=self.lam,
                 config=self.latent_action_decoder_cfg.model,
                 key=decoder_key,
                 load_from_ckpt=True,
@@ -445,7 +455,9 @@ class LatentActionAgent(LatentActionBaseAgent):
 
     @hk.transform_with_state
     def model(self, states, task=None, is_training=True, **kwargs):
-        # logging.info(f"action dim: {self.config.latent_action_dim}")
+        logging.info(f"action dim: {self.config.latent_action_dim}")
+        logging.info(f"states shape: {states.shape}")
+
         # predicts the latent action
         policy = ActorCritic(
             self.config.policy,
@@ -459,11 +471,11 @@ class LatentActionAgent(LatentActionBaseAgent):
         return policy_output
 
     def _init_model(self):
-        t, bs = 2, 2
-        dummy_state = np.zeros((bs, t, *self.observation_shape), dtype=np.float32)
+        bs = 2
+        dummy_state = np.zeros((bs, *self.observation_shape), dtype=np.float32)
 
         if self.config.policy.pass_task_to_policy:
-            dummy_task = np.zeros((bs, t, self.task_dim), dtype=np.float32)
+            dummy_task = np.zeros((bs, self.task_dim), dtype=np.float32)
         else:
             dummy_task = None
 
@@ -486,25 +498,28 @@ class LatentActionAgent(LatentActionBaseAgent):
     ):
         logging.info(f"lam loss function, observations: {batch.observations.shape}")
 
-        lam_key, policy_key, decoder_key = jax.random.split(rng, 3)
+        # lam_key, policy_key, decoder_key = jax.random.split(rng, 3)
 
         # predict the latent action from observations with pretrained model
-        lam_output, _ = self.lam.model.apply(
-            self.lam._ts.params,
-            self.lam._ts.state,
-            lam_key,
-            self.lam,
-            states=batch.observations.astype(jnp.float32),
-            is_training=False,
-        )
-        latent_actions = lam_output.latent_actions
+        # lam_output, _ = self.lam.model.apply(
+        #     self.lam._ts.params,
+        #     self.lam._ts.state,
+        #     lam_key,
+        #     self.lam,
+        #     states=batch.observations.astype(jnp.float32),
+        #     is_training=False,
+        # )
+        # latent_actions = lam_output.latent_actions
 
         # if self.config.image_obs:
         #     observations = einops.rearrange(
         #         batch.observations, "b t h w c -> b t c h w"
         #     )
         # else:
+
+        rng, policy_key, decoder_key = jax.random.split(rng, 3)
         observations = batch.observations
+        latent_actions = batch.latent_actions[:, -2]
 
         # only the middle observation matters here
         # not a recurrent policy
@@ -515,7 +530,7 @@ class LatentActionAgent(LatentActionBaseAgent):
             policy_key,
             self,
             states=observations[:, -2].astype(jnp.float32),
-            task=batch.tasks[:, -2],
+            task=batch.tasks[:, -2] if batch.tasks is not None else None,
             is_training=is_training,
         )
         loss = optax.squared_error(action_output.action, latent_actions)

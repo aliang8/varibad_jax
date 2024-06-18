@@ -103,13 +103,13 @@ register_xminigrid(
     view_size=3,
 )
 
-register_xminigrid(
-    id="MiniGrid-GoToDoor-R1-9x9-3",
-    entry_point="varibad_jax.envs.xland.go_to_door:GoToDoor",
-    height=9,
-    width=9,
-    view_size=3,
-)
+# register_xminigrid(
+#     id="MiniGrid-GoToDoor-R1-9x9-3",
+#     entry_point="varibad_jax.envs.xland.go_to_door:GoToDoor",
+#     height=9,
+#     width=9,
+#     view_size=3,
+# )
 
 register_xminigrid(
     id="MiniGrid-GoToDoorRandomColors-R1-9x9-3",
@@ -150,6 +150,45 @@ register_xminigrid(
     random_color=True,
 )
 
+register_xminigrid(
+    id="MiniGrid-GoToBall-R1-9x9-3",
+    entry_point="varibad_jax.envs.xland.go_to_object:GoToObject",
+    height=9,
+    width=9,
+    view_size=3,
+    num_distractors=1,
+    goal_object=0,
+)
+
+register_xminigrid(
+    id="MiniGrid-GoToSquare-R1-9x9-3",
+    entry_point="varibad_jax.envs.xland.go_to_object:GoToObject",
+    height=9,
+    width=9,
+    view_size=3,
+    num_distractors=1,
+    goal_object=1,
+)
+
+register_xminigrid(
+    id="MiniGrid-GoToDoor-R1-9x9-3",
+    entry_point="varibad_jax.envs.xland.go_to_object:GoToObject",
+    height=9,
+    width=9,
+    view_size=3,
+    num_distractors=1,
+    goal_object=2,
+)
+
+register_xminigrid(
+    id="MiniGrid-GoToKey-R1-9x9-3",
+    entry_point="varibad_jax.envs.xland.go_to_object:GoToObject",
+    height=9,
+    width=9,
+    view_size=3,
+    num_distractors=1,
+    goal_object=3,
+)
 
 # register_xminigrid(
 #     id="XLand-MiniGrid-R2-9x9",

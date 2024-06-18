@@ -1,5 +1,6 @@
 import gymnasium as gym
 import numpy as np
+import gymnax
 import jax
 import xminigrid
 from functools import partial
@@ -8,7 +9,12 @@ from typing import ClassVar, Optional
 import varibad_jax.envs
 from varibad_jax.envs.xland.wrappers import FullyObservableWrapper
 from varibad_jax.envs.gridworld_jax import GridNavi
-from varibad_jax.envs.wrappers import BAMDPWrapper, GymAutoResetWrapper, BasicWrapper
+from varibad_jax.envs.wrappers import (
+    BAMDPWrapper,
+    GymAutoResetWrapper,
+    BasicWrapper,
+    TimeStepWrapper,
+)
 
 from procgen import ProcgenEnv
 from xminigrid.benchmarks import Benchmark, load_benchmark, load_benchmark_from_path
@@ -49,6 +55,38 @@ def make_procgen_envs(num_envs, env_id, gamma, **kwargs):
     ), "only discrete action space is supported"
 
     # envs.normalize_return = partial(normalize_return, env_name=env_id)
+    return envs
+
+
+def make_atari_envs(num_envs, env_id, **kwargs):
+    def _make_env(seed):
+        atari_env = gym.make(env_id, full_action_space=True, frameskip=1)
+        atari_env = gym.wrappers.AtariPreprocessing(
+            atari_env,
+            frame_skip=4,
+            grayscale_obs=False,
+            grayscale_newaxis=False,
+            screen_size=64,
+            terminal_on_life_loss=True,
+            scale_obs=True,
+        )
+        atari_env = gym.wrappers.FrameStack(atari_env, 4)
+        atari_env = gym.wrappers.TimeLimit(atari_env, 200)
+        # atari_env = gym.wrappers.ClipReward(atari_env, )
+        assert isinstance(
+            atari_env.action_space, gym.spaces.discrete.Discrete
+        ), "only discrete action space is supported"
+
+        obs, _ = atari_env.reset(seed=seed)
+        return atari_env
+
+    if num_envs > 1:
+        envs = gym.vector.AsyncVectorEnv(
+            [partial(_make_env, seed) for seed in range(num_envs)]
+        )
+    else:
+        envs = _make_env(0)
+
     return envs
 
 
@@ -96,6 +134,13 @@ def make_envs(
 
         if full_observability:
             env = FullyObservableWrapper(env)
+    elif env_name == "minatar":
+        env, env_params = gymnax.make(env_id)
+
+        # wrap this so the step and reset function outputs timesteps
+        env = TimeStepWrapper(env)
+    else:
+        raise ValueError(f"Unknown environment {env_name}")
 
     if training:
         env = GymAutoResetWrapper(env)

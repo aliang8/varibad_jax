@@ -1,4 +1,4 @@
-from varibad_jax.configs.procgen.bigfish.base import (
+from varibad_jax.configs.xland.minigrid_gotoobject.base import (
     get_config as get_base_config,
 )
 
@@ -6,17 +6,19 @@ from varibad_jax.configs.procgen.bigfish.base import (
 
 
 def get_config(config_string: str = None):
-    config_string = "bc-procgen-64x64"
+    config_string = "bc-xland-7x7"
     config = get_base_config(config_string)
     config.exp_name = "bc"
+    config.env.full_observability = True
 
     config.data.data_type = "transitions"
-    config.data.num_trajs = 500
+    config.data.num_trajs = 5000
 
     config.model.policy.pass_task_to_policy = False
 
-    config.num_evals = 10
-    config.num_epochs = 150
+    config.num_evals = 40
+    config.num_epochs = 2000
+    # config.save_key = "success"
 
     config.keys_to_include = {
         "env": {"env_name": 1, "env_id": 1},

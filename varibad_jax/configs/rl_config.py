@@ -15,7 +15,7 @@ def get_config(config_string: str = None):
     # =============================================================
     config = get_base_config(config_string)
 
-    if "xland" in config_string:
+    if "gridworld" not in config_string:
         image_encoder_config = None
         for k, v in image_encoder_configs.items():
             if k in config_string:

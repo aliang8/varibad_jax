@@ -16,11 +16,14 @@ import functools
 from ml_collections import ConfigDict
 import jax.tree_util as jtu
 import matplotlib.pyplot as plt
+import seaborn as sns
+from matplotlib import colors
 
-from varibad_jax.utils.data_utils import subsample_data
+from varibad_jax.utils.data_utils import subsample_data, normalize_obs
 from xminigrid.experimental.img_obs import TILE_W_AGENT_CACHE, TILE_CACHE, TILE_SIZE
 from xminigrid.core.constants import NUM_COLORS, TILES_REGISTRY, Tiles, Colors
 from xminigrid.types import AgentState, EnvCarry, GridState, RuleSet, State
+from varibad_jax.envs.utils import make_envs, make_procgen_envs
 
 
 @chex.dataclass
@@ -28,62 +31,6 @@ class RolloutStats:
     episode_return: jnp.ndarray
     length: jnp.ndarray
     success: jnp.ndarray
-
-
-@chex.dataclass
-class Transition:
-    observation: jnp.ndarray
-    action: jnp.ndarray
-    reward: jnp.ndarray
-    done: jnp.ndarray
-
-
-def run_rollouts_procgen(rng, agent, config: ConfigDict, env, wandb_run=None):
-    logging.info("Rollout procgen...")
-    obs = env.reset()
-
-    rng, policy_rng = jax.random.split(rng, 2)
-
-    dones = jnp.zeros((config.num_eval_rollouts,))
-    ep_returns = jnp.zeros((config.num_eval_rollouts,))
-    ep_lengths = jnp.zeros((config.num_eval_rollouts,))
-    transitions = []
-
-    rollout_time = time.time()
-
-    while not jnp.all(dones):
-        obs = obs.astype(jnp.float32)
-        (policy_output, _), _ = agent.get_action(
-            policy_rng, env_state=obs, is_training=False
-        )
-        action = policy_output.action
-        obs, reward, done, _ = env.step(action)
-
-        transition = Transition(
-            observation=obs,
-            action=action,
-            reward=reward,
-            done=done,
-        )
-
-        transitions.append(transition)
-
-        for i in range(config.num_eval_rollouts):
-            if not done[i]:
-                ep_returns = ep_returns.at[i].set(ep_returns[i] + reward[i])
-                ep_lengths = ep_lengths.at[i].set(ep_lengths[i] + 1)
-
-        # if wandb_run is not None:
-        #     wandb_run.log({"procgen_rollouts": wandb.Video(np.array(obs), fps=5)})
-
-    rollout_time = time.time() - rollout_time
-
-    eval_metrics = {
-        "episode_return": jnp.mean(ep_returns),
-        "avg_length": jnp.mean(ep_lengths),
-        "rollout_time": rollout_time / config.num_eval_rollouts,
-    }
-    return eval_metrics, transitions
 
 
 def run_rollouts(
@@ -183,6 +130,74 @@ def run_rollouts(
             # add the image to wandb
             wandb_run.log({f"eval_rollouts/trajectory": wandb.Image(fig)})
 
+        elif config.env.env_name == "minatar":
+            # generate the images
+
+            n_channels = trajectories[0][0].observation.shape[-1]
+            cmap = sns.color_palette("cubehelix", n_channels)
+            cmap.insert(0, (0, 0, 0))
+            cmap = colors.ListedColormap(cmap)
+            bounds = [i for i in range(n_channels + 2)]
+            norm = colors.BoundaryNorm(bounds, n_channels + 1)
+
+            videos = []
+            num_render = min(config.num_eval_rollouts_render, len(trajectories))
+            for rollout_indx in range(num_render):
+                images = []
+                for step, timestep in enumerate(trajectories[rollout_indx]):
+                    obs = timestep.observation
+                    numerical_state = (
+                        np.amax(
+                            obs * np.reshape(np.arange(n_channels) + 1, (1, 1, -1)), 2
+                        )
+                        + 0.5
+                    )
+                    plt.imshow(numerical_state, cmap=cmap, norm=norm)
+                    # remove the borders
+                    plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
+                    plt.axis("off")
+
+                    import io
+                    from PIL import Image
+
+                    # little hack to save matplotlib fig as a numpy array
+                    buf = io.BytesIO()
+                    plt.savefig(
+                        buf,
+                        format="png",
+                        bbox_inches="tight",
+                        pad_inches=0,
+                        transparent=True,
+                    )
+                    buf.seek(0)
+
+                    # Use PIL to open the image from the BytesIO object
+                    img = Image.open(buf)
+
+                    img_rgb = img.convert("RGB")
+                    img = img_rgb.resize((64, 64))
+
+                    # Convert the PIL image to a numpy array
+                    img_array = np.array(img)
+                    images.append(img_array)
+
+                    buf.close()
+                    plt.close()
+                videos.append(images)
+
+            # pad videos to same length
+            max_length = max([len(video) for video in videos])
+            for indx, video in enumerate(videos):
+                while len(video) < max_length:
+                    video.append(video[-1])
+
+                videos[indx] = video
+
+            videos = np.array(videos)
+            videos = einops.rearrange(videos, "n t h w c -> n t c h w")
+            wandb_run.log(
+                {f"{env_id}/eval_rollouts": wandb.Video(np.array(videos), fps=5)}
+            )
         else:
             # imgs is N x T x H x W x C
             # we want N x T x C x H x W
@@ -357,8 +372,8 @@ def eval_rollout_dt(
                 actions=actions,
                 rewards=rewards if config.model.policy.use_rtg else None,
                 mask=mask,
-                prompt=prompt,
                 timestep=dt_timestep,
+                prompt=prompt,
                 traj_index=traj_index,
                 is_training=False,
             )
@@ -495,11 +510,14 @@ def eval_rollout(
             task = timestep.state.goal
         elif config.env.env_name == "xland":
             task = timestep.state.goal_encoding
+        elif config.env.env_name == "minatar":
+            task = None
 
-        if len(task.shape) == 1:
+        if task is not None and len(task.shape) == 1:
             task = task[jnp.newaxis]
 
-        task = task.astype(jnp.float32)
+        if task is not None:
+            task = task.astype(jnp.float32)
 
         success = False
         done = False
@@ -521,11 +539,14 @@ def eval_rollout(
                 task = timestep.state.goal
             elif config.env.env_name == "xland":
                 task = timestep.state.goal_encoding
+            elif config.env.env_name == "minatar":
+                task = None
 
-            if len(task.shape) == 1:
+            if task is not None and len(task.shape) == 1:
                 task = task[jnp.newaxis]
 
-            task = task.astype(jnp.float32)
+            if task is not None:
+                task = task.astype(jnp.float32)
 
             (policy_output, hidden_state), _ = jit_apply(
                 policy_rng,
@@ -564,6 +585,7 @@ def eval_rollout(
             actions.append(action)
             step += 1
             timestep = next_timestep
+            print(f"step: {step}, reward: {reward}, done: {done}")
 
         # add a dummy action for the shape
         actions.append(actions[-1])

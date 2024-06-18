@@ -16,7 +16,7 @@ from varibad_jax.agents.common import PolicyOutput
 @optax.inject_hyperparams
 def optimizer(lr, eps):
     return optax.chain(
-        # optax.clip_by_global_norm(config.policy.max_grad_norm),
+        optax.clip_by_global_norm(2.0),
         optax.adamw(lr, eps=eps),
     )
 

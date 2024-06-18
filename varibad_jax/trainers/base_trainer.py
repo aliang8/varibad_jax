@@ -13,11 +13,12 @@ import wandb
 import optax
 import einops
 import json
+import gymnax
 import shutil
 import jax.tree_util as jtu
 from ml_collections import FrozenConfigDict
 from pathlib import Path
-from varibad_jax.envs.utils import make_envs, make_procgen_envs
+from varibad_jax.envs.utils import make_envs, make_procgen_envs, make_atari_envs
 import gymnasium as gym
 from jax import config as jax_config
 
@@ -89,12 +90,27 @@ class BaseTrainer:
             # not jax jit compatible
             self.envs = make_procgen_envs(**self.config.env)
             self.config.env.num_envs = self.config.num_eval_rollouts
-            self.eval_envs = make_procgen_envs(training=False, **self.config.env)
+            self.eval_envs = {
+                "bigfish": (make_procgen_envs(training=False, **self.config.env), {})
+            }
             self.obs_shape = self.envs.single_observation_space.shape
             self.continuous_actions = False
             self.input_action_dim = 1
             self.action_dim = self.envs.single_action_space.n
-        else:
+        elif self.config.env.env_name == "atari":
+            self.envs = make_atari_envs(**self.config.env)
+            self.config.env.num_envs = self.config.num_eval_rollouts
+            self.eval_envs = {}
+            for env_id in self.config.env.eval_env_ids:
+                self.eval_envs[env_id] = make_atari_envs(
+                    training=False, **self.config.env
+                )
+            self.obs_shape = self.envs.single_observation_space.shape
+            self.continuous_actions = False
+            self.input_action_dim = 1
+            self.action_dim = self.envs.single_action_space.n
+            self.steps_per_rollout = self.config.env.steps_per_rollout
+        elif self.config.env.env_name == "xland":
             self.envs, self.env_params = make_envs(**self.config.env)
             logging.info(f"env [{self.config.env.env_id}] params: {self.env_params}")
 
@@ -113,8 +129,11 @@ class BaseTrainer:
             self.obs_shape = self.envs.observation_space.shape
             self.continuous_actions = not isinstance(
                 self.envs.action_space, gym.spaces.Discrete
+            ) and not isinstance(
+                self.envs.action_space, gymnax.environments.spaces.Discrete
             )
-            if isinstance(self.envs.action_space, gym.spaces.Discrete):
+
+            if not self.continuous_actions:
                 self.action_dim = self.envs.action_space.n
                 self.input_action_dim = 1
             else:
@@ -131,6 +150,8 @@ class BaseTrainer:
                 self.task_dim = self.config.env.task_dim
 
             logging.info(f"task_dim: {self.task_dim}")
+        else:
+            raise ValueError(f"env_name {self.config.env.env_name} not supported")
 
         if self.config.log_level == "info":
             logging.set_verbosity(logging.INFO)

@@ -1,4 +1,4 @@
-from varibad_jax.configs.xland.minigrid_gotodoor.base import (
+from varibad_jax.configs.xland.minigrid_gotoobject.base import (
     get_config as get_base_config,
 )
 
@@ -11,13 +11,11 @@ def get_config(config_string: str = None):
 
     config.data.data_type = "lapo"
     config.data.context_len = 0
-    config.data.num_trajs = 20
+    #config.data.num_trajs = 20
 
     config.model.use_lr_scheduler = False
     config.model.latent_action_dim = 128
-    # config.model.lam_ckpt = "/scr/aliang80/varibad_jax/varibad_jax/results/lam/nt-9000/eid-MiniGrid-GoToDoorRandomColors-R1-9x9-3/en-xland/b-0.05/code_d-64/n_codes-60/usd-True"
-
-    config.model.lam_ckpt = "/scr/aliang80/varibad_jax/varibad_jax/results/test/al-False/nt-9000/eid-MiniGrid-GoToDoorRandomColors-R1-9x9-3/en-xland/b-0.05/code_d-128/n_codes-60/usd-True"
+    config.model.lam_ckpt = "/scr/matthewh6/varibad_jax/varibad_jax/results/lam/al-False/nt-9000/eid-MiniGrid-GoToKey-R1-9x9-3/en-xland/b-0.05/code_d-128/n_codes-64/usd-True"
 
     config.num_evals = 20
     config.num_epochs = 2000

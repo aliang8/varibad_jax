@@ -39,7 +39,8 @@ def get_config(config_string: str = None):
                 benchmark_path="/scr/aliang80/varibad_jax/varibad_jax/envs/xland_benchmarks/test_ruleset.pkl",
                 # preloaded_benchmark="small-1m",
                 ruleset_id=-1,
-                env_id="XLand-MiniGridCustom-R1-7x7",
+                #env_id="XLand-MiniGridCustom-R1-7x7",
+                env_id="MiniGrid-GoToDoorShiftDoors-R1-9x9-3",
                 num_episodes_per_rollout=1,
                 steps_per_rollout=30,
                 num_processes=16,
@@ -97,13 +98,13 @@ def get_config(config_string: str = None):
     # number of warmup steps before training
     config.warmup_steps = 10000
     # where to save experiment artifacts (videos, checkpoints, etc)
-    config.root_dir = "/scr/aliang80/varibad_jax/varibad_jax/"
-    config.exp_dir = "/scr/aliang80/varibad_jax/varibad_jax/"
+    config.root_dir = "/scr/matthewh6/varibad_jax/varibad_jax/"
+    config.exp_dir = "/scr/matthewh6/varibad_jax/varibad_jax/"
     config.exp_name = ""
     config.group_name = ""
     config.ray_logdir = "ray_results"
     config.overwrite = True
-    config.wandb_entity = "glamor"
+    config.wandb_entity = "matthewh6"
     config.wandb_project = "varibad_jax"
 
     # for rollout visualization

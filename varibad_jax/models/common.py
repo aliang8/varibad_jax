@@ -16,6 +16,7 @@ class DownsamplingBlock(hk.Module):
         kernel_size: int = 3,
         stride: int = 1,
         padding: str = "SAME",
+        mp_kernel_size: int = 2,
         w_init=hk.initializers.VarianceScaling(scale=2.0),
         b_init=hk.initializers.Constant(0.0),
         **kwargs,
@@ -28,6 +29,7 @@ class DownsamplingBlock(hk.Module):
         self.kernel_size = kernel_size
         self.stride = stride
         self.padding = padding
+        self.mp_kernel_size = mp_kernel_size
         self.init_kwargs = dict(w_init=w_init, b_init=b_init)
 
     def __call__(self, x, is_training=True):
@@ -55,7 +57,7 @@ class DownsamplingBlock(hk.Module):
 
         if self.add_max_pool:
             x = hk.MaxPool(
-                window_shape=(2, 2),
+                window_shape=(self.mp_kernel_size, self.mp_kernel_size),
                 strides=(2, 2),
                 padding="SAME",
             )(x)
@@ -212,6 +214,7 @@ class ImageDecoder(hk.Module):
         self.add_residual = add_residual
         self.num_output_channels = num_output_channels
         self.init_kwargs = dict(w_init=w_init, b_init=b_init)
+        self.kwargs = kwargs
 
     def __call__(
         self,
@@ -227,26 +230,17 @@ class ImageDecoder(hk.Module):
             lead_dims = x.shape[:-3]
             x = einops.rearrange(x, "... C H W -> (...) C H W")
 
-        for i in range(len(self.arch)):
+        for i, spec in enumerate(self.arch):
             if intermediates is not None:
                 x = jnp.concatenate([x, intermediates[-i - 1]], axis=1)
-            x = hk.Conv2DTranspose(
-                output_channels=self.arch[i][0],
-                kernel_shape=self.arch[i][1],
-                stride=self.arch[i][2],
-                padding=self.arch[i][3],
-                data_format="NCHW",
-                **self.init_kwargs,
-            )(x)
+            x = UpsamplingBlock(
+                num_channels=spec[0],
+                kernel_size=spec[1],
+                stride=spec[2],
+                padding=spec[3],
+                **self.kwargs,
+            )(x, is_training)
             logging.info(f"decoder layer {i} shape: {x.shape}")
-            if self.add_bn:
-                x = hk.BatchNorm(
-                    create_offset=True,
-                    create_scale=True,
-                    decay_rate=0.9,
-                    data_format="channels_first",
-                )(x, is_training)
-            x = nn.gelu(x)
 
         # last layer
         # this is just to get the right number of channels, doesn't change the spatial dimensions
@@ -254,6 +248,8 @@ class ImageDecoder(hk.Module):
         final_conv_inp = x
         if context is not None:
             final_conv_inp = jnp.concatenate([x, context], axis=1)
+
+        final_conv_inp = nn.gelu(final_conv_inp)
 
         x = hk.Conv2D(
             output_channels=self.num_output_channels,

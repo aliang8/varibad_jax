@@ -17,7 +17,58 @@ class TimestepInfo:
     init_key: PRNGKey
 
 
+@chex.dataclass
+class EnvStateKey:
+    key: PRNGKey
+    state: EnvCarryT
+
+
+# wraps the gymnax environment
+class TimeStepWrapper(Wrapper):
+    def reset(self, env_params: EnvParamsT, rng: PRNGKey, **kwargs):
+        obs, state = self._env.reset(rng, env_params, **kwargs)
+        env_state_key = EnvStateKey(key=rng, state=state)
+
+        timestep = TimeStep(
+            observation=obs,
+            state=env_state_key,
+            step_type=StepType.FIRST,
+            reward=jnp.asarray(0.0),
+            discount=jnp.asarray(1.0),
+        )
+
+        return timestep
+
+    def step(
+        self, env_params: EnvParamsT, timestep: TimeStep, action: jnp.ndarray, **kwargs
+    ):
+        rng = timestep.state.key
+        rng, _rng = jax.random.split(rng)
+
+        n_obs, n_state, reward, done, _ = self._env.step(
+            rng, timestep.state.state, action, env_params
+        )
+
+        env_state_key = EnvStateKey(key=rng, state=n_state)
+        timestep = timestep.replace(
+            observation=n_obs,
+            state=env_state_key,
+            reward=reward,
+            discount=jnp.where(done, 0.0, 1.0),
+            step_type=jnp.where(done, StepType.LAST, StepType.MID),
+        )
+
+        return timestep
+
+    def observation_space(self, params):
+        return self._env.observation_space(params)
+
+    def action_space(self, params):
+        return self._env.action_space(params)
+
+
 class GymAutoResetWrapper(Wrapper):
+
     def __auto_reset(self, params, timestep):
         key, _ = jax.random.split(timestep.state.key)
         reset_timestep = self._env.reset(params, key)
@@ -29,14 +80,20 @@ class GymAutoResetWrapper(Wrapper):
         return timestep
 
     # TODO: add last_obs somewhere in the timestep? add extras like in Jumanji?
-    def step(self, params, timestep, action):
-        timestep = self._env.step(params, timestep, action)
+    def step(self, params, timestep, action, **kwargs):
+        timestep = self._env.step(params, timestep, action, **kwargs)
         timestep = jax.lax.cond(
             timestep.last(),
             lambda: self.__auto_reset(params, timestep),
             lambda: timestep,
         )
         return timestep
+
+    def observation_space(self, params):
+        return self._env.observation_space(params)
+
+    def action_space(self, params):
+        return self._env.action_space(params)
 
 
 class BasicWrapper(Wrapper):

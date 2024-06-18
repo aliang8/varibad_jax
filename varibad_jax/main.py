@@ -24,7 +24,7 @@ from varibad_jax.trainers.meta_trainer import MetaRLTrainer
 from varibad_jax.trainers.offline_trainer import OfflineTrainer
 from varibad_jax.trainers.rl_trainer import RLTrainer
 
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.01"
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.05"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 _CONFIG = config_flags.DEFINE_config_file("config")
 
@@ -36,7 +36,7 @@ psh = {
     "env": {
         "env_name": "en",
         "env_id": "eid",
-        "eval_env_id": "eval_id",
+        "eval_env_ids": "eval_ids",
         "num_frames": "nf",
         "num_processes": "np",
         "steps_per_rollout": "steps",
@@ -80,16 +80,31 @@ psh = {
 
 # run with ray tune
 param_space = {
-    "model": {"idm_nt": tune.grid_search([20])},
-    # "data": {"num_trajs": tune.grid_search([10, 15, 20, 50, 75])},
-    "data": {"num_trajs": tune.grid_search([50, 100, 500, 1000])},
-    # "data": {"num_trajs": tune.grid_search([10, 20, 50, 100, 500, 1000])},
-    "seed": tune.grid_search([0]),
+    #"env": {"env_id": tune.grid_search(["MiniGrid-GoToDoor-R1-9x9-3", "MiniGrid-GoToKey-R1-9x9-3"])},
+    #"env": {"env_id": tune.grid_search(["MiniGrid-GoToBall-R1-9x9-3", "MiniGrid-GoToDoor-R1-9x9-3", "MiniGrid-GoToSquare-R1-9x9-3", "MiniGrid-GoToKey-R1-9x9-3"])},
+    #"data": {"num_labelled": tune.grid_search([10, 20])}
+    # "model": {"idm_nt": tune.grid_search([20])},
+    # # "data": {"num_trajs": tune.grid_search([10, 15, 20, 50, 75])},
+    # "data": {"num_trajs": tune.grid_search([50, 100, 500, 1000])},
+    # # "data": {"num_trajs": tune.grid_search([10, 20, 50, 100, 500, 1000])},
+    # "seed": tune.grid_search([2]),
     # "data": {"num_trajs": tune.grid_search([100, 500, 1000, 5000])},
     # "data": {"num_trajs_per_batch": tune.grid_search([2, 3, 4])},
     # "model": {"entropy_coeff": tune.grid_search([0.02, 0.05, 0.1])},
     # "model": {"idm": {"num_codes": tune.grid_search([6, 60, 100])}},
 }
+
+# param_space = {
+#     "model": {"idm_nt": tune.grid_search([20])},
+#     # "data": {"num_trajs": tune.grid_search([10, 15, 20, 50, 75])},
+#     "data": {"num_trajs": tune.grid_search([50, 100, 500, 1000])},
+#     # "data": {"num_trajs": tune.grid_search([10, 20, 50, 100, 500, 1000])},
+#     "seed": tune.grid_search([2]),
+#     # "data": {"num_trajs": tune.grid_search([100, 500, 1000, 5000])},
+#     # "data": {"num_trajs_per_batch": tune.grid_search([2, 3, 4])},
+#     # "model": {"entropy_coeff": tune.grid_search([0.02, 0.05, 0.1])},
+#     # "model": {"idm": {"num_codes": tune.grid_search([6, 60, 100])}},
+# }
 
 
 def train_model_fn(config):
@@ -103,6 +118,7 @@ def train_model_fn(config):
         config["group_name"] = re.sub("_s-\d", "", base_name)
         logging.info(f"wandb group name: {config['group_name']}")
     else:
+        print(f"config:{config}")
         exp_name = create_exp_name({}, config)
         config["exp_dir"] = str(Path(config["exp_dir"]) / "results" / exp_name)
         config["exp_name"] = exp_name
@@ -118,7 +134,6 @@ def train_model_fn(config):
         trainer_cls = OfflineTrainer
     else:
         raise ValueError(f"trainer {config.trainer} not found")
-
     trainer = trainer_cls(config)
     if config.mode == "train":
         trainer.train()
@@ -154,13 +169,15 @@ def create_exp_name(param_space, config):
 
         shorthand = psh
         value = config
+        print(f"k:{k}")
         for i, key in enumerate(k):
             key_str = eval(str(key))[0]
             if key_str == "grid_search" or isinstance(key, jtu.SequenceKey):
                 continue
-
+            
             shorthand = shorthand[key_str]
             value = value[key_str]
+        
 
         if not shorthand in keys_added:
             trial_str += str(shorthand) + "-" + str(value) + ","
@@ -193,6 +210,7 @@ def main(_):
     if config["smoke_test"] is False:
         config["use_wb"] = True  # log to wandb
         # update dict of dict
+        print(f"configs: {config}")
         config = update(config, param_space)
         train_model = tune.with_resources(
             train_model_fn, {"cpu": config["cpu"], "gpu": config["gpu"]}

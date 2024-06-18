@@ -15,7 +15,7 @@ transformer_config = config_dict.ConfigDict(
     )
 )
 
-base = 16
+base = 24
 image_encoder_configs = {
     "3x3": config_dict.ConfigDict(
         dict(
@@ -27,6 +27,7 @@ image_encoder_configs = {
             ],
             add_bn=True,
             add_residual=True,
+            mp_kernel_size=2,
         )
     ),
     "5x5": config_dict.ConfigDict(
@@ -42,6 +43,7 @@ image_encoder_configs = {
             add_bn=True,
             add_residual=True,
             scale=1,
+            mp_kernel_size=2,
         )
     ),
     "7x7": config_dict.ConfigDict(
@@ -55,6 +57,7 @@ image_encoder_configs = {
             ],
             add_bn=True,
             add_residual=True,
+            mp_kernel_size=2,
         )
     ),
     "9x9": config_dict.ConfigDict(
@@ -68,6 +71,21 @@ image_encoder_configs = {
             ],
             add_bn=True,
             add_residual=True,
+            mp_kernel_size=2,
+        )
+    ),
+    "10x10": config_dict.ConfigDict(
+        dict(
+            name="image_encoder",
+            arch=[
+                [16, 3, 1, "VALID"],
+                [32, 3, 1, "VALID"],
+                [32, 3, 1, "VALID"],
+                [64, 3, 1, "VALID"],
+            ],
+            add_bn=True,
+            add_residual=True,
+            mp_kernel_size=2,
         )
     ),
     "64x64": config_dict.ConfigDict(
@@ -84,6 +102,8 @@ image_encoder_configs = {
             add_bn=True,
             add_residual=True,
             add_max_pool=True,
+            mp_kernel_size=2,
+            # scale=4,
         )
     ),
 }

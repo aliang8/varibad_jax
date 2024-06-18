@@ -9,7 +9,7 @@ import einops
 from ml_collections.config_dict import ConfigDict
 
 from varibad_jax.models.common import ImageEncoder, ImageDecoder
-from varibad_jax.models.lam.helpers import ImpalaCNN
+from varibad_jax.models.lam.helpers import ImpalaCNN, VQEmbeddingEMA
 from varibad_jax.models.transformer_encoder import TransformerEncoder
 
 
@@ -135,7 +135,6 @@ class LatentFDM(hk.Module):
             # predict next state
             next_state_pred = self.state_decoder(model_input)
 
-        # next_state_pred = jnp.tanh(next_state_pred) / 2
         return next_state_pred
 
 
@@ -162,7 +161,7 @@ class LatentActionIDM(hk.Module):
 
         if self.use_transformer:
             self.transformer = TransformerEncoder(
-                **config.transformer_config, **init_kwargs
+                **config.transformer_config, **init_kwargs, casual=False
             )
             if self.image_obs:
                 # Used to encode the image before feeding as input to the TransformerEncoder
@@ -177,9 +176,6 @@ class LatentActionIDM(hk.Module):
                 self.state_embed = ImageEncoder(
                     **config.image_encoder_config, **init_kwargs
                 )
-                # self.state_embed = ImpalaCNN(
-                #     **config.image_encoder_config, **init_kwargs
-                # )
             else:
                 # MLP
                 self.state_embed = hk.nets.MLP(
@@ -190,23 +186,34 @@ class LatentActionIDM(hk.Module):
                 )
 
         # Predict latent action before inputting to VQ
-        self.policy_head = hk.nets.MLP(
+        self.latent_action_head = hk.nets.MLP(
             list(config.policy_mlp_sizes) + [config.code_dim],
             activation=nn.gelu,
-            name="policy_head",
+            name="latent_action_head",
             activate_final=False,
             **init_kwargs,
         )
 
         # see VQVAE in https://arxiv.org/abs/1711.00937
         # the EMA version uses an exponential moving average of the embedding vectors
-        self.vq = hk.nets.VectorQuantizerEMA(
-            embedding_dim=config.code_dim,
-            num_embeddings=config.num_codes,
-            commitment_cost=config.beta,
+        # self.vq = hk.nets.VectorQuantizerEMA(
+        #     embedding_dim=config.code_dim,
+        #     num_embeddings=config.num_codes,
+        #     commitment_cost=config.beta,
+        #     decay=config.ema_decay,
+        #     name="VQEMA",
+        # )
+
+        self.vq = VQEmbeddingEMA(
+            epsilon=config.epsilon,
+            num_codebooks=config.num_codebooks,
+            num_embs=config.num_codes,
+            emb_dim=16,
+            num_discrete_latents=config.num_discrete_latents,
             decay=config.ema_decay,
-            name="VQEMA",
+            commitment_loss=config.beta,
         )
+        # self.vq = VQEmbeddingEMA()
 
     def __call__(self, states: jnp.ndarray, is_training: bool = True):
         """IDM takes the state and next state and predicts the action
@@ -252,9 +259,9 @@ class LatentActionIDM(hk.Module):
                 state_embeds = self.state_embed(states)
 
         # predict latent actions
-        latent_actions = self.policy_head(nn.gelu(state_embeds))
+        latent_actions = self.latent_action_head(nn.gelu(state_embeds))
 
         # compute quantized latent actions
         vq_outputs = self.vq(latent_actions, is_training=is_training)
-        vq_outputs["latent_actions"] = latent_actions
+        vq_outputs.latent_actions = latent_actions
         return vq_outputs

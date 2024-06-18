@@ -91,6 +91,7 @@ class Batch:
     timestep: jnp.ndarray = None
     traj_index: jnp.ndarray = None
     labelled: jnp.ndarray = None
+    latent_actions: jnp.ndarray = None
 
 
 import random
@@ -123,7 +124,7 @@ class NumpyLoader(data.DataLoader):
         shuffle=False,
         sampler=None,
         batch_sampler=None,
-        num_workers=0,
+        num_workers=8,
         pin_memory=False,
         drop_last=False,
         timeout=0,
@@ -168,13 +169,13 @@ class DataStager:
         num_transitions = self.chunk_len * len(self.files)
         self.np_d = {
             "observations": np.zeros(
-                (num_transitions, 64, 64, self.obs_depth), dtype=np.uint8
+                (num_transitions, 64, 64, self.obs_depth), dtype=np.float32
             ),
             "actions": np.zeros(num_transitions, dtype=np.int64),
             "dones": np.zeros(num_transitions, dtype=np.int64),
             "rewards": np.zeros(num_transitions),
             "next_observations": np.zeros(
-                (num_transitions, 64, 64, self.obs_depth), dtype=np.uint8
+                (num_transitions, 64, 64, self.obs_depth), dtype=np.float32
             ),
         }
 
@@ -229,6 +230,96 @@ def load_data(config: ConfigDict, rng: jax.random.PRNGKey):
 
     # load dataset
     training_env_id = config.env.env_id
+
+    if config.env.env_name == "procgen":
+        TRAJS_PER_FILE_TRAIN = 500
+        TRAJS_PER_FILE_TEST = 116
+        MAX_LEN = 200
+
+        all_data = {}
+        for split in ["train", "test"]:
+            TRAJS_PER_FILE = (
+                TRAJS_PER_FILE_TRAIN if split == "train" else TRAJS_PER_FILE_TEST
+            )
+            # load chunks
+            chunk_dir = (
+                data_dir / Path("procgen") / "expert_data" / training_env_id / split
+            )
+            if config.data.load_latent_actions:
+                chunk_dir = chunk_dir / "la_chunks"
+            else:
+                chunk_dir = chunk_dir / "chunks"
+
+            chunk_files = list(chunk_dir.glob("*.npz"))
+            if config.data.debug:
+                chunk_files = chunk_files[:1]
+
+            chunk_data = {
+                "observations": np.zeros(
+                    (TRAJS_PER_FILE * len(chunk_files), MAX_LEN, 64, 64, 3),
+                    dtype=np.float32,
+                ),
+                "actions": np.zeros(
+                    (TRAJS_PER_FILE * len(chunk_files), MAX_LEN), dtype=np.int64
+                ),
+                "rewards": np.zeros(
+                    (TRAJS_PER_FILE * len(chunk_files), MAX_LEN), dtype=np.float32
+                ),
+                "dones": np.zeros(
+                    (TRAJS_PER_FILE * len(chunk_files), MAX_LEN), dtype=np.int64
+                ),
+                "next_observations": np.zeros(
+                    (TRAJS_PER_FILE * len(chunk_files), MAX_LEN, 64, 64, 3),
+                    dtype=np.float32,
+                ),
+                "mask": np.zeros(
+                    (TRAJS_PER_FILE * len(chunk_files), MAX_LEN), dtype=np.int64
+                ),
+            }
+
+            if config.data.load_latent_actions:
+                chunk_data["latent_actions"] = np.zeros(
+                    (
+                        TRAJS_PER_FILE * len(chunk_files),
+                        MAX_LEN,
+                        config.model.latent_action_dim,
+                    ),
+                    dtype=np.float32,
+                )
+
+            for i, chunk_file in tqdm.tqdm(
+                enumerate(chunk_files), desc=f"loading {split} files"
+            ):
+                data = np.load(chunk_file)
+                for k, v in data.items():
+                    chunk_data[k][i * TRAJS_PER_FILE : (i + 1) * TRAJS_PER_FILE] = v
+
+            all_data[split] = chunk_data
+            indices = jnp.arange(TRAJS_PER_FILE * len(chunk_files))
+            rng, perm_rng = jax.random.split(rng)
+
+            num_trajs = config.data.num_trajs if split == "train" else 10000
+            indices = jax.random.permutation(perm_rng, indices)[:num_trajs]
+            all_data[split] = subsample_data(all_data[split], indices)
+
+            # import ipdb
+
+            # ipdb.set_trace()
+
+            if config.data.data_type != "trajectories":
+
+                def apply_mask(x):
+                    flatten_first_two = x.reshape(-1, *x.shape[2:])
+                    mask = all_data[split]["mask"].reshape(-1) == 1
+                    return flatten_first_two[mask]
+
+                all_data[split] = jtu.tree_map(apply_mask, all_data[split])
+
+        return (
+            all_data["train"],
+            {training_env_id: all_data["test"]},
+            {training_env_id: all_data["test"]},
+        )
 
     if config.env.env_name == "procgen":
         dataset_name = Path("procgen") / "expert_data" / training_env_id / "train"
@@ -339,11 +430,14 @@ def load_data(config: ConfigDict, rng: jax.random.PRNGKey):
 
         def apply_mask(x):
             flatten_first_two = x.reshape(-1, *x.shape[2:])
-            mask = train_data["mask"].reshape(-1)
+            mask = train_data["mask"].reshape(-1) == 1
             return flatten_first_two[mask]
 
         train_data = jtu.tree_map(apply_mask, train_data)
 
+    # import ipdb
+
+    # ipdb.set_trace()
     eval_data = {}
     eval_data[training_env_id] = subsample_data(data, eval_indices)
     for env_id, env_eval_data in eval_datasets.items():
@@ -360,7 +454,7 @@ def load_data(config: ConfigDict, rng: jax.random.PRNGKey):
 
             def apply_mask(x):
                 flatten_first_two = x.reshape(-1, *x.shape[2:])
-                mask = eval_d["mask"].reshape(-1)
+                mask = eval_d["mask"].reshape(-1) == 1
                 return flatten_first_two[mask]
 
             eval_data[env_id] = jtu.tree_map(apply_mask, eval_d)
@@ -438,10 +532,16 @@ class TransitionsDataset(Dataset):
         self.num_samples = self.data["observations"].shape[0]
 
     def __getitem__(self, index):
-        return subsample_data(self.data, index)
+        data = subsample_data(self.data, index)
+        return data
 
     def __len__(self):
         return self.num_samples
+
+
+def subsample_window(data, index, window_size):
+    fn = lambda x: x[index : index + window_size]
+    return tree_map(fn, data)
 
 
 class TrajectoryDataset(Dataset):
@@ -455,17 +555,23 @@ class TrajectoryDataset(Dataset):
             self.data["observations"].shape[1] * self.data_cfg.num_trajs_per_batch
         )
 
-        # map from trajectory index to task index
-        self.tasks = self.data["tasks"][:, 0]
-        self.traj_to_task_id_map = {}
-        for indx, task in enumerate(self.tasks):
-            self.traj_to_task_id_map[indx] = task
+        self.context_len = self.data_cfg.context_window
+        # import ipdb
 
-        self.task_id_to_traj_map = {}
-        for indx, task in enumerate(self.tasks):
-            if tuple(task) not in self.task_id_to_traj_map:
-                self.task_id_to_traj_map[tuple(task)] = []
-            self.task_id_to_traj_map[tuple(task)].append(indx)
+        # ipdb.set_trace()
+
+        if "tasks" in self.data:
+            # map from trajectory index to task index
+            self.tasks = self.data["tasks"][:, 0]
+            self.traj_to_task_id_map = {}
+            for indx, task in enumerate(self.tasks):
+                self.traj_to_task_id_map[indx] = task
+
+            self.task_id_to_traj_map = {}
+            for indx, task in enumerate(self.tasks):
+                if tuple(task) not in self.task_id_to_traj_map:
+                    self.task_id_to_traj_map[tuple(task)] = []
+                self.task_id_to_traj_map[tuple(task)].append(indx)
 
     def __getitem__(self, index):
         data = subsample_data(self.data, index)
@@ -476,16 +582,30 @@ class TrajectoryDataset(Dataset):
         data["timestep"] = np.zeros(self.max_traj_len, dtype=np.int32)
         data["timestep"][:traj1_len] = np.arange(traj1_len)
 
+        # subsample a context window
+        si = np.random.randint(0, max(1, traj1_len - self.context_len))
+        data = subsample_window(data, si, self.context_len)
+
         if self.data_cfg.num_trajs_per_batch > 1:
             for indx in range(self.data_cfg.num_trajs_per_batch - 1):
-                task_id = data["tasks"][0]
-                traj_ids = self.task_id_to_traj_map[
-                    tuple(task_id)
-                ]  # all the trajectories with the same task
+                if "tasks" in data:
+                    task_id = data["tasks"][0]
+                    traj_ids = self.task_id_to_traj_map[
+                        tuple(task_id)
+                    ]  # all the trajectories with the same task
 
-                # choose a random new trajectory with the same MDP to combine
-                traj_id = np.random.choice(traj_ids)
+                    # choose a random new trajectory with the same MDP to combine
+                    traj_id = np.random.choice(traj_ids)
+                else:
+                    traj_id = np.random.randint(self.num_trajectories)
+
                 other_traj = subsample_data(self.data, traj_id)
+                other_traj["timesteps"] = np.arange(self.max_traj_len, dtype=np.int32)
+
+                si = np.random.randint(
+                    0, max(1, other_traj["mask"].sum() - self.context_len)
+                )
+                other_traj = subsample_window(other_traj, si, self.context_len)
 
                 # compute total length of the trajectories
                 traj1_len = int(data["mask"].sum())
@@ -550,7 +670,10 @@ class LAPODataset(Dataset):
         self.num_samples = self.data["observations"].shape[0]
 
     def __getitem__(self, index):
-        return subsample_data(self.data, index)
+        # start = time.time()
+        data = subsample_data(self.data, index)
+        # logging.info(f"subsample data took: {time.time() - start}")
+        return data
 
     def __len__(self):
         return self.num_samples
