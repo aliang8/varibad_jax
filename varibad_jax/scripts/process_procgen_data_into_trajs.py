@@ -9,7 +9,7 @@ import h5py
 import numpy as np
 from pathlib import Path
 from varibad_jax.utils.data_utils import DataStager, TRAIN_CHUNK_LEN, TEST_CHUNK_LEN
-from varibad_jax.configs.procgen.bigfish.bc import get_config
+from varibad_jax.configs.procgen.bc import get_config
 from varibad_jax.utils.data_utils import (
     merge_trajectories,
     split_data_into_trajectories,
@@ -18,9 +18,9 @@ import multiprocessing
 from multiprocessing import Process
 
 ALL_GAMES = [
-    # "bigfish",
+    "bigfish",
     # "bossfight",
-    "caveflyer",
+    # "caveflyer",
     # "chaser",
     # "climber",
     # "coinrun",
@@ -65,7 +65,7 @@ def process_games(games, data_dir, config):
             split_data_dir = data_dir / "procgen" / "expert_data" / game / split
 
             data = DataStager(
-                files=list(split_data_dir.glob("*.npz"))[:20],
+                files=list(split_data_dir.glob("*.npz")),
                 chunk_len=TRAIN_CHUNK_LEN if split == "train" else TEST_CHUNK_LEN,
             )
 

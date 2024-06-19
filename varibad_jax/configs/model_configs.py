@@ -15,6 +15,27 @@ transformer_config = config_dict.ConfigDict(
     )
 )
 
+vit_config = config_dict.ConfigDict(
+    dict(
+        name="vit",
+        hidden_dim=128,
+        num_heads=8,
+        num_layers=6,
+        attn_size=256,
+        widening_factor=4,
+        dropout_rate=0.1,
+        max_timesteps=1000,
+        patch_size=(8, 8),
+        image_size=(64, 64),
+        # encode_separate=True,  # encode (s,a,r) as separate tokens
+    )
+)
+
+transformer_configs = {
+    "transformer": transformer_config,
+    "vit": vit_config,
+}
+
 base = 24
 image_encoder_configs = {
     "3x3": config_dict.ConfigDict(
@@ -97,7 +118,7 @@ image_encoder_configs = {
                 [base * 4, 3, 1, "SAME"],
                 [base * 8, 3, 1, "SAME"],
                 [base * 16, 3, 1, "SAME"],
-                [base * 32, 2, 1, "SAME"],
+                [base * 32, 2, 1, "VALID"],
             ],
             add_bn=True,
             add_residual=True,
@@ -198,4 +219,21 @@ image_decoder_configs = {
             num_output_channels=3,
         )
     ),
+    # "84x84": config_dict.ConfigDict(
+    #     dict(
+    #         name="image_encoder",
+    #         arch=[
+    #             [base * 32, 2, 2, "SAME"],
+    #             [base * 16, 2, 2, "SAME"],
+    #             [base * 8, 2, 2, "SAME"],
+    #             [base * 4, 2, 2, "SAME"],
+    #             [base * 2, 2, 2, "SAME"],
+    #             [base, 2, 2, "SAME"],
+    #             [base, 2, 2, "SAME"],
+    #         ],
+    #         add_bn=True,
+    #         add_residual=True,
+    #         num_output_channels=1,
+    #     )
+    # ),
 }

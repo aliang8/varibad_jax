@@ -113,13 +113,16 @@ class BaseTrainer:
             self.config.env.num_envs = self.config.num_eval_rollouts
             self.eval_envs = {}
             for env_id in self.config.env.eval_env_ids:
-                self.eval_envs[env_id] = make_atari_envs(
-                    training=False, **self.config.env
+                self.eval_envs[env_id] = (
+                    make_atari_envs(training=False, **self.config.env),
+                    {},
                 )
+            # self.obs_shape = self.envs.observation_spec().shape
             self.obs_shape = self.envs.single_observation_space.shape
             self.continuous_actions = False
             self.input_action_dim = 1
             self.action_dim = self.envs.single_action_space.n
+            # self.action_dim = self.envs.action_spec().num_values
             self.steps_per_rollout = self.config.env.steps_per_rollout
         elif self.config.env.env_name == "xland":
             self.envs, self.env_params = make_envs(**self.config.env)

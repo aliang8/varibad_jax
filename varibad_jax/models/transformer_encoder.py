@@ -10,7 +10,7 @@ from ml_collections import ConfigDict
 from varibad_jax.models.common import ImageEncoder
 
 
-class TransformerLayer(hk.Module):
+class TransformerEncoderLayer(hk.Module):
     def __init__(
         self,
         hidden_dim: int,
@@ -90,7 +90,7 @@ class TransformerEncoder(hk.Module):
         initializer = hk.initializers.VarianceScaling(2 / self.num_layers)
 
         self.layers = [
-            TransformerLayer(
+            TransformerEncoderLayer(
                 hidden_dim=hidden_dim,
                 num_heads=num_heads,
                 attn_size=attn_size,
@@ -107,6 +107,7 @@ class TransformerEncoder(hk.Module):
         self,
         embeddings: jax.Array,  # [B, T, D]
         mask: jax.Array = None,  # [B, T]
+        causal_mask: jax.Array = None,  # [B, T, T]
         is_training: bool = True,
     ) -> jax.Array:  # [B, T, D]
         """Transforms input embedding sequences to output embedding sequences."""
@@ -120,13 +121,140 @@ class TransformerEncoder(hk.Module):
         mask = mask[:, None, None, :]  # [B, H=1, T'=1, T]
 
         if self.causal:
-            causal_mask = np.tril(np.ones((1, 1, seq_len, seq_len)))  # [B=1, H=1, T, T]
+            if causal_mask is None:
+                causal_mask = np.tril(
+                    np.ones((1, 1, seq_len, seq_len))
+                )  # [B=1, H=1, T, T]
+
             mask = mask * causal_mask  # [B, H=1, T, T]
 
         h = embeddings
         for i, layer in enumerate(self.layers):
             logging.info(f"h shape: {h.shape}")
             h = layer(h, mask, is_training=is_training)
+
+        return self.ln(h)
+
+
+class TransformerDecoderLayer(hk.Module):
+    def __init__(
+        self,
+        hidden_dim: int,
+        num_heads: int,
+        attn_size: int,
+        dropout_rate: float,
+        widening_factor: int = 4,
+        w_init: hk.initializers.Initializer = hk.initializers.VarianceScaling(1.0),
+        b_init: hk.initializers.Initializer = hk.initializers.Constant(0.0),
+    ):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.num_heads = num_heads
+        self.attn_size = attn_size
+        self.dropout_rate = dropout_rate
+        self.widening_factor = widening_factor
+
+        self.attn_block = hk.MultiHeadAttention(
+            num_heads=self.num_heads,
+            key_size=self.attn_size,
+            model_size=hidden_dim,
+            w_init=w_init,
+            with_bias=True,
+        )
+
+        self.dense_block = hk.Sequential(
+            [
+                hk.Linear(self.hidden_dim * self.widening_factor, w_init=w_init),
+                nn.gelu,
+                hk.Linear(self.hidden_dim, w_init=w_init, b_init=b_init),
+            ]
+        )
+
+        self.ln = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)
+
+    def __call__(self, x, value, key, src_mask, trg_mask, is_training: bool = True):
+        # layer norm -> attention -> dropout -> residual connection
+        h_norm = self.ln(x)
+        h_attn = self.attn_block(h_norm, h_norm, h_norm, mask=trg_mask)
+        if is_training:
+            h_attn = hk.dropout(hk.next_rng_key(), self.dropout_rate, h_attn)
+
+        h = x + h_attn
+
+        h_norm = self.ln(h)
+        # cross attention with encoder output -> dropout -> residual connection
+        h_cross_attn = self.attn_block(h_norm, value, key, mask=src_mask)
+
+        h_dense = self.dense_block(h_cross_attn)
+        if is_training:
+            h_dense = hk.dropout(hk.next_rng_key(), self.dropout_rate, h_dense)
+        h = h + h_dense
+        return h
+
+
+class TransformerDecoder(hk.Module):
+    def __init__(
+        self,
+        hidden_dim: int,
+        num_heads: int,
+        num_layers: int,
+        attn_size: int,
+        dropout_rate: float,
+        widening_factor: int = 4,
+        **kwargs,
+    ):
+        super().__init__()
+        self.num_heads = num_heads
+        self.num_layers = num_layers
+        self.attn_size = attn_size
+        self.dropout_rate = dropout_rate
+        self.widening_factor = widening_factor
+
+        initializer = hk.initializers.VarianceScaling(2 / self.num_layers)
+
+        self.layers = [
+            TransformerDecoderLayer(
+                hidden_dim=hidden_dim,
+                num_heads=num_heads,
+                attn_size=attn_size,
+                dropout_rate=dropout_rate,
+                widening_factor=widening_factor,
+                w_init=initializer,
+            )
+            for _ in range(num_layers)
+        ]
+
+        self.ln = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)
+
+    def __call__(
+        self,
+        embeddings: jax.Array,  # [B, T, D]
+        enc_out: jax.Array,  # [B, T, D]
+        tgt_mask: jax.Array = None,  # [B, T]
+        src_mask: jax.Array = None,  # [B, T]
+        causal_mask: jax.Array = None,  # [B, T, T]
+        is_training: bool = True,
+    ) -> jax.Array:
+        logging.info(f"embeddings shape: {embeddings.shape}")
+        B, seq_len, D = embeddings.shape
+
+        if tgt_mask is None:
+            tgt_mask = jnp.ones((B, seq_len))
+
+        # Compute causal mask for autoregressive sequence modelling.
+        tgt_mask = tgt_mask[:, None, None, :]  # [B, H=1, T'=1, T]
+
+        if causal_mask is None:
+            causal_mask = np.tril(np.ones((1, 1, seq_len, seq_len)))  # [B=1, H=1, T, T]
+
+        tgt_mask = tgt_mask * causal_mask  # [B, H=1, T, T]
+
+        # source mask is for the encoder output
+
+        h = embeddings
+        for i, layer in enumerate(self.layers):
+            logging.info(f"h shape: {h.shape}")
+            h = layer(h, enc_out, enc_out, src_mask, tgt_mask, is_training=is_training)
 
         return self.ln(h)
 
@@ -279,3 +407,58 @@ class SARTransformerEncoder(hk.Module):
             embeddings = einops.rearrange(embeddings, "b t d -> t b d")
 
         return embeddings
+
+
+if __name__ == "__main__":
+    # test encoder
+    B = 2
+    T = 5
+    D = 64
+    hidden_dim = 64
+    num_heads = 4
+    num_layers = 2
+    attn_size = 32
+    dropout_rate = 0.1
+
+    @hk.transform
+    def forward_encoder(x, mask):
+        encoder = TransformerEncoder(
+            hidden_dim=hidden_dim,
+            num_heads=num_heads,
+            num_layers=num_layers,
+            attn_size=attn_size,
+            dropout_rate=dropout_rate,
+        )
+        out = encoder(x, mask, is_training=True)
+        print(f"out shape: {out.shape}")
+        return out
+
+    states = jnp.ones((B, T, D))
+    mask = jnp.ones((B, T))
+
+    params = forward_encoder.init(jax.random.PRNGKey(0), states, mask)
+
+    @hk.transform
+    def forward_decoder(x, enc_out, src_mask, tgt_mask):
+        decoder = TransformerDecoder(
+            hidden_dim=hidden_dim,
+            num_heads=num_heads,
+            num_layers=num_layers,
+            attn_size=attn_size,
+            dropout_rate=dropout_rate,
+        )
+        out = decoder(
+            x, enc_out, src_mask=src_mask, tgt_mask=tgt_mask, is_training=True
+        )
+        print(out.shape)
+        return out
+
+    states = jnp.ones((B, T, D))
+    mask = jnp.ones((B, T))
+    enc_out = jnp.ones((B, T, D))
+    src_mask = jnp.ones((B, 1, T, T))
+    tgt_mask = jnp.ones((B, T))
+
+    params = forward_decoder.init(
+        jax.random.PRNGKey(0), states, enc_out, src_mask, tgt_mask
+    )

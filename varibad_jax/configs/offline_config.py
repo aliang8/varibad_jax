@@ -1,7 +1,7 @@
 from pathlib import Path
 from varibad_jax.configs.base_config import get_config as get_base_config
 from varibad_jax.configs.model_configs import (
-    transformer_config,
+    transformer_configs,
     image_encoder_configs,
     image_decoder_configs,
 )
@@ -19,7 +19,7 @@ def get_config(config_string: str = None):
     config.data = ConfigDict(
         dict(
             data_dir="datasets",
-            batch_size=128,
+            batch_size=256,
             dataset_name="5x5",
             num_trajs=-1,
             train_frac=1.0,
@@ -41,10 +41,16 @@ def get_config(config_string: str = None):
     )
 
     config.num_epochs = 1000
-    config.eval_interval = 50
+    config.num_updates = 50_000
     # config.save_key = ""
 
-    config.embedding_dim = 64
+    config.embedding_dim = 128
+
+    transformer_config = transformer_configs["transformer"]
+    for k, v in transformer_configs.items():
+        if k in config_string:
+            transformer_config = v
+            break
 
     transformer_config.embedding_dim = config.get_ref("embedding_dim")
 
@@ -129,7 +135,7 @@ def get_config(config_string: str = None):
                             add_bn=False,
                             add_residual=True,
                             add_max_pool=True,
-                            embedding_dim=256,
+                            embedding_dim=128,
                             mp_kernel_size=3,
                             scale=4,
                         )
@@ -148,15 +154,21 @@ def get_config(config_string: str = None):
                     policy_mlp_sizes=[128, 128],
                     state_embed_mlp_sizes=[128, 128],
                     idm_scale=4,
+                    # vit specific
+                    patch_with_conv=False,
                 ),
                 fdm=dict(
                     image_obs=config.env.get_ref("image_obs"),
                     image_encoder_config=image_encoder_config,
                     image_decoder_config=image_decoder_config,
+                    transformer_config=transformer_config,
                     embedding_dim=config.get_ref("embedding_dim"),
                     decoder_mlp_sizes=[128, 128],
-                    use_transformer_idm=False,
+                    use_transformer=False,
+                    # vit specific
+                    patch_with_conv=False,
                 ),
+                use_vit=False,
                 beta_loss_weight=1.0,
                 context_len=config.data.get_ref("context_len"),
                 add_labelling=config.data.get_ref("add_labelling"),

@@ -10,7 +10,10 @@ from ml_collections.config_dict import ConfigDict
 
 from varibad_jax.models.common import ImageEncoder, ImageDecoder
 from varibad_jax.models.lam.helpers import ImpalaCNN, VQEmbeddingEMA
-from varibad_jax.models.transformer_encoder import TransformerEncoder
+from varibad_jax.models.transformer_encoder import (
+    TransformerEncoder,
+    TransformerDecoder,
+)
 
 
 @dataclasses.dataclass
@@ -36,13 +39,19 @@ class LatentFDM(hk.Module):
 
         init_kwargs = dict(w_init=w_init, b_init=b_init)
         self.image_obs = config.image_obs
-        self.use_transformer_idm = config.use_transformer_idm
+        self.use_transformer = config.use_transformer
 
         if self.image_obs:
             # https://asiltureli.github.io/Convolution-Layer-Calculator/
             self.state_embed = ImageEncoder(
                 **config.image_encoder_config, **init_kwargs
             )
+
+            if self.use_transformer:
+                self.fdm = TransformerDecoder(
+                    **config.transformer_config, **init_kwargs
+                )
+
             self.state_decoder = ImageDecoder(
                 **config.image_decoder_config, **init_kwargs
             )
@@ -70,12 +79,13 @@ class LatentFDM(hk.Module):
         context: jnp.ndarray,
         actions: jnp.ndarray,
         is_training: bool = True,
+        **kwargs,
     ):
         """FDM takes the prev states and latent action and predicts the next state
         T is the length of the context provided.
 
         For LAPO, T=2, just o_t-1 and o_t
-        If we use a Transformer, T is the full sequence
+        If we use a Transformer, T is the full sequence or a larger context window
 
         Input:
             context: (B, T, D) or (B, T, C, H, W) for image inputs
@@ -89,39 +99,69 @@ class LatentFDM(hk.Module):
         if self.image_obs:
             b, t, h, w = context.shape[:4]
 
-            if self.use_transformer_idm:
+            if self.use_transformer:
+                # we will use a transformer decoder to predict the next state
+                # and the latent actions as the value / key
                 context = einops.rearrange(context, "b t h w c -> (b t) c h w")
-                actions = einops.rearrange(actions, "b t dl -> (b t) dl 1 1")
+
+                # first encode with the CNN backbone, u-net encoder
+                embeddings, intermediates = self.state_embed(
+                    context, is_training=is_training, return_intermediate=True
+                )
+
+                # reshape back to sequence
+                embeddings = einops.rearrange(embeddings, "(b t) d -> b t d", b=b, t=t)
+
+                # actions = einops.rearrange(actions, "b t dl -> (b t) dl 1 1")
+
+                # src mask should be [B, T, L_1, L_2]
+                src_mask = jnp.tril(jnp.ones((t, t)))
+                src_mask = einops.repeat(src_mask, "l1 l2 -> b 1 l1 l2", b=b)
+                tgt_mask = None
+
+                import ipdb
+
+                ipdb.set_trace()
+                # run the input through the TransformerDecoder
+                out = self.fdm(
+                    embeddings,
+                    actions,
+                    src_mask=src_mask,
+                    tgt_mask=tgt_mask,
+                    is_training=is_training,
+                )
+
+                # run through U-net decoder
+
+                # reconstruct the next state with UNet decoder
+                next_state_pred = einops.rearrange(
+                    next_state_pred, "(b t) c h w -> b t c h w", b=b, t=t
+                )
+
             else:
                 context = einops.rearrange(context, "b t h w c -> b (t c) h w")
                 actions = einops.rearrange(actions, "b dl -> b dl 1 1")
 
-            action_expand = einops.repeat(actions, "b dl 1 1 -> b dl h w", h=h, w=w)
+                action_expand = einops.repeat(actions, "b dl 1 1 -> b dl h w", h=h, w=w)
 
-            x = jnp.concatenate([context, action_expand], axis=1)
-            # x = context
+                x = jnp.concatenate([context, action_expand], axis=1)
+                # x = context
+                logging.info(f"shape after concat: {x.shape}")
 
-            # jax.debug.breakpoint()
-            logging.info(f"shape after concat: {x.shape}")
-
-            _, intermediates = self.state_embed(
-                x, is_training=is_training, return_intermediate=True
-            )
-            embeddings = intermediates[-1]
-            # inject actions into the middle of the u-net (this is also done in LAPO)
-            intermediates[-1] = actions
-
-            next_state_pred = self.state_decoder(
-                embeddings,
-                intermediates=intermediates,
-                context=context,
-                is_training=is_training,
-            )
-
-            if self.use_transformer_idm:
-                next_state_pred = einops.rearrange(
-                    next_state_pred, "(b t) c h w -> b t c h w", b=b, t=t
+                _, intermediates = self.state_embed(
+                    x, is_training=is_training, return_intermediate=True
                 )
+                embeddings = intermediates[-1]
+                # inject actions into the middle of the u-net (this is also done in LAPO)
+                intermediates[-1] = actions
+
+                next_state_pred = self.state_decoder(
+                    embeddings,
+                    intermediates=intermediates,
+                    context=context,
+                    is_training=is_training,
+                )
+
         else:
             # flatten the last two dimensions
             context = einops.rearrange(context, "b t d -> b (t d)")
@@ -213,9 +253,8 @@ class LatentActionIDM(hk.Module):
             decay=config.ema_decay,
             commitment_loss=config.beta,
         )
-        # self.vq = VQEmbeddingEMA()
 
-    def __call__(self, states: jnp.ndarray, is_training: bool = True):
+    def __call__(self, states: jnp.ndarray, is_training: bool = True, **kwargs):
         """IDM takes the state and next state and predicts the action
         IDM predicts the latent action (z_t) given o_t-k,..., o_t and o_t+1
 
@@ -230,7 +269,8 @@ class LatentActionIDM(hk.Module):
             states = states[:, 1:] - states[:, :-1]
 
         if self.use_transformer:
-            # first embed the states
+            # first embed the states with CNN backbone
+            # TODO: should we consider using a patchified approach
             if self.image_obs:
                 b = states.shape[0]
                 states = einops.rearrange(states, "b t h w c -> (b t) c h w")
@@ -261,7 +301,22 @@ class LatentActionIDM(hk.Module):
         # predict latent actions
         latent_actions = self.latent_action_head(nn.gelu(state_embeds))
 
-        # compute quantized latent actions
-        vq_outputs = self.vq(latent_actions, is_training=is_training)
-        vq_outputs.latent_actions = latent_actions
+        if self.use_transformer:
+            # combine b and t
+            latent_actions = einops.rearrange(latent_actions, "b t dl -> (b t) dl")
+            vq_outputs = self.vq(latent_actions, is_training=is_training)
+            vq_outputs.latent_actions = latent_actions
+
+            def reshape_fn(x):
+                if x.ndim > 0:
+                    return einops.rearrange(x, "(b t) ... -> b t ...", b=b)
+                else:
+                    return x
+
+            # should be (b, t-1, dl)
+            vq_outputs = jax.tree_util.tree_map(reshape_fn, vq_outputs)
+        else:
+            # compute quantized latent actions
+            vq_outputs = self.vq(latent_actions, is_training=is_training)
+
         return vq_outputs

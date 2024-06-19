@@ -76,6 +76,14 @@ class BaseModel:
                     )
                 else:
                     params, state = ckpt["params"], ckpt["state"]
+
+            # print(params["LatentActionIDM/~/image_encoder/downsampling_block/conv2_d"]["w"].sum())
+            # import ipdb
+
+            # ipdb.set_trace()
+            # # get first of params, since we are using pmap TODO: fix this
+            # params = jax.tree_util.tree_map(lambda x: x[0], params)
+            # state = jax.tree_util.tree_map(lambda x: x[0], state)
         else:
             # replicate init_key (same initial weights on all devices)
             self._init_key = jnp.tile(self._init_key[None], (num_devices, 1))
@@ -114,7 +122,7 @@ class BaseModel:
         if update_model:
             logging.info("updating model")
 
-        (loss, (metrics, new_state)), grads = jax.value_and_grad(
+        (loss, (metrics, extra, new_state)), grads = jax.value_and_grad(
             self.loss_fn, has_aux=True
         )(ts.params, ts.state, rng, batch, is_training=update_model)
 
@@ -132,7 +140,7 @@ class BaseModel:
 
         # sync metrics
         metrics = jax.lax.pmean(metrics, "device")
-        return new_ts, metrics
+        return new_ts, metrics, extra
 
     def update(self, rng, batch, update_model=True):
         rng = jax.random.split(rng, self.num_devices)
@@ -140,15 +148,20 @@ class BaseModel:
             lambda x: x.reshape((self.num_devices, -1, *x.shape[1:])), batch
         )
 
-        self._ts, metrics = self.update_model(self._ts, rng, batch, update_model)
+        self._ts, metrics, extra = self.update_model(self._ts, rng, batch, update_model)
         metrics = jax.tree_util.tree_map(lambda x: x.mean(), metrics)
-        return metrics
+        return metrics, extra
 
     @property
     def save_dict(self):
+        params = self._ts.params
+        state = self._ts.state
+        if self.num_devices > 1:
+            params = jax.tree_util.tree_map(lambda x: x[0], params)
+            state = jax.tree_util.tree_map(lambda x: x[0], state)
         return dict(
-            params=self._ts.params,
-            state=self._ts.state,
+            params=params,
+            state=state,
         )
 
 

@@ -3,7 +3,7 @@
 # uncomment all the tasks that you want to download the data for
 # note: some tasks's datasets are much large than others due to compression differences
 download_tasks=(
-    bigfish
+    # bigfish
     # bossfight
     # caveflyer
     # chaser
@@ -18,7 +18,7 @@ download_tasks=(
     # miner
     # ninja
     # plunder
-    # starpilot
+    starpilot
 )
 
 # maps task names to google drive file ids

@@ -10,7 +10,7 @@ def get_config(config_string: str = None):
     config.data.dataset_name = "procgen_dataset"
     # config.env.env_id = "MiniGrid-GoToDoor-R1-9x9-3"
     config.env.env_id = "bigfish"
-    config.env.eval_env_ids = ["bigfish"]
+    config.env.eval_env_ids = ("bigfish",)
 
     config.env.num_episodes_per_rollout = 1
     # config.env.steps_per_rollout = 30

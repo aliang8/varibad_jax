@@ -29,6 +29,10 @@ from varibad_jax.trainers.rl_trainer import RLTrainer
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 _CONFIG = config_flags.DEFINE_config_file("config")
 
+import warnings
+
+warnings.filterwarnings("ignore")
+
 # shorthands for config parameters
 psh = {
     "trainer": "t",

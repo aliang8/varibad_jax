@@ -5,6 +5,7 @@ import jax
 import xminigrid
 from functools import partial
 from typing import ClassVar, Optional
+import tensorflow as tf
 
 import varibad_jax.envs
 from varibad_jax.envs.xland.wrappers import FullyObservableWrapper
@@ -58,20 +59,42 @@ def make_procgen_envs(num_envs, env_id, gamma, **kwargs):
     return envs
 
 
+def _process_observation(obs):
+    """Process observation."""
+    # Apply jpeg auto-encoding to better match observations in the dataset.
+    return tf.io.decode_jpeg(tf.io.encode_jpeg(obs)).numpy()
+
+
+class AtariEnvWrapper(gym.Wrapper):
+    def step(self, action):
+        obs, rew, done, truncated, info = self.env.step(action)
+        obs = _process_observation(obs)
+        obs = obs.squeeze()  # remove the extra dimension from grayscale
+        return obs, rew, done, truncated, info
+
+    def reset(self, **kwargs):
+        obs, info = self.env.reset(**kwargs)
+        obs = _process_observation(obs)
+        obs = obs.squeeze()
+        return obs, info
+
+
 def make_atari_envs(num_envs, env_id, **kwargs):
     def _make_env(seed):
         atari_env = gym.make(env_id, full_action_space=True, frameskip=1)
         atari_env = gym.wrappers.AtariPreprocessing(
             atari_env,
+            noop_max=30,
             frame_skip=4,
-            grayscale_obs=False,
-            grayscale_newaxis=False,
-            screen_size=64,
-            terminal_on_life_loss=True,
-            scale_obs=True,
+            grayscale_obs=True,
+            grayscale_newaxis=True,
+            screen_size=84,
+            terminal_on_life_loss=False,
+            scale_obs=False,
         )
+        atari_env = AtariEnvWrapper(atari_env)
         atari_env = gym.wrappers.FrameStack(atari_env, 4)
-        atari_env = gym.wrappers.TimeLimit(atari_env, 200)
+        # atari_env = gym.wrappers.TimeLimit(atari_env, 200)
         # atari_env = gym.wrappers.ClipReward(atari_env, )
         assert isinstance(
             atari_env.action_space, gym.spaces.discrete.Discrete
@@ -86,8 +109,12 @@ def make_atari_envs(num_envs, env_id, **kwargs):
         )
     else:
         envs = _make_env(0)
-
     return envs
+
+    # from varibad_jax.envs.atari import create_atari_env
+
+    # env = create_atari_env(env_id)
+    # return env
 
 
 def make_envs(

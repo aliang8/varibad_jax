@@ -1,3 +1,4 @@
+import jax
 from absl import logging
 from typing import List, Optional
 import einops
@@ -172,13 +173,24 @@ class ImageEncoder(hk.Module):
 
         intermediate = []
         for i, spec in enumerate(self.arch):
-            x = DownsamplingBlock(
-                num_channels=spec[0] * self.scale,
-                kernel_size=spec[1],
-                stride=spec[2],
-                padding=spec[3],
-                **self.kwargs,
-            )(x, is_training)
+            if i == len(self.arch) - 1:
+                # last layer, just apply conv and not the other stuff
+                x = hk.Conv2D(
+                    output_channels=spec[0] * self.scale,
+                    kernel_shape=spec[1],
+                    stride=spec[2],
+                    padding=spec[3],
+                    data_format="NCHW",
+                    **self.init_kwargs,
+                )(x)
+            else:
+                x = DownsamplingBlock(
+                    num_channels=spec[0] * self.scale,
+                    kernel_size=spec[1],
+                    stride=spec[2],
+                    padding=spec[3],
+                    **self.kwargs,
+                )(x, is_training)
             intermediate.append(x)
             logging.info(f"encoder layer {i} shape: {x.shape}")
 
@@ -249,6 +261,19 @@ class ImageDecoder(hk.Module):
         if context is not None:
             final_conv_inp = jnp.concatenate([x, context], axis=1)
 
+        final_conv_inp = hk.Conv2D(
+            output_channels=self.arch[-1][0],
+            kernel_shape=3,
+            stride=1,
+            padding="SAME",
+            data_format="NCHW",
+            **self.init_kwargs,
+        )(final_conv_inp)
+
+        # residual -> activation -> conv
+        final_conv_inp = ResidualBlock(self.arch[-1][0], **self.init_kwargs)(
+            final_conv_inp
+        )
         final_conv_inp = nn.gelu(final_conv_inp)
 
         x = hk.Conv2D(

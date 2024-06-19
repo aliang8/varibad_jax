@@ -9,6 +9,7 @@ import haiku as hk
 import optax
 import einops
 import pickle
+import dm_pix
 import flax.linen as nn
 import jax.numpy as jnp
 from absl import logging
@@ -20,6 +21,7 @@ from varibad_jax.models.base import BaseModel, BaseAgent
 from varibad_jax.agents.actor_critic import ActorCritic, ActorCriticInput
 from varibad_jax.models.lam.model import LatentFDM, LatentActionIDM
 from varibad_jax.agents.common import ActionHead
+from varibad_jax.models.lam.vit_lam import ViTIDMSequence, ViTFDM
 
 
 @chex.dataclass
@@ -48,18 +50,39 @@ def breakpoint_if_cond(x):
 
 class LatentActionModel(BaseModel):
     @hk.transform_with_state
-    def model(self, states, is_training=True):
-        idm = LatentActionIDM(self.config.idm)
-        fdm = LatentFDM(self.config.fdm, state_dim=self.observation_shape[-1])
+    def model(self, states, timestep=None, is_training=True):
+        if self.config.use_vit:
+            # Use a ViT transformer to encode the images into patches
+            idm = ViTIDMSequence(self.config.idm, self.init_kwargs)
+            fdm = ViTFDM(self.config.fdm, self.init_kwargs)
+        else:
+            # LAPO style IDM which takes o_t and o_t+1 as input
+            idm = LatentActionIDM(self.config.idm, **self.init_kwargs)
+            fdm = LatentFDM(
+                self.config.fdm,
+                state_dim=self.observation_shape[-1],
+                **self.init_kwargs,
+            )
 
         # IDM predicts the latent action (z_t) given o_t-k, ..., o_t and o_t+1
-        idm_output = idm(states, is_training=is_training)
+        idm_output = idm(states, timestep=timestep, is_training=is_training)
 
-        # FDM predicts o_t+1 given o_t-1, o_t and z_t
-        context = states[:, :-1]
+        if self.config.use_vit:
+            context = states
+        else:
+            # FDM predicts o_t+1 given o_t-1, o_t and z_t
+            context = states[:, :-1]
 
         # [B, C, H, W] or [B, T, C, H, W]
-        next_state_pred = fdm(context, idm_output["quantize"], is_training=is_training)
+        next_state_pred = fdm(
+            context,
+            idm_output["quantize"],
+            timestep=timestep,
+            is_training=is_training,
+        )
+
+        if self.config.use_vit:
+            next_state_pred = next_state_pred[:, :-1]
 
         if self.config.normalize_pred:
             next_state_pred = jnp.tanh(next_state_pred) / 2
@@ -72,7 +95,8 @@ class LatentActionModel(BaseModel):
             quantize=idm_output["quantize"],
             perplexity=idm_output["perplexity"],
             encoding_indices=idm_output["encoding_indices"],
-            latent_actions=idm_output["latent_actions"],
+            latent_actions=None,
+            # latent_actions=idm_output["latent_actions"],
         )
 
     @hk.transform_with_state
@@ -90,15 +114,18 @@ class LatentActionModel(BaseModel):
         )(x, is_training)
         return action_output
 
-    def _init_model(self):
+    @partial(jax.pmap, axis_name="device", static_broadcasted_argnums=(0,))
+    def _init_model(self, init_key: jax.random.PRNGKey):
         t, bs = 2 + self.config.context_len, 2
         dummy_states = np.zeros((bs, t, *self.observation_shape), dtype=np.float32)
         # dummy_states = np.zeros((bs, t, 64, 64, 3), dtype=np.float32)
+        timesteps = np.arange(t, dtype=np.int32).reshape(1, -1).repeat(bs, axis=0)
 
         params, state = self.model.init(
-            self._init_key,
+            init_key,
             self,
             states=dummy_states,
+            timestep=timesteps,
             is_training=True,
         )
 
@@ -106,7 +133,7 @@ class LatentActionModel(BaseModel):
             dummy_latent = np.zeros((bs, t, self.config.idm.code_dim), dtype=np.float32)
 
             action_head_params, action_head_state = self.predict_action.init(
-                self._init_key,
+                init_key,
                 self,
                 dummy_latent,
                 is_training=True,
@@ -132,6 +159,7 @@ class LatentActionModel(BaseModel):
             rng,
             self,
             states=batch.observations.astype(jnp.float32),
+            timestep=batch.timestep.astype(jnp.int32),
             is_training=is_training,
         )
 
@@ -141,23 +169,56 @@ class LatentActionModel(BaseModel):
 
         if self.config.idm.image_obs:
             # make sure same format as the ground truth, HWC
-            if self.config.idm.use_transformer:
+            if self.config.idm.use_transformer or self.config.use_vit:
                 # this should have T-1 predictions where T is our sequence length
                 next_obs_pred = einops.rearrange(
                     next_obs_pred, "b t c h w -> b t h w c"
                 )
-                gt_next_obs = batch.observations[:, 1:]
-                mask = batch.mask[:, 1:]
+                gt_next_obs = batch.observations[:, :-1]
+                mask = batch.mask[:, :-1]
+
+                # gt_next_obs = batch.observations[:, 1:]
+                # mask = batch.mask[:, 1:]
+
+                # combine b and t dimensions
+                next_obs_pred_bt = einops.rearrange(
+                    next_obs_pred, "b t h w c -> (b t) h w c"
+                )
+                gt_next_obs_bt = einops.rearrange(
+                    gt_next_obs, "b t h w c -> (b t) h w c"
+                )
+                mask_bt = einops.rearrange(mask, "b t -> (b t)")
+
+                mse = dm_pix.mse(next_obs_pred_bt, gt_next_obs_bt)
+                mse *= mask_bt
+                mse = jnp.sum(mse) / jnp.sum(mask)
+
+                ssim = dm_pix.ssim(next_obs_pred_bt, gt_next_obs_bt)
+                ssim *= mask_bt
+                ssim = jnp.sum(ssim) / jnp.sum(mask)
+
+                psnr = None
 
                 recon_loss = optax.squared_error(next_obs_pred, gt_next_obs)
                 recon_loss = jnp.mean(recon_loss, axis=(2, 3, 4))
                 recon_loss *= mask
                 recon_loss = jnp.sum(recon_loss) / jnp.sum(mask)
+                # recon_loss = (1 - ssim) + mse
+                # recon_loss = mse
             else:
                 next_obs_pred = einops.rearrange(next_obs_pred, "b c h w -> b h w c")
                 gt_next_obs = batch.observations[:, -1]
-                recon_loss = optax.squared_error(next_obs_pred, gt_next_obs)
-                recon_loss = jnp.mean(recon_loss)
+
+                # here we are using MSE loss for computing image reconstruction loss
+                # we could try other losses like SSIM, perceptual loss, etc.
+                # or a combination of losses
+
+                ssim = dm_pix.ssim(next_obs_pred, gt_next_obs).mean()
+                mse = dm_pix.mse(next_obs_pred, gt_next_obs).mean()
+
+                recon_loss = (1 - ssim) + mse
+                # recon_loss = optax.squared_error(next_obs_pred, gt_next_obs)
+                # recon_loss = jnp.mean(recon_loss)
                 # jax.debug.breakpoint()
                 # breakpoint_if_cond(recon_loss)
         else:
@@ -171,6 +232,10 @@ class LatentActionModel(BaseModel):
             "perplexity": lam_output.perplexity,
             "total_loss": recon_loss + lam_output.vq_loss,
         }
+
+        if self.config.idm.image_obs:
+            metrics.update({"ssim": ssim, "mse": mse, "psnr": psnr})
+
         loss = self.config.beta_loss_weight * lam_output.vq_loss + recon_loss
 
         if batch.labelled is not None:
@@ -208,7 +273,9 @@ class LatentActionModel(BaseModel):
         else:
             metrics.update({"action_pred_loss": 0.0, "acc": 0.0})
 
-        return loss, (metrics, state)
+        extra = {"next_obs_pred": next_obs_pred}
+
+        return loss, (metrics, extra, state)
 
 
 class LatentActionDecoder(BaseModel):
@@ -217,14 +284,14 @@ class LatentActionDecoder(BaseModel):
     IDM model learned with LAPO.
     """
 
-    # def __init__(self, lam: BaseModel = None, *args, **kwargs):
-    #     super().__init__(*args, **kwargs)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
-    #     if lam is None:
-    #         # load pretrained latent action model
-    #         config = Path(self.config.lam_ckpt) / "config.json"
-    #         with open(config, "r") as f:
-    #             self.lam_cfg = ConfigDict(json.load(f))
+        #     if lam is None:
+        #         # load pretrained latent action model
+        config = Path(self.config.lam_ckpt) / "config.json"
+        with open(config, "r") as f:
+            self.lam_cfg = ConfigDict(json.load(f))
 
     #         self.lam = LatentActionModel(
     #             self.lam_cfg.model,  # TODO: fix me
@@ -259,13 +326,15 @@ class LatentActionDecoder(BaseModel):
         output = action_head(x, is_training=is_training)
         return output
 
-    def _init_model(self):
+    @partial(jax.pmap, axis_name="device", static_broadcasted_argnums=(0,))
+    def _init_model(self, init_key: jax.random.PRNGKey):
         bs = 2
         dummy_latent_actions = np.zeros(
             (bs, self.config.latent_action_dim), dtype=np.float32
         )
+
         params, state = self.model.init(
-            self._init_key,
+            init_key,
             self,
             latent_actions=dummy_latent_actions,
             is_training=True,
@@ -306,7 +375,9 @@ class LatentActionDecoder(BaseModel):
         # latent_actions = model_output.latent_actions
 
         rng, decoder_key = jax.random.split(rng, 2)
-        latent_actions = batch.actions[:, -2]
+        # latent_actions = batch.actions[:, -2]
+        # latent_actions = batch.latent_actions[:, -2]
+        latent_actions = batch.latent_actions
 
         # decode latent action to ground truth action
         action_pred, state = self.model.apply(
@@ -318,11 +389,12 @@ class LatentActionDecoder(BaseModel):
             is_training=is_training,
         )
 
-        if self.lam_cfg.model.idm.use_transformer:
-            gt_actions = batch.actions[:, :-1]
-        else:
-            # TODO: make sure i'm predicting the right action
-            gt_actions = batch.actions[:, -2]
+        # if self.lam_cfg.model.idm.use_transformer:
+        #     gt_actions = batch.actions[:, :-1]
+        # else:
+        #     # TODO: make sure i'm predicting the right action
+        #     gt_actions = batch.actions[:, -2]
+        gt_actions = batch.actions
 
         if self.is_continuous:
             loss = optax.squared_error(action_pred.action, gt_actions)

@@ -138,11 +138,13 @@ class VQEmbeddingEMA(hk.Module):
                 -1.0 / self.num_embs * 5, 1.0 / self.num_embs * 5
             ),
         )
+        # hk.set_state("ema_weight", embedding.copy())
 
         B, C, H, W = x.shape
         N, M, D = embedding.shape
         assert C == N * D
 
+        # jax.debug.breakpoint()
         x = einops.rearrange(x, "b (n d) h w -> n b h w d", n=N, d=D)
 
         # x = x.view(B, N, D, H, W).permute(1, 0, 3, 4, 2)
@@ -184,6 +186,7 @@ class VQEmbeddingEMA(hk.Module):
 
         e_latent_loss = jnp.mean((x - jax.lax.stop_gradient(quantized)) ** 2)
         loss = self.commitment_loss * e_latent_loss
+
         quantized = jax.lax.stop_gradient(quantized) + (x - jax.lax.stop_gradient(x))
         avg_probs = jnp.mean(encodings, axis=1)
         perplexity = jnp.exp(-jnp.sum(avg_probs * jnp.log(avg_probs + 1e-10), axis=-1))

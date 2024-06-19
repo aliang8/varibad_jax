@@ -101,4 +101,8 @@ class BCAgent(BaseAgent):
         acc = jnp.mean(acc)
 
         metrics = {"bc_loss": loss, "acc": acc}
+
+        if action_output.entropy is not None:
+            metrics["entropy"] = action_output.entropy.mean()
+
         return loss, (metrics, state)

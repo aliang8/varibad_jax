@@ -2,6 +2,9 @@
 export CUDA_VISIBLE_DEVICES=
 tfds build --data_dir=/scr/aliang80/varibad_jax/varibad_jax/tensorflow_datasets --overwrite --beam_pipeline_options="direct_running_mode=multi_processing,direct_num_workers=10"
 
+
+
+tfds build --data_dir=/scr/aliang80/varibad_jax/varibad_jax/tensorflow_datasets/procgen2_dataset --overwrite --beam_pipeline_options="direct_running_mode=multi_processing,direct_num_workers=10"
 """
 
 import os
@@ -17,8 +20,13 @@ import tensorflow as tf
 import tensorflow_datasets as tfds
 import tensorflow_hub as hub
 
+import resource
 
-class TestDataset(tfds.core.GeneratorBasedBuilder):
+low, high = resource.getrlimit(resource.RLIMIT_NOFILE)
+resource.setrlimit(resource.RLIMIT_NOFILE, (high, high))
+
+
+class Bossfight(tfds.core.GeneratorBasedBuilder):
     """DatasetBuilder for procgen dataset."""
 
     VERSION = tfds.core.Version("1.0.0")
@@ -77,10 +85,10 @@ class TestDataset(tfds.core.GeneratorBasedBuilder):
         """Define data splits."""
         return {
             "train": self._generate_examples(
-                path="/scr/aliang80/varibad_jax/varibad_jax/datasets/procgen/expert_data/caveflyer/train/trajs/*.npz"
+                path="/scr/aliang80/varibad_jax/varibad_jax/datasets/procgen/expert_data/bossfight/train/trajs/*.npz"
             ),
             "val": self._generate_examples(
-                path="/scr/aliang80/varibad_jax/varibad_jax/datasets/procgen/expert_data/caveflyer/test/trajs/*.npz"
+                path="/scr/aliang80/varibad_jax/varibad_jax/datasets/procgen/expert_data/bossfight/test/trajs/*.npz"
             ),
         }
 

@@ -18,13 +18,11 @@ import tqdm
 import numpy as np
 import einops
 import tqdm
-import wandb
 from functools import partial
 from collections import defaultdict as dd
 from varibad_jax.utils.rollout import run_rollouts
 from varibad_jax.utils.rollout_procgen import run_rollouts_procgen
 from varibad_jax.utils.rollout_atari import run_rollouts_atari
-from varibad_jax.utils.visualization import custom_to_pil, plot_images, make_image_grid
 
 from varibad_jax.trainers.base_trainer import BaseTrainer
 import varibad_jax.utils.general_utils as gutl
@@ -103,6 +101,9 @@ class OfflineTrainer(BaseTrainer):
         for k, v in batch.items():
             logging.info(f"{k}: {v.shape}")
 
+        # fn = lambda x, y: logging.info(f"{jax.tree_util.keystr(x)}: {y.shape}")
+        # jtu.tree_map_with_path(fn, batch)
+
         if self.config.model.name == "bc":
             model_cls = BCAgent
         elif self.config.model.name == "dt_agent":
@@ -138,9 +139,9 @@ class OfflineTrainer(BaseTrainer):
         if self.config.eval_interval != -1:
             self.eval_every = self.config.eval_interval
         elif self.config.num_evals != -1:
-            self.eval_every = int(self.config.num_updates // self.config.num_evals)
+            self.eval_every = int(self.config.num_epochs // self.config.num_evals)
         elif self.config.eval_perc != -1:
-            self.eval_every = int(self.config.num_updates * self.config.eval_perc)
+            self.eval_every = int(self.config.num_epochs * self.config.eval_perc)
         else:
             raise ValueError("no eval interval specified")
 
@@ -166,101 +167,66 @@ class OfflineTrainer(BaseTrainer):
     def train(self):
         # first eval
         if not self.config.skip_first_eval:
-            eval_metrics = self.eval(step=0)
-
-        train_iter = self.train_dataloader.repeat().as_numpy_iterator()
+            eval_metrics = self.eval(epoch=0)
 
         # train
-        for train_step in tqdm.tqdm(
-            range(self.config.num_updates),
-            desc="batches",
-            disable=False,
-            total=self.config.num_updates,
-        ):
-            batch = next(train_iter)
+        for epoch in tqdm.tqdm(range(self.config.num_epochs), desc="epochs"):
+            # iterate over batches of data
+            start_time = time.time()
+            train_ep_metrics = dd(list)
+            # for _ in range(self.num_train_batches):
+            #     batch = next(self.train_dataloader)
+            for batch in tqdm.tqdm(
+                self.train_dataloader.as_numpy_iterator(), desc="batches", disable=False
+            ):
+                if "info" in batch:
+                    del batch["info"]
+                batch = Batch(**batch)
+                metrics = self.model.update(next(self.rng_seq), batch)
 
-            if "info" in batch:
-                del batch["info"]
-            batch = Batch(**batch)
-            metrics, extra = self.model.update(next(self.rng_seq), batch)
+                for k, v in metrics.items():
+                    train_ep_metrics[k].append(v)
 
-            # logging.info(f"step: {step}, metrics: {metrics}")
+            for k, v in train_ep_metrics.items():
+                train_ep_metrics[k] = jnp.mean(jnp.array(v))
+
+            epoch_time = time.time() - start_time
+            train_ep_metrics["time/epoch"] = epoch_time
+            train_ep_metrics["misc/lr"] = self.model._ts.opt_state.hyperparams["lr"]
+
+            if ((epoch + 1) % self.eval_every) == 0:
+                print("train: ", train_ep_metrics)
+                eval_metrics = self.eval(epoch=epoch + 1)
+
+                if self.config.data.resample_prompts_every_eval:
+                    logging.info("getting new set of demo eval prompts")
+                    # get new set of prompts for evaluation
+                    self.prompts = self.sample_prompts()
+
             if self.wandb_run is not None:
-                metrics = gutl.prefix_dict_keys(metrics, prefix="train/")
-                self.wandb_run.log(metrics)
+                metrics = gutl.prefix_dict_keys(train_ep_metrics, prefix="train/")
 
-            if ((train_step + 1) % self.eval_every) == 0:
-                eval_metrics = self.eval(step=train_step + 1)
-
-                if ((train_step + 1) % self.eval_every) == 0:
+                if ((epoch + 1) % self.eval_every) == 0:
                     for eval_env_id, env_eval_metrics in eval_metrics.items():
-                        eval_metrics[eval_env_id] = gutl.prefix_dict_keys(
+                        prefixed_eval_metrics = gutl.prefix_dict_keys(
                             env_eval_metrics, prefix=f"{eval_env_id}/eval/"
                         )
+                        metrics.update(prefixed_eval_metrics)
 
-                if self.wandb_run is not None:
-                    self.wandb_run.log(eval_metrics)
+                self.wandb_run.log(metrics)
 
-            if (
-                (train_step + 1) % self.config.log_interval
-            ) == 0 and self.wandb_run is not None:
-                # visualize some of the next observation predictions
-                if "next_obs_pred" in extra:
-                    self.visualize("train", batch, extra, self.config.env.env_id)
+        self.eval(epoch=self.config.num_epochs)
 
-        self.eval(step=self.config.num_updates)
-
-    def visualize(self, stage, batch, extra, env_id):
-        # visualize some of the next observation predictions
-        if "next_obs_pred" in extra:
-            # if we're using ViT, this is [B, T+1, H, W, C], else this is [B, H, W, C]
-            next_obs_pred = extra["next_obs_pred"]
-
-            if self.config.model.use_vit:
-                num_ex = 4
-                gt_next_obs = batch.observations[:num_ex, 1:]
-            else:
-                num_ex = 16
-                gt_next_obs = batch.observations[:num_ex, -1]
-
-            next_obs_pred = next_obs_pred[0][:num_ex]
-            next_obs_pred = np.array(next_obs_pred)
-
-            # also record the difference between the ground truth and the prediction
-            # as a binary array (0 if the pixel is the same, 1 if it is different)
-            # diff = np.where(gt_next_obs != next_obs_pred, 1, 0)
-            diff = np.abs(gt_next_obs - next_obs_pred)
-
-            # stack and interleave ground truth and prediction
-            to_show = np.stack([gt_next_obs, next_obs_pred, diff], axis=1)
-            to_show = to_show.reshape(-1, *to_show.shape[2:])
-
-            if to_show.ndim == 5:
-                # flatten first two dimensions
-                to_show = einops.rearrange(to_show, "b t h w c -> (b t) h w c")
-
-            to_show = [custom_to_pil(x) for x in to_show]
-
-            if self.config.model.use_vit:
-                to_show = make_image_grid(to_show, num_rows=num_ex * 3)
-            else:
-                to_show = make_image_grid(to_show, num_rows=4)
-
-            if self.wandb_run:
-                self.wandb_run.log(
-                    {f"{stage}/{env_id}/next_obs_pred": wandb.Image(to_show)}
-                )
-
-    def eval(self, step: int):
+    def eval(self, epoch: int):
         logging.info("running evaluation")
         metrics = {}
         for eval_env_id in self.eval_dataloaders.keys():
-            eval_metrics = self.eval_env(step, eval_env_id)
+            eval_metrics = self.eval_env(epoch, eval_env_id)
             metrics[eval_env_id] = eval_metrics
 
             # save model
             if self.config.mode == "train" and self.config.env.env_id == eval_env_id:
-                self.save_model(self.model.save_dict, eval_metrics, step)
+                self.save_model(self.model.save_dict, eval_metrics, epoch)
 
             # write to log file
             log_eval_metrics = dict(
@@ -268,53 +234,43 @@ class OfflineTrainer(BaseTrainer):
             )
 
             with open(self.log_dir / f"eval_{eval_env_id}.txt", "a+") as f:
-                f.write(f"{step}, {log_eval_metrics}\n")
+                f.write(f"{epoch}, {log_eval_metrics}\n")
 
             logging.info(f"eval [{eval_env_id}]: {log_eval_metrics}")
 
         return metrics
 
-    def eval_env(self, step: int, eval_env_id: str):
+    def eval_env(self, epoch: int, eval_env_id: str):
         logging.info(f"running evaluation for {eval_env_id}")
         eval_metrics = dd(list)
 
-        # run on eval batches
-        if self.eval_dataloaders is not None:
-            # for _ in range(self.num_eval_batches):
-            #     batch = next(self.eval_dataloader)
+        # # run on eval batches
+        # if self.eval_dataloaders is not None:
+        #     # for _ in range(self.num_eval_batches):
+        #     #     batch = next(self.eval_dataloader)
 
-            eval_dataloader = self.eval_dataloaders[eval_env_id]
-            eval_iter = eval_dataloader.repeat().as_numpy_iterator()
-            # data_loading_time = time.time()
+        #     eval_dataloader = self.eval_dataloaders[eval_env_id]
+        #     data_loading_time = time.time()
+        #     for batch in tqdm.tqdm(
+        #         eval_dataloader.as_numpy_iterator(), desc="eval batches"
+        #     ):
+        #         # logging.info(f"data loading time: {time.time() - data_loading_time}")
+        #         if "info" in batch:
+        #             del batch["info"]
 
-            for eval_step in tqdm.tqdm(range(50), desc="eval batches"):
-                batch = next(eval_iter)
-                # logging.info(f"data loading time: {time.time() - data_loading_time}")
-                if "info" in batch:
-                    del batch["info"]
+        #         batch = Batch(**batch)
+        #         update_time = time.time()
+        #         metrics = self.model.update(
+        #             next(self.rng_seq), batch, update_model=False
+        #         )
+        #         # logging.info(f"update time: {time.time() - update_time}")
+        #         for k, v in metrics.items():
+        #             eval_metrics[k].append(v)
 
-                batch = Batch(**batch)
-                update_time = time.time()
-                metrics, extra = self.model.update(
-                    next(self.rng_seq), batch, update_model=False
-                )
+        #         data_loading_time = time.time()
 
-                # logging.info(f"update time: {time.time() - update_time}")
-                for k, v in metrics.items():
-                    # make sure it is scalar
-                    if not jnp.isscalar(v):
-                        continue  # skip non-scalar metrics
-                    eval_metrics[k].append(v)
-
-                # data_loading_time = time.time()
-
-                if eval_step == 0:
-                    # visualize some of the next observation predictions
-                    if "next_obs_pred" in extra:
-                        self.visualize("eval", batch, extra, eval_env_id)
-
-            for k, v in eval_metrics.items():
-                eval_metrics[k] = jnp.mean(jnp.array(v))
+        #     for k, v in eval_metrics.items():
+        #         eval_metrics[k] = jnp.mean(jnp.array(v))
 
         # run rollouts
         rollout_start = time.time()

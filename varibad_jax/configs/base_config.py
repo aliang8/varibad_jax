@@ -104,16 +104,16 @@ def get_config(config_string: str = None):
     # number of updates
     config.log_level = "info"
     config.enable_jit = True
-    config.log_interval = 10
+    config.log_interval = 500
 
     # saving checkpoints
     config.save_interval = 100
     config.save_key = "episode_return"
     config.best_metric = "max"
 
-    config.eval_interval = 100
-    config.num_evals = 10
-    config.eval_perc = 0.1
+    config.eval_interval = -1
+    config.num_evals = -1
+    config.eval_perc = -1
     config.disable_tqdm = False
     config.smoke_test = True
 
@@ -151,5 +151,5 @@ def get_config(config_string: str = None):
     config.cpu = 5
     config.gpu = 0.1
 
-    config.num_xla_devices = 2
+    config.num_xla_devices = 1
     return config

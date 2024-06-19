@@ -1,26 +1,21 @@
-from varibad_jax.configs.procgen.base import (
+from varibad_jax.configs.atari.base import (
     get_config as get_base_config,
 )
 
 
 def get_config(config_string: str = None):
-    prefix = "lam-procgen-64x64-"
-    if config_string is not None:
-        config_string = prefix + config_string
-    else:
-        config_string = prefix
+    config_string = "lam-atari-64x64"
     config = get_base_config(config_string)
 
     config.exp_name = "lam"
 
     config.data.data_type = "lapo"
     config.data.context_len = 1
-    config.data.num_trajs = 5000
+    config.data.num_trajs = 100000
     config.data.add_labelling = False
     config.data.num_labelled = 10
-    config.data.batch_size = 128
 
-    config.embedding_dim = 128
+    config.embedding_dim = 256
     config.model.idm.beta = 0.05
     config.model.idm.ema_decay = 0.999
     # config.model.idm.beta = 0.25
@@ -30,7 +25,8 @@ def get_config(config_string: str = None):
     config.model.idm.num_codebooks = 2
     config.model.idm.num_discrete_latents = 4
     config.model.idm.epsilon = 1e-5
-    config.model.idm.normalize_pred = True
+    config.model.idm.normalize_pred = False
+    config.model.fdm.image_decoder_config.num_output_channels = 1
 
     # need trajectory data to use transformer IDM
     # config.data.data_type = "trajectories"
