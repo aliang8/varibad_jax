@@ -133,7 +133,7 @@ class Bossfight(tfds.core.GeneratorBasedBuilder):
             return episode_path, sample
 
         # create list of all examples
-        episode_paths = glob.glob(path)
+        episode_paths = glob.glob(path)[:5000]
         print(f"len episode_paths: {len(episode_paths)}")
 
         # for smallish datasets, use single-thread parsing

@@ -146,19 +146,41 @@ class ViTIDMSequence(ViTIDMSingle):
         is_training: bool = True,
     ):
         """
-        Predicts latent action from sequence of images. We patchify the images
-        and pass them through a linear layer and then a bidirectional transformer encoder.
+          Predicts latent action from sequence of images. We patchify the images
+          and pass them through a linear layer and then a bidirectional transformer encoder.
 
-        Add patch embed and timestep embed for each image in the sequence.
+          Add patch embed and timestep embed for each image in the sequence.
 
-        o_1, o_2, .... o_T -> [p_1, p_2, ...]
+          o_1, o_2, .... o_T -> [p_1, p_2, ...]
 
-        Args:
-            states: (B, T, H, W, C)
 
-        Return:
-            vq_outputs: Dict
-                quantize: (B, T, D)
+        Full self-attention, every patch can attend to every other patch
+
+        Quantize(z1)           Quantize(z2)             Quantize(zT)          quantized latent actions
+            |                    |                        |
+            z1                   z2                       zT
+            |                    |                        |
+          [CLS - - ... -]      [CLS - - ... -]     ...  [CLS - - ... -]       patch embeddings
+                   |                   |                         |
+           --------------------------------------------------------
+          |                                                        |
+          |                                                        |
+          |                        ViT Encoder                     |
+          |                                                        |
+          |                                                        |
+           --------------------------------------------------------
+                   |                   |                         |
+                  o1                   o2                       oT
+          [CLS p1 p2 ... pM]   [CLS p1 p2 ... pM]  ...  [CLS p1 p2 ... pM]    patches
+        + [1   1  1  ... 1]    [2   2  2  ... 2]   ...  [T   T  T  ... T]     timestep embedding
+        + [*   1  2  ... M]    [*   1  2  ... M]   ...  [*   1  2  ... M]     patch position embedding
+
+          Args:
+              states: (B, T, H, W, C)
+
+          Return:
+              vq_outputs: Dict
+                  quantize: (B, T, D)
         """
         b, t = states.shape[:2]
         num_channels = states.shape[-1]
@@ -302,6 +324,53 @@ class ViTFDM(hk.Module):
     ):
         """
         ViT architecture for implementing image-based transformer FDM
+
+
+
+
+        Quantize(z1)            Quantize(z2)                Quantize(zT)
+            |                       |                            |
+            z1                      z2                          zT
+            |                       |                            |
+          [CLS - - ... -]           [CLS - - ... -]      ...    [CLS - - ... -]
+                   |                       |                            |
+           ------------------------------------------------------------------------
+          |                                                                        |
+          |                                                                        |
+          |                                 ViT Encoder                            |
+          |                                                                        |
+          |                                                                        |
+           ------------------------------------------------------------------------
+                   |                       |                            |
+                  o1                       o2                           oT
+          [CLS p11 p12 ... p1M]   [CLS p21 p22 ... p2M]  ...  [CLS pT1 pT2 ... pTM]
+        + [1    1   1  ...  1]    [2    2   2  ...  2]   ...  [T    T   T  ...  T]
+        + [*    1   2  ...  M]    [*    1   2  ...  M]   ...  [*    1   2  ...  M]
+
+
+        Image-wise causal self-attention, each patch can only attend to previous patches and patches in the same image
+
+
+        # Also cross-attention to the outputs from the ViT encoder
+
+
+          [p21* p22* ... p2M*]   [p31* p32* ... p3M*]  ...  [p(T+1)1* p(T+1)2* ... p(T+1)M*]            # train with MSE regression
+                   |                       |                            |
+          [p21^ p22^ ... p2M^]   [p31^ p32^ ... p3M^]  ...  [p(T+1)1^ p(T+1)2^ ... p(T+1)M^]            # predict patches of the next image
+                   |                       |                            |
+           ------------------------------------------------------------------------
+          |                                                                        |
+          |                                                                        |
+          |                                 ViT Decoder                            |
+          |                                                                        |
+          |                                                                        |
+           ------------------------------------------------------------------------
+                   |                       |                            |
+                  o1                       o2                           oT
+          [CLS p11 p12 ... p1M]   [CLS p21 p22 ... p2M]  ...  [CLS pT1 pT2 ... pTM]
+        + [1    1   1  ...  1]    [2    2   2  ...  2]   ...  [T    T   T  ...  T]
+        + [*    1   2  ...  M]    [*    1   2  ...  M]   ...  [*    1   2  ...  M]
+
         """
         super().__init__()
         self.config = config

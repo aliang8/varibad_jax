@@ -9,6 +9,11 @@ from absl import logging
 from functools import partial
 from ml_collections.config_dict import ConfigDict
 from varibad_jax.utils.randaugment import randaugment
+import os
+
+os.environ["TFDS_DATA_DIR"] = (
+    "/scr/aliang80/varibad_jax/varibad_jax/tensorflow_datasets"
+)
 
 
 def episode_to_step_procgen(episode, size):
@@ -99,7 +104,7 @@ def rand_crop_img(seeds, img, width, height, wiggle):
     return img[xx : xx + crop_width, yy : yy + crop_width, :]
 
 
-def augment_dataset(dataset, augmentations=[]):
+def apply_image_augmentations(dataset, augmentations=[]):
     """Augment dataset with a list of augmentations."""
 
     def augment(seeds, features):
@@ -147,12 +152,57 @@ def load_data(
 
     # add a new field for mask
     def add_mask(x):
-        x["mask"] = tf.ones_like(x["rewards"])
-        # also add timestep
-        x["timestep"] = tf.range(tf.shape(x["rewards"])[0], dtype=tf.int32)
+        x["mask"] = tf.ones_like(x["actions"])
         return x
 
-    if config.env.env_name == "atari":
+    if "atari_head" in config.data.dataset_name:
+        ds_builder = tfds.builder(config.data.dataset_name)
+        ds = ds_builder.as_dataset(split="train", shuffle_files=False)
+        print("number of examples: ", len(ds))
+
+        if config.data.load_latent_actions:
+            la_file = data_dir / config.data.dataset_name / "latent_actions_"
+            # this is a tf.data.Dataset
+            latent_actions = tf.data.experimental.load(str(la_file))
+            ds = tf.data.Dataset.zip((ds, latent_actions))
+
+            def combine_latent_actions(x, la):
+                x["latent_actions"] = la
+                return x
+
+            ds = ds.map(combine_latent_actions)
+
+        if config.data.data_type == "trajectories":
+            pass
+        elif config.data.data_type in ["lapo", "transitions"]:
+            if config.data.data_type == "lapo":
+                ds = rlds.transformations.batch(
+                    ds, size=config.data.context_len + 2, shift=1, drop_remainder=True
+                )
+            elif config.data.data_type == "transitions":
+                pass
+
+            def reshape_obs(x):
+                if channel_first:
+                    x["observations"] = tf.transpose(x["observations"], [2, 0, 1])
+
+                # also resize to 64x64
+                x["observations"] = tf.image.resize(x["observations"], [64, 64]) / 255.0
+                return x
+
+            # if config.data.image_augmentations:
+            #     ds = apply_image_augmentations(ds)
+            ds = ds.map(reshape_obs)
+            ds = ds.map(add_mask)
+
+            if shuffle:
+                ds = ds.shuffle(10000, reshuffle_each_iteration=True)
+
+            ds = ds.batch(config.data.batch_size, drop_remainder=drop_remainder)
+
+        datasets["train"] = ds
+        datasets["val"] = {config.env.env_id: ds}
+    elif config.env.env_name == "atari":
         env = config.env.env_id
         env_base = env.split("-")[0]
         ds_name = config.data.dataset_name + f"/{env_base}_run_1"
@@ -365,7 +415,6 @@ def load_data(
                             episode_to_step_procgen, size=config.data.context_len + 2
                         )
                     )
-                    ds = augment_dataset(ds)
                 elif config.data.data_type == "transitions":
                     ds = ds.flat_map(tf.data.Dataset.from_tensor_slices)
 
@@ -376,8 +425,9 @@ def load_data(
                         )
                     return x
 
+                if config.data.image_augmentations:
+                    ds = apply_image_augmentations(ds)
                 ds = ds.map(reshape_obs)
-                ds = augment_dataset(ds)
                 ds = ds.batch(config.data.batch_size, drop_remainder=drop_remainder)
 
             # num_batches = ds.reduce(0, lambda x, _: x + 1).numpy()
@@ -407,10 +457,25 @@ if __name__ == "__main__":
     #         },
     #     }
     # )
+    # config = ConfigDict(
+    #     {
+    #         "root_dir": "/scr/aliang80/varibad_jax/varibad_jax",
+    #         "env": {"env_name": "procgen", "env_id": "bigfish"},
+    #         "data": {
+    #             "load_latent_actions": True,
+    #             "num_trajs": 5,
+    #             "batch_size": 32,
+    #             "context_len": 1,
+    #             "num_frame_stack": 4,
+    #             "data_type": "transitions",
+    #             "dataset_name": "procgen_dataset",
+    #         },
+    #     }
+    # )
     config = ConfigDict(
         {
             "root_dir": "/scr/aliang80/varibad_jax/varibad_jax",
-            "env": {"env_name": "procgen", "env_id": "bigfish"},
+            "env": {"env_name": "atari_head", "env_id": "Asterix"},
             "data": {
                 "load_latent_actions": True,
                 "num_trajs": 5,
@@ -418,60 +483,60 @@ if __name__ == "__main__":
                 "context_len": 1,
                 "num_frame_stack": 4,
                 "data_type": "transitions",
-                "dataset_name": "procgen_dataset",
+                "dataset_name": "atari_head_image_dataset",
             },
         }
     )
     rng = jax.random.PRNGKey(0)
     tf.random.set_seed(0)
 
-    # logging.info("Loading transitions dataset:")
-    # train_ds, val_ds, test_ds = load_data(config, rng)
-    # for batch in train_ds:
-    #     for k, v in batch.items():
-    #         print(k, v.shape)
-
-    #     observations = batch["observations"]
-
-    #     # make a grid of observations and show with plt
-    #     plt.figure(figsize=(10, 10))
-    #     for i in range(16):
-    #         # for j in range(4):
-    #         # plt.subplot(4, 4, i * 4 + j + 1)
-    #         # plt.imshow(observations[i, ..., j])
-    #         # plt.title(f"Frame {j}")
-    #         # plt.axis("off")
-    #         plt.subplot(4, 4, i + 1)
-    #         plt.imshow(observations[i])
-    #         plt.axis("off")
-
-    #     # tight layout
-    #     plt.tight_layout()
-    #     plt.savefig(f"{config.env.env_id}_observations.png")
-    #     plt.close()
-    #     break
-
-    logging.info("Loading LAPO dataset:")
-    config.data.data_type = "lapo"
+    logging.info("Loading transitions dataset:")
     train_ds, val_ds, test_ds = load_data(config, rng)
-    for batch in train_ds:
-        # print(batch)
+    for batch in train_ds.as_numpy_iterator():
         for k, v in batch.items():
             print(k, v.shape)
 
-        observations = batch["observations"][0]
-        print(observations.shape)
+        observations = batch["observations"]
+
+        # make a grid of observations and show with plt
         plt.figure(figsize=(10, 10))
-        plt.subplot(1, 2, 1)
-        plt.imshow(observations[0])
-        plt.axis("off")
-        plt.subplot(1, 2, 2)
-        plt.imshow(observations[1])
-        plt.axis("off")
+        for i in range(16):
+            # for j in range(4):
+            # plt.subplot(4, 4, i * 4 + j + 1)
+            # plt.imshow(observations[i, ..., j])
+            # plt.title(f"Frame {j}")
+            # plt.axis("off")
+            plt.subplot(4, 4, i + 1)
+            plt.imshow(observations[i])
+            plt.axis("off")
+
+        # tight layout
         plt.tight_layout()
-        plt.savefig(f"{config.env.env_id}_observations_lapo.png")
+        plt.savefig(f"{config.env.env_id}_observations.png")
         plt.close()
         break
+
+    # logging.info("Loading LAPO dataset:")
+    # config.data.data_type = "lapo"
+    # train_ds, val_ds, test_ds = load_data(config, rng)
+    # for batch in train_ds:
+    #     # print(batch)
+    #     for k, v in batch.items():
+    #         print(k, v.shape)
+
+    #     observations = batch["observations"][0]
+    #     print(observations.shape)
+    #     plt.figure(figsize=(10, 10))
+    #     plt.subplot(1, 2, 1)
+    #     plt.imshow(observations[0])
+    #     plt.axis("off")
+    #     plt.subplot(1, 2, 2)
+    #     plt.imshow(observations[1])
+    #     plt.axis("off")
+    #     plt.tight_layout()
+    #     plt.savefig(f"{config.env.env_id}_observations_lapo.png")
+    #     plt.close()
+    #     break
 
     # logging.info("Loading trajectory dataset")
     # config.data.data_type = "trajectories"

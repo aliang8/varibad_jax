@@ -82,7 +82,7 @@ def split_data_into_trajectories(data):
 class Batch:
     observations: jnp.ndarray
     actions: jnp.ndarray
-    rewards: jnp.ndarray
+    rewards: jnp.ndarray = None
     next_observations: jnp.ndarray = None
     dones: jnp.ndarray = None
     tasks: jnp.ndarray = None

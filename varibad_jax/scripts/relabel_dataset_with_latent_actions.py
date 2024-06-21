@@ -49,6 +49,90 @@ tf.config.experimental.set_visible_devices([], "GPU")
 _CONFIG = config_flags.DEFINE_config_file("config")
 
 
+def relabel_data(config, lam, rng_seq, data, split="train"):
+    jit_apply = jax.jit(lam.model.apply, static_argnames=("self", "is_training"))
+
+    all_latent_actions = []
+    dones = []  # need the dones to figure out where to split
+
+    params = jax.tree_util.tree_map(lambda x: x[0], lam._ts.params)
+    state = jax.tree_util.tree_map(lambda x: x[0], lam._ts.state)
+
+    for batch in tqdm.tqdm(data.as_numpy_iterator()):
+        observations = batch["observations"]
+        done = batch["is_terminal"]
+        dones.extend(done[:, -1])
+
+        lam_output, _ = jit_apply(
+            params,
+            state,
+            next(rng_seq),
+            lam,
+            states=observations.astype(jnp.float32),
+            is_training=False,
+        )
+        latent_action = lam_output.quantize
+        all_latent_actions.append(latent_action)
+
+    all_latent_actions = np.concatenate(all_latent_actions, axis=0)
+    dones = np.array(dones)
+
+    # split latent actions based on dones using np.split
+    latent_action_trajs = np.split(all_latent_actions, np.where(dones)[0] + 1)[:-1]
+
+    for i, la in enumerate(latent_action_trajs):
+        b, d = la.shape
+
+        # add zeros at the end
+        zeros = np.zeros((1, d))
+        pre = np.zeros((config.model.context_len, d))
+        latent_action_trajs[i] = np.concatenate([pre, la, zeros], axis=0)
+        latent_action_trajs[i] = tf.convert_to_tensor(latent_action_trajs[i])
+
+    def generator():
+        for la in latent_action_trajs:
+            yield la
+
+    if "atari_head" in config.data.dataset_name:
+        # join them together
+        latent_action_trajs = tf.concat(latent_action_trajs, axis=0)
+        tfds_la = tf.data.Dataset.from_generator(
+            generator,
+            output_signature=tf.TensorSpec(
+                shape=(config.model.idm.code_dim,), dtype=tf.float32
+            ),
+        )
+    else:
+        tfds_la = tf.data.Dataset.from_generator(
+            generator,
+            output_signature=tf.TensorSpec(
+                shape=(None, config.model.idm.code_dim), dtype=tf.float32
+            ),
+        )
+
+    # concatenate and save as tfds dataset
+    # latent_actions = np.concatenate(latent_action_trajs, axis=0)
+    # tfds_la = tf.data.Dataset.from_tensors(latent_actions)
+
+    # save tfds somewhere
+
+    if "atari_head" in config.data.dataset_name:
+        base = ""
+    elif config.env.env_name == "atari":
+        base = f"{config.env.env_id}_run_1"
+    elif config.env.env_name == "procgen":
+        base = f"{config.env.env_id}"
+
+    save_dir = (
+        Path(config.root_dir) / "tensorflow_datasets" / config.data.dataset_name / base
+    )
+
+    logging.info(f"save_dir: {save_dir}")
+    save_file = save_dir / f"latent_actions_{split}"
+
+    tf.data.experimental.save(tfds_la, str(save_file))
+
+
 def main(_):
 
     tf.random.set_seed(0)
@@ -113,19 +197,14 @@ def main(_):
         lam_cfg.model,
         key=next(rng_seq),
         load_from_ckpt=True,
-        # ckpt_file=Path(config.model.lam_ckpt) / "model_ckpts" / "ckpt_0008.pkl",
-        ckpt_dir=Path(config.model.lam_ckpt),
+        ckpt_file=Path(config.model.lam_ckpt) / "model_ckpts" / "ckpt_25000.pkl",
+        # ckpt_dir=Path(config.model.lam_ckpt),
         **extra_kwargs,
     )
     logging.info("done loading LAM")
 
-    jit_apply = jax.jit(lam.model.apply, static_argnames=("self", "is_training"))
-
     # load original dataset
     logging.info("loading original observation-only dataset")
-
-    all_latent_actions = []
-    dones = []  # need the dones to figure out where to split
 
     config.data.data_type = "lapo"
     config.data.num_trajs = 100_000
@@ -134,70 +213,15 @@ def main(_):
         config, next(rng_seq), shuffle=False, drop_remainder=False
     )
 
-    params = jax.tree_util.tree_map(lambda x: x[0], lam._ts.params)
-    state = jax.tree_util.tree_map(lambda x: x[0], lam._ts.state)
-
-    for batch in tqdm.tqdm(train_data.as_numpy_iterator()):
-        observations = batch["observations"]
-        done = batch["is_terminal"]
-        dones.extend(done[:, -1])
-
-        lam_output, _ = jit_apply(
-            params,
-            state,
-            next(rng_seq),
-            lam,
-            states=observations.astype(jnp.float32),
-            is_training=False,
-        )
-        latent_action = lam_output.quantize
-        all_latent_actions.append(latent_action)
-
-    all_latent_actions = np.concatenate(all_latent_actions, axis=0)
-    dones = np.array(dones)
-
-    # split latent actions based on dones using np.split
-    latent_action_trajs = np.split(all_latent_actions, np.where(dones)[0] + 1)[:-1]
-
-    for i, la in enumerate(latent_action_trajs):
-        b, d = la.shape
-
-        # add zeros at the end
-        zeros = np.zeros((1, d))
-        pre = np.zeros((lam_cfg.model.context_len, d))
-        latent_action_trajs[i] = np.concatenate([pre, la, zeros], axis=0)
-        latent_action_trajs[i] = tf.convert_to_tensor(latent_action_trajs[i])
-
-    def generator():
-        for la in latent_action_trajs:
-            yield la
-
-    tfds_la = tf.data.Dataset.from_generator(
-        generator,
-        output_signature=tf.TensorSpec(
-            shape=(None, lam_cfg.model.idm.code_dim), dtype=tf.float32
-        ),
-    )
-
-    # concatenate and save as tfds dataset
-    # latent_actions = np.concatenate(latent_action_trajs, axis=0)
-    # tfds_la = tf.data.Dataset.from_tensors(latent_actions)
-
-    # save tfds somewhere
-
-    if lam_cfg.env.env_name == "atari":
-        base = f"{config.env.env_id}_run_1"
-    elif lam_cfg.env.env_name == "procgen":
-        base = f"{config.env.env_id}"
-
-    save_dir = (
-        Path(config.root_dir) / "tensorflow_datasets" / config.data.dataset_name / base
-    )
-
-    logging.info(f"save_dir: {save_dir}")
-    save_file = save_dir / "latent_actions_train"
-
-    tf.data.experimental.save(tfds_la, str(save_file))
+    if config.env.env_name == "procgen":
+        for split in tqdm.tqdm(["train", "val"], desc="split"):
+            if split == "train":
+                data = train_data
+            else:
+                data = eval_data["bigfish"]
+            relabel_data(lam_cfg, lam, rng_seq, data, split=split)
+    else:
+        relabel_data(lam_cfg, lam, rng_seq, train_data, split="")
 
 
 if __name__ == "__main__":

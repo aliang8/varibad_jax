@@ -215,6 +215,7 @@ class LatentActionModel(BaseModel):
 
                 ssim = dm_pix.ssim(next_obs_pred, gt_next_obs).mean()
                 mse = dm_pix.mse(next_obs_pred, gt_next_obs).mean()
+                psnr = dm_pix.psnr(next_obs_pred, gt_next_obs).mean()
 
                 recon_loss = (1 - ssim) + mse
                 # recon_loss = optax.squared_error(next_obs_pred, gt_next_obs)
@@ -379,6 +380,8 @@ class LatentActionDecoder(BaseModel):
         # latent_actions = batch.latent_actions[:, -2]
         latent_actions = batch.latent_actions
 
+        # jax.debug.breakpoint()
+
         # decode latent action to ground truth action
         action_pred, state = self.model.apply(
             params,
@@ -423,7 +426,8 @@ class LatentActionDecoder(BaseModel):
         loss = jnp.mean(loss)
         # metrics = {"action_loss": loss, "acc": acc, "recon_err": recon_err}
         metrics = {"action_loss": loss, "acc": acc}
-        return loss, (metrics, state)
+        extras = {}
+        return loss, (metrics, extras, state)
 
 
 class LatentActionBaseAgent(BaseAgent):

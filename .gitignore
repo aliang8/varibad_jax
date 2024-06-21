@@ -26,3 +26,5 @@ varibad_jax/tmp.sh
 *.pdf
 varibad_jax/tensorflow_datasets/*
 varibad_jax/scripts/procgen_dataset.egg-info
+atari_head/*
+atari_head_2/*

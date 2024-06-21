@@ -201,11 +201,11 @@ class OfflineTrainer(BaseTrainer):
                 if self.wandb_run is not None:
                     self.wandb_run.log(eval_metrics)
 
-            if (
-                (train_step + 1) % self.config.log_interval
-            ) == 0 and self.wandb_run is not None:
+            if ((train_step + 1) % self.config.log_interval) == 0:
+                print(f"step: {train_step}, metrics: {metrics}")
+
                 # visualize some of the next observation predictions
-                if "next_obs_pred" in extra:
+                if self.wandb_run is not None and "next_obs_pred" in extra:
                     self.visualize("train", batch, extra, self.config.env.env_id)
 
         self.eval(step=self.config.num_updates)
@@ -302,7 +302,7 @@ class OfflineTrainer(BaseTrainer):
                 # logging.info(f"update time: {time.time() - update_time}")
                 for k, v in metrics.items():
                     # make sure it is scalar
-                    if not jnp.isscalar(v):
+                    if not v.ndim == 0:
                         continue  # skip non-scalar metrics
                     eval_metrics[k].append(v)
 

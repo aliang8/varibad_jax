@@ -12,7 +12,7 @@ def get_config(config_string: str = None):
     # config.data.data_type = "lapo"
     config.data.data_type = "transitions"
     config.data.context_len = 1
-    config.data.num_trajs = 50
+    config.data.num_trajs = 100
     config.data.load_latent_actions = True
 
     config.model.use_lr_scheduler = False

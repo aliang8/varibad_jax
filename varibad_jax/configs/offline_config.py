@@ -24,6 +24,7 @@ def get_config(config_string: str = None):
             num_trajs=-1,
             train_frac=1.0,
             data_type="trajectories",
+            image_augmentations=False,
             # for training LAPO
             context_len=1,
             # ICL - Raparthy et. al hyperparameters
