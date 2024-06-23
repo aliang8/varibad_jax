@@ -127,7 +127,7 @@ def get_config(config_string: str = None):
     config.ray_logdir = "ray_results"
     config.overwrite = True
     config.wandb_entity = "glamor"
-    config.wandb_project = "varibad_jax"
+    config.wandb_project = "prompt_dtla_procgen"
 
     # for rollout visualization
     config.fps = 5

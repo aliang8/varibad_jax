@@ -51,7 +51,13 @@ class ViTIDMSingle(hk.Module):
         #     padding="VALID",
         # )  # image_emb is now [BT x D x P x P].
 
-        self.timestep_embed = hk.Linear(self.hidden_dim, **init_kwargs)
+        # self.timestep_embed = hk.Linear(self.hidden_dim, **init_kwargs)
+        self.timestep_embed = hk.Embed(
+            vocab_size=3000,
+            embed_dim=self.hidden_dim,
+            w_init=hk.initializers.RandomNormal(0.02),
+        )
+
         self.transformer = TransformerEncoder(
             **config.transformer_config,
             causal=False,
@@ -228,7 +234,7 @@ class ViTIDMSequence(ViTIDMSingle):
 
         # add timestep embedding, [B, T, D]
         timestep = timestep[..., None]
-        timestep_embed = self.timestep_embed(timestep.astype(jnp.float32))
+        timestep_embed = self.timestep_embed(timestep.astype(jnp.float32).squeeze(-1))
         timestep_embed = einops.repeat(
             timestep_embed, "b t h -> b t d h", d=self.num_patches
         )
@@ -261,6 +267,7 @@ class ViTIDMSequence(ViTIDMSingle):
         # reshape to [B, T * (num_patches + 1), D]
         patch_emb = einops.rearrange(patch_emb, "b t n d -> b (t n) d")
 
+        # should be non-causal
         x = self.transformer(patch_emb)
 
         # reshape back to [B, T, num_patches + 1, D]
@@ -396,7 +403,12 @@ class ViTFDM(hk.Module):
             ]
         )
 
-        self.timestep_embed = hk.Linear(self.hidden_dim, **init_kwargs)
+        # self.timestep_embed = hk.Linear(self.hidden_dim, **init_kwargs)
+        self.timestep_embed = hk.Embed(
+            vocab_size=3000,
+            embed_dim=self.hidden_dim,
+            w_init=hk.initializers.RandomNormal(0.02),
+        )
 
     def __call__(
         self,
@@ -420,6 +432,7 @@ class ViTFDM(hk.Module):
         # make sure the timesteps for states and latent_actions are the same
         assert states.shape[1] == latent_actions.shape[1]
 
+        # jax.debug.breakpoint()
         b, t = states.shape[:2]
         num_channels = states.shape[-1]
 
@@ -455,7 +468,7 @@ class ViTFDM(hk.Module):
 
         # add timestep embedding
         timestep = timestep[..., None]
-        timestep_embed = self.timestep_embed(timestep.astype(jnp.float32))
+        timestep_embed = self.timestep_embed(timestep.astype(jnp.float32).squeeze(-1))
         timestep_embed = einops.repeat(
             timestep_embed, "b t h -> b t n h", n=self.num_patches
         )
@@ -467,7 +480,6 @@ class ViTFDM(hk.Module):
             shape=(1, self.num_patches, self.hidden_dim),
             init=hk.initializers.RandomNormal(0.02),
         )
-
         img_pos_enc = einops.repeat(img_pos_enc, "1 n d -> b t n d", b=b, t=t)
         patch_emb += img_pos_enc
 
@@ -484,6 +496,8 @@ class ViTFDM(hk.Module):
         causal_mask = create_lower_triangular_block_matrix(
             jnp.ones((self.num_patches, self.num_patches)), t
         )
+
+        # causal_mask = jnp.ones((self.num_patches * t, self.num_patches * t))
 
         # tgt_mask = einops.repeat(
         #     tgt_mask, "d1 d2 -> b t d1 d2", b=b, t=t, d1=target_len
@@ -522,9 +536,9 @@ class ViTFDM(hk.Module):
         # reshape back to original
         reconstructed_patches = einops.rearrange(
             reconstructed_patches,
-            "b t (p1 p2) (h w c) -> b t c (h p1) (w p2)",
-            h=self.patch_height,
-            w=self.patch_width,
+            "b t (h w) (p1 p2 c) -> b t c (h p1) (w p2)",
+            h=int(self.image_height // self.patch_height),
+            w=int(self.image_width // self.patch_width),
             c=num_channels,
             p1=self.patch_height,
             p2=self.patch_width,

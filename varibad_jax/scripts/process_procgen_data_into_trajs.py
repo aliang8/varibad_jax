@@ -18,7 +18,7 @@ import multiprocessing
 from multiprocessing import Process
 
 ALL_GAMES = [
-    "bigfish",
+    # "bigfish",
     # "bossfight",
     # "caveflyer",
     # "chaser",
@@ -33,6 +33,7 @@ ALL_GAMES = [
     # "miner",
     # "ninja",
     # "plunder",
+    "starpilot"
 ]
 
 

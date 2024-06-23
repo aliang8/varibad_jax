@@ -318,5 +318,6 @@ class LatentActionIDM(hk.Module):
         else:
             # compute quantized latent actions
             vq_outputs = self.vq(latent_actions, is_training=is_training)
+            vq_outputs.latent_actions = latent_actions
 
         return vq_outputs

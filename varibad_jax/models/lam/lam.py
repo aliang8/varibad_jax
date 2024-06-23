@@ -82,6 +82,7 @@ class LatentActionModel(BaseModel):
         )
 
         if self.config.use_vit:
+            # we ignore the last prediction since it's the next state
             next_state_pred = next_state_pred[:, :-1]
 
         if self.config.normalize_pred:
@@ -95,8 +96,8 @@ class LatentActionModel(BaseModel):
             quantize=idm_output["quantize"],
             perplexity=idm_output["perplexity"],
             encoding_indices=idm_output["encoding_indices"],
-            latent_actions=None,
-            # latent_actions=idm_output["latent_actions"],
+            # latent_actions=None,
+            latent_actions=idm_output["latent_actions"],
         )
 
     @hk.transform_with_state
@@ -174,11 +175,11 @@ class LatentActionModel(BaseModel):
                 next_obs_pred = einops.rearrange(
                     next_obs_pred, "b t c h w -> b t h w c"
                 )
-                gt_next_obs = batch.observations[:, :-1]
-                mask = batch.mask[:, :-1]
+                # gt_next_obs = batch.observations[:, :-1]
+                # mask = batch.mask[:, :-1]
 
-                # gt_next_obs = batch.observations[:, 1:]
-                # mask = batch.mask[:, 1:]
+                gt_next_obs = batch.observations[:, 1:]
+                mask = batch.mask[:, 1:]
 
                 # combine b and t dimensions
                 next_obs_pred_bt = einops.rearrange(
@@ -239,40 +240,40 @@ class LatentActionModel(BaseModel):
 
         loss = self.config.beta_loss_weight * lam_output.vq_loss + recon_loss
 
-        if batch.labelled is not None:
-            jax.debug.breakpoint()
-            # if the transition is labelled, we can compute action decoding loss
-            latent_actions = lam_output.latent_actions
-            action_pred, action_state = self.predict_action.apply(
-                params,
-                state,
-                rng,
-                self,
-                latent_actions=latent_actions,
-                is_training=is_training,
-            )
+        # if batch.labelled is not None:
+        #     jax.debug.breakpoint()
+        #     # if the transition is labelled, we can compute action decoding loss
+        #     latent_actions = lam_output.latent_actions
+        #     action_pred, action_state = self.predict_action.apply(
+        #         params,
+        #         state,
+        #         rng,
+        #         self,
+        #         latent_actions=latent_actions,
+        #         is_training=is_training,
+        #     )
 
-            gt_actions = batch.actions[:, -2]
+        #     gt_actions = batch.actions[:, -2]
 
-            if gt_actions.shape[-1] == 1:
-                gt_actions = gt_actions.squeeze(axis=-1)
+        #     if gt_actions.shape[-1] == 1:
+        #         gt_actions = gt_actions.squeeze(axis=-1)
 
-            action_pred_loss = optax.softmax_cross_entropy_with_integer_labels(
-                action_pred.logits, gt_actions.astype(jnp.int32)
-            )
-            mask = batch.labelled[:, -2]
-            action_pred_loss *= mask
-            action_pred_loss = action_pred_loss.sum() / mask.sum()
+        #     action_pred_loss = optax.softmax_cross_entropy_with_integer_labels(
+        #         action_pred.logits, gt_actions.astype(jnp.int32)
+        #     )
+        #     mask = batch.labelled[:, -2]
+        #     action_pred_loss *= mask
+        #     action_pred_loss = action_pred_loss.sum() / mask.sum()
 
-            acc = action_pred.action == gt_actions
-            acc *= mask
-            acc = acc.sum() / mask.sum()
+        #     acc = action_pred.action == gt_actions
+        #     acc *= mask
+        #     acc = acc.sum() / mask.sum()
 
-            metrics.update({"action_pred_loss": action_pred_loss, "acc": acc})
-            state.update(action_state)
-            loss += action_pred_loss
-        else:
-            metrics.update({"action_pred_loss": 0.0, "acc": 0.0})
+        #     metrics.update({"action_pred_loss": action_pred_loss, "acc": acc})
+        #     state.update(action_state)
+        #     loss += action_pred_loss
+        # else:
+        #     metrics.update({"action_pred_loss": 0.0, "acc": 0.0})
 
         extra = {"next_obs_pred": next_obs_pred}
 
@@ -454,9 +455,9 @@ class LatentActionBaseAgent(BaseAgent):
         )
 
         # load pretrained IDM/FDM for predicting the latent actions from observations
-        config = Path(self.config.lam_ckpt) / "config.json"
-        with open(config, "r") as f:
-            self.lam_cfg = ConfigDict(json.load(f))
+        # config = Path(self.config.lam_ckpt) / "config.json"
+        # with open(config, "r") as f:
+        #     self.lam_cfg = ConfigDict(json.load(f))
 
         extra_kwargs = dict(
             observation_shape=observation_shape,
@@ -476,7 +477,7 @@ class LatentActionBaseAgent(BaseAgent):
         #     **extra_kwargs,
         # )
 
-        rng, decoder_key = jax.random.split(self._init_key, 2)
+        rng, decoder_key = jax.random.split(self._init_key[0], 2)
 
         # load pretrained latent action decoder
         if hasattr(self.config, "latent_action_decoder_ckpt"):
@@ -497,24 +498,35 @@ class LatentActionBaseAgent(BaseAgent):
                 **extra_kwargs,
             )
 
+            self.decode = self.latent_action_decoder.model.apply
+            self.la_decoder_params = jax.tree_map(
+                lambda x: x[0], self.latent_action_decoder._ts.params
+            )
+            self.la_decoder_state = jax.tree_map(
+                lambda x: x[0], self.latent_action_decoder._ts.state
+            )
+
     @partial(jax.jit, static_argnames=("self", "is_training"))
     def get_action_jit(self, ts, rng, env_state, task=None, **kwargs):
         logging.info("inside get action for LatentActionAgent")
         la_key, decoder_key = jax.random.split(rng, 2)
+
+        params = jax.tree_util.tree_map(lambda x: x[0], ts.params)
+        state = jax.tree_util.tree_map(lambda x: x[0], ts.state)
 
         # if self.config.image_obs:
         #     env_state = einops.rearrange(env_state, "b h w c -> b c h w")
 
         # predict latent action and then use pretrained action decoder
         (la_output, hstate), state = self.model.apply(
-            ts.params, ts.state, la_key, self, env_state, task, **kwargs
+            params, state, la_key, self, env_state, task, **kwargs
         )
         latent_actions = la_output.action
 
         # decode latent action
-        action_output, _ = self.latent_action_decoder.model.apply(
-            self.latent_action_decoder._ts.params,
-            self.latent_action_decoder._ts.state,
+        action_output, _ = self.decode(
+            self.la_decoder_params,
+            self.la_decoder_state,
             decoder_key,
             self.latent_action_decoder,
             latent_actions=latent_actions,
@@ -546,7 +558,8 @@ class LatentActionAgent(LatentActionBaseAgent):
         policy_output = policy(policy_input, hidden_state=None)
         return policy_output
 
-    def _init_model(self):
+    @partial(jax.pmap, axis_name="device", static_broadcasted_argnums=(0,))
+    def _init_model(self, init_key: jax.random.PRNGKey):
         bs = 2
         dummy_state = np.zeros((bs, *self.observation_shape), dtype=np.float32)
 
@@ -556,7 +569,7 @@ class LatentActionAgent(LatentActionBaseAgent):
             dummy_task = None
 
         params, state = self.model.init(
-            self._init_key,
+            init_key,
             self,
             states=dummy_state,
             task=dummy_task,
@@ -592,10 +605,9 @@ class LatentActionAgent(LatentActionBaseAgent):
         #         batch.observations, "b t h w c -> b t c h w"
         #     )
         # else:
-
         rng, policy_key, decoder_key = jax.random.split(rng, 3)
         observations = batch.observations
-        latent_actions = batch.latent_actions[:, -2]
+        latent_actions = batch.latent_actions
 
         # only the middle observation matters here
         # not a recurrent policy
@@ -605,8 +617,8 @@ class LatentActionAgent(LatentActionBaseAgent):
             state,
             policy_key,
             self,
-            states=observations[:, -2].astype(jnp.float32),
-            task=batch.tasks[:, -2] if batch.tasks is not None else None,
+            states=observations.astype(jnp.float32),
+            task=batch.tasks if batch.tasks is not None else None,
             is_training=is_training,
         )
         loss = optax.squared_error(action_output.action, latent_actions)
@@ -615,24 +627,24 @@ class LatentActionAgent(LatentActionBaseAgent):
         # decode latent action and record prediction acc
         # this measures how close the LA + decoder is to the gt action
         # output from LAM => action decoder
-        gt_action_output, _ = self.latent_action_decoder.model.apply(
-            self.latent_action_decoder._ts.params,
-            self.latent_action_decoder._ts.state,
+        gt_action_output, _ = self.decode(
+            self.la_decoder_params,
+            self.la_decoder_state,
             decoder_key,
             self.latent_action_decoder,
             latent_actions=latent_actions,
             is_training=False,
         )
 
-        gt_actions = batch.actions[:, -2]
+        gt_actions = batch.actions
         acc = gt_action_output.action == gt_actions.squeeze()
         acc = jnp.mean(acc)
 
         # this measures how close the LA pred + decoder is to the gt action
         # output from policy => action decoder
-        decoded_action_output, _ = self.latent_action_decoder.model.apply(
-            self.latent_action_decoder._ts.params,
-            self.latent_action_decoder._ts.state,
+        decoded_action_output, _ = self.decode(
+            self.la_decoder_params,
+            self.la_decoder_state,
             decoder_key,
             self.latent_action_decoder,
             latent_actions=action_output.action,
@@ -642,4 +654,6 @@ class LatentActionAgent(LatentActionBaseAgent):
         decoded_acc = jnp.mean(decoded_acc)
 
         metrics = {"bc_loss": loss, "acc": acc, "decoded_acc": decoded_acc}
-        return loss, (metrics, state)
+
+        extras = {}
+        return loss, (metrics, extras, state)

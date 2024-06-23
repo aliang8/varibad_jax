@@ -213,6 +213,7 @@ def get_config(config_string: str = None):
                 name="vpt_bc",
                 image_obs=config.env.get_ref("image_obs"),
                 policy=bc_config,
+                vpt_idm_ckpt="",
             )
         ),
         "vpt_icl_agent": ConfigDict(
@@ -257,7 +258,7 @@ def get_config(config_string: str = None):
     config.model = model_config
 
     config.model.use_lr_scheduler = False
-    config.model.warmup_steps = 10_000
+    config.model.warmup_steps = 5_000
     config.model.lr = 3e-4
     config.model.eps = 1e-8
 

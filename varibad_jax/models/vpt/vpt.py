@@ -38,13 +38,14 @@ class VPT(BaseModel):
         action_pred = idm(states, is_training=is_training)
         return action_pred
 
-    def _init_model(self):
+    @partial(jax.pmap, axis_name="device", static_broadcasted_argnums=(0,))
+    def _init_model(self, init_key: jax.random.PRNGKey):
         t, bs = 2 + self.config.context_len, 2
         dummy_states = np.zeros((bs, t, *self.observation_shape), dtype=np.float32)
         # dummy_states = np.zeros((bs, t, 64, 64, 3), dtype=np.float32)
 
         params, state = self.model.init(
-            self._init_key,
+            init_key,
             self,
             states=dummy_states,
             is_training=True,
@@ -91,39 +92,14 @@ class VPT(BaseModel):
         acc = jnp.mean(acc)
 
         metrics = {"action_pred_loss": loss, "acc": acc}
-        return loss, (metrics, state)
+        extras = {}
+        return loss, (metrics, extras, state)
 
 
 class VPTAgent(BaseAgent):
     """
     BC Agent that maps observations to actions using a pretrained IDM
     """
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        # load pretrained IDM for predicting the latent actions from observations
-        ckpt_path = self.config.vpt_idm_ckpt
-
-        if "idm_nt" in self.config and self.config.idm_nt != -1:
-            ckpt_path = re.sub(r"nt-\d+", f"nt-{self.config.idm_nt}", ckpt_path)
-
-        config = Path(ckpt_path) / "config.json"
-        with open(config, "r") as f:
-            self.vpt_cfg = ConfigDict(json.load(f))
-
-        key, vpt_key = jax.random.split(self._init_key, 2)
-
-        del kwargs["config"]
-        del kwargs["key"]
-
-        self.vpt = VPT(
-            config=self.vpt_cfg.model,
-            key=vpt_key,
-            load_from_ckpt=True,
-            ckpt_dir=Path(ckpt_path),
-            **kwargs,
-        )
 
     @hk.transform_with_state
     def model(self, states, task=None, is_training=True, **kwargs):
@@ -140,7 +116,8 @@ class VPTAgent(BaseAgent):
         policy_output = policy(policy_input, hidden_state=None)
         return policy_output
 
-    def _init_model(self):
+    @partial(jax.pmap, axis_name="device", static_broadcasted_argnums=(0,))
+    def _init_model(self, init_key: jax.random.PRNGKey):
         t, bs = 2, 2
         dummy_state = np.zeros((bs, t, *self.observation_shape), dtype=np.float32)
 
@@ -150,7 +127,7 @@ class VPTAgent(BaseAgent):
             dummy_task = None
 
         params, state = self.model.init(
-            self._init_key,
+            init_key,
             self,
             states=dummy_state,
             task=dummy_task,
@@ -168,18 +145,8 @@ class VPTAgent(BaseAgent):
     ):
         logging.info(f"lam loss function, observations: {batch.observations.shape}")
 
-        vpt_key, policy_key = jax.random.split(rng, 2)
-
-        # predict the action from observations with pretrained model
-        vpt_action_pred, _ = self.vpt.model.apply(
-            self.vpt._ts.params,
-            self.vpt._ts.state,
-            vpt_key,
-            self.vpt,
-            states=batch.observations.astype(jnp.float32),
-            is_training=False,
-        )
-        vpt_actions = vpt_action_pred.action
+        vpt_actions = batch.latent_actions.squeeze()
+        policy_key, _ = jax.random.split(rng, 2)
 
         # if self.config.image_obs:
         #     observations = einops.rearrange(
@@ -195,8 +162,8 @@ class VPTAgent(BaseAgent):
             state,
             policy_key,
             self,
-            states=observations[:, -2].astype(jnp.float32),
-            task=batch.tasks[:, -2],
+            states=observations.astype(jnp.float32),
+            task=batch.tasks,
             is_training=is_training,
         )
 
@@ -215,7 +182,8 @@ class VPTAgent(BaseAgent):
         acc = jnp.mean(acc)
 
         metrics = {"bc_loss": loss, "acc": acc}
-        return loss, (metrics, state)
+        extras = {}
+        return loss, (metrics, extras, state)
 
 
 class VPTDTAgent(DecisionTransformerAgent, VPTAgent):

@@ -12,11 +12,15 @@ should take around 10 minutes to run for the atari trajectories
 """
 
 from absl import app, logging
-import einops
-import re
 import os
+
+# os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.01"
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+
 from pathlib import Path
 import pickle
+import einops
+import re
 from PIL import Image
 import numpy as np
 import jax
@@ -34,14 +38,10 @@ from ml_collections import ConfigDict, FieldReference, FrozenConfigDict, config_
 
 from varibad_jax.envs.utils import make_envs, make_procgen_envs, make_atari_envs
 from varibad_jax.utils.rollout import run_rollouts
-from varibad_jax.models.varibad.varibad import VariBADModel
-from varibad_jax.agents.ppo.ppo import PPOAgent
-from varibad_jax.models.base import RandomActionAgent
 from varibad_jax.models.lam.lam import LatentActionModel, LatentActionDecoder
+from varibad_jax.models.vpt.vpt import VPT
 from varibad_jax.utils.tfds_data_utils import load_data
 
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.01"
-os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 tf_config = tf.compat.v1.ConfigProto()
 tf_config.gpu_options.allow_growth = True
 tf.config.experimental.set_visible_devices([], "GPU")
@@ -52,7 +52,8 @@ _CONFIG = config_flags.DEFINE_config_file("config")
 def relabel_data(config, lam, rng_seq, data, split="train"):
     jit_apply = jax.jit(lam.model.apply, static_argnames=("self", "is_training"))
 
-    all_latent_actions = []
+    all_la_quantized = []
+    all_la_prequantized = []
     dones = []  # need the dones to figure out where to split
 
     params = jax.tree_util.tree_map(lambda x: x[0], lam._ts.params)
@@ -71,43 +72,68 @@ def relabel_data(config, lam, rng_seq, data, split="train"):
             states=observations.astype(jnp.float32),
             is_training=False,
         )
-        latent_action = lam_output.quantize
-        all_latent_actions.append(latent_action)
 
-    all_latent_actions = np.concatenate(all_latent_actions, axis=0)
+        if "lam" in config.model.name:
+            quantized_la = lam_output.quantize
+            la = lam_output.latent_actions
+        elif "vpt" in config.model.name:
+            quantized_la = lam_output.action
+            la = lam_output.action
+
+            # add extra dimension
+            quantized_la = einops.repeat(quantized_la, "b -> b 1")
+            la = einops.repeat(la, "b -> b 1")
+
+        all_la_quantized.append(quantized_la)
+        all_la_prequantized.append(la)
+
+    all_la_quantized = np.concatenate(all_la_quantized, axis=0)
+    all_la_prequantized = np.concatenate(all_la_prequantized, axis=0)
     dones = np.array(dones)
 
     # split latent actions based on dones using np.split
-    latent_action_trajs = np.split(all_latent_actions, np.where(dones)[0] + 1)[:-1]
+    quantized_la = np.split(all_la_quantized, np.where(dones)[0] + 1)[:-1]
+    prequantized_la = np.split(all_la_prequantized, np.where(dones)[0] + 1)[:-1]
 
-    for i, la in enumerate(latent_action_trajs):
+    for i, la in enumerate(quantized_la):
         b, d = la.shape
 
         # add zeros at the end
         zeros = np.zeros((1, d))
         pre = np.zeros((config.model.context_len, d))
-        latent_action_trajs[i] = np.concatenate([pre, la, zeros], axis=0)
-        latent_action_trajs[i] = tf.convert_to_tensor(latent_action_trajs[i])
+        quantized_la[i] = np.concatenate([pre, la, zeros], axis=0)
+        quantized_la[i] = tf.convert_to_tensor(quantized_la[i])
+
+        prequantized_la[i] = np.concatenate([pre, prequantized_la[i], zeros], axis=0)
 
     def generator():
-        for la in latent_action_trajs:
-            yield la
+        for quantize, la in zip(quantized_la, prequantized_la):
+            yield {
+                "quantize": quantize,
+                "latent_action": la,
+            }
+
+    action_dim = config.model.idm.code_dim if "lam" in config.model.name else 1
 
     if "atari_head" in config.data.dataset_name:
         # join them together
         latent_action_trajs = tf.concat(latent_action_trajs, axis=0)
         tfds_la = tf.data.Dataset.from_generator(
             generator,
-            output_signature=tf.TensorSpec(
-                shape=(config.model.idm.code_dim,), dtype=tf.float32
-            ),
+            output_signature={
+                "quantize": tf.TensorSpec(shape=(action_dim,), dtype=tf.float32),
+                "latent_action": tf.TensorSpec(shape=(action_dim,), dtype=tf.float32),
+            },
         )
     else:
         tfds_la = tf.data.Dataset.from_generator(
             generator,
-            output_signature=tf.TensorSpec(
-                shape=(None, config.model.idm.code_dim), dtype=tf.float32
-            ),
+            output_signature={
+                "quantize": tf.TensorSpec(shape=(None, action_dim), dtype=tf.float32),
+                "latent_action": tf.TensorSpec(
+                    shape=(None, action_dim), dtype=tf.float32
+                ),
+            },
         )
 
     # concatenate and save as tfds dataset
@@ -128,7 +154,9 @@ def relabel_data(config, lam, rng_seq, data, split="train"):
     )
 
     logging.info(f"save_dir: {save_dir}")
-    save_file = save_dir / f"latent_actions_{split}"
+    save_file = (
+        save_dir / f"la-{split}_m-{config.model.name}_nt-{config.data.num_trajs}"
+    )
 
     tf.data.experimental.save(tfds_la, str(save_file))
 
@@ -138,36 +166,23 @@ def main(_):
     tf.random.set_seed(0)
     config = _CONFIG.value
 
-    # save_dir = (
-    #     Path(config.root_dir)
-    #     / "tensorflow_datasets"
-    #     / config.data.dataset_name
-    #     / f"{config.env.env_id}_run_1"
-    # )
-    # save_file = save_dir / "latent_actions"
-
-    # if save_file.exists():
-    #     tfds_la = tf.data.experimental.load(str(save_file))
-    #     for la in tfds_la:
-    #         print(la.shape)
-
-    #     import ipdb
-
-    #     ipdb.set_trace()
+    if "lam" in config.model.name:
+        cfg_path = Path(config.model.lam_ckpt) / "config.json"
+    elif "vpt" in config.model.name:
+        cfg_path = Path(config.model.vpt_idm_ckpt) / "config.json"
 
     # load pretrained IDM/FDM for predicting the latent actions from observations
-    logging.info("loading LAM")
-    lam_cfg_path = Path(config.model.lam_ckpt) / "config.json"
-    with open(lam_cfg_path, "r") as f:
-        lam_cfg = ConfigDict(json.load(f))
+    logging.info("loading IDM")
+    with open(cfg_path, "r") as f:
+        model_cfg = ConfigDict(json.load(f))
 
-    lam_cfg = ConfigDict(lam_cfg)
-    if lam_cfg.env.env_name == "atari":
-        envs = make_atari_envs(num_envs=1, env_id=lam_cfg.env.env_id)
-    elif lam_cfg.env.env_name == "procgen":
-        envs = make_procgen_envs(num_envs=1, env_id=lam_cfg.env.env_id, gamma=1)
+    model_cfg = ConfigDict(model_cfg)
+    if model_cfg.env.env_name == "atari":
+        envs = make_atari_envs(num_envs=1, env_id=model_cfg.env.env_id)
+    elif model_cfg.env.env_name == "procgen":
+        envs = make_procgen_envs(num_envs=1, env_id=model_cfg.env.env_id, gamma=1)
 
-    logging.info(f"env id: {lam_cfg.env.env_id}, env name: {lam_cfg.env.env_name}")
+    logging.info(f"env id: {model_cfg.env.env_id}, env name: {model_cfg.env.env_name}")
     # continuous_actions = not isinstance(
     #     envs.action_space, gym.spaces.Discrete
     # ) and not isinstance(envs.action_space, gymnax.environments.spaces.Discrete)
@@ -178,14 +193,14 @@ def main(_):
     action_dim = envs.action_space.n
     input_action_dim = 1
 
-    if lam_cfg.env.env_name == "atari":
+    if model_cfg.env.env_name == "atari":
         observation_space = envs.observation_space.shape
-    elif lam_cfg.env.env_name == "procgen":
+    elif model_cfg.env.env_name == "procgen":
         observation_space = envs.observation_space["rgb"].shape
 
     logging.info(f"observation shape: {observation_space}")
 
-    rng_seq = hk.PRNGSequence(lam_cfg.seed)
+    rng_seq = hk.PRNGSequence(model_cfg.seed)
     extra_kwargs = dict(
         observation_shape=observation_space,
         action_dim=action_dim,
@@ -193,15 +208,25 @@ def main(_):
         continuous_actions=continuous_actions,
     )
 
-    lam = LatentActionModel(
-        lam_cfg.model,
-        key=next(rng_seq),
-        load_from_ckpt=True,
-        ckpt_file=Path(config.model.lam_ckpt) / "model_ckpts" / "ckpt_25000.pkl",
-        # ckpt_dir=Path(config.model.lam_ckpt),
-        **extra_kwargs,
-    )
-    logging.info("done loading LAM")
+    if "lam" in config.model.name:
+        idm = LatentActionModel(
+            model_cfg.model,
+            key=next(rng_seq),
+            load_from_ckpt=True,
+            # ckpt_file=Path(config.model.lam_ckpt) / "model_ckpts" / "ckpt_25000.pkl",
+            ckpt_dir=Path(config.model.lam_ckpt),
+            **extra_kwargs,
+        )
+        logging.info("done loading LAM")
+    elif "vpt" in config.model.name:
+        idm = VPT(
+            model_cfg.model,
+            key=next(rng_seq),
+            load_from_ckpt=True,
+            ckpt_dir=Path(config.model.vpt_idm_ckpt),
+            **extra_kwargs,
+        )
+        logging.info("done loading VPT IDM")
 
     # load original dataset
     logging.info("loading original observation-only dataset")
@@ -209,6 +234,8 @@ def main(_):
     config.data.data_type = "lapo"
     config.data.num_trajs = 100_000
     config.data.load_latent_actions = False
+    config.data.batch_size = 10_000
+
     train_data, eval_data, _ = load_data(
         config, next(rng_seq), shuffle=False, drop_remainder=False
     )
@@ -218,10 +245,10 @@ def main(_):
             if split == "train":
                 data = train_data
             else:
-                data = eval_data["bigfish"]
-            relabel_data(lam_cfg, lam, rng_seq, data, split=split)
+                data = eval_data[config.env.env_id]
+            relabel_data(model_cfg, idm, rng_seq, data, split=split)
     else:
-        relabel_data(lam_cfg, lam, rng_seq, train_data, split="")
+        relabel_data(model_cfg, idm, rng_seq, train_data, split="")
 
 
 if __name__ == "__main__":

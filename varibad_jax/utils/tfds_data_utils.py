@@ -153,6 +153,7 @@ def load_data(
     # add a new field for mask
     def add_mask(x):
         x["mask"] = tf.ones_like(x["actions"])
+        x["timestep"] = tf.range(tf.shape(x["actions"])[0])
         return x
 
     if "atari_head" in config.data.dataset_name:
@@ -165,9 +166,10 @@ def load_data(
             # this is a tf.data.Dataset
             latent_actions = tf.data.experimental.load(str(la_file))
             ds = tf.data.Dataset.zip((ds, latent_actions))
+            logging.info(f"Loaded latent actions from {la_file}")
 
             def combine_latent_actions(x, la):
-                x["latent_actions"] = la
+                x["latent_actions"] = la["quantize"]
                 return x
 
             ds = ds.map(combine_latent_actions)
@@ -210,9 +212,10 @@ def load_data(
         ds_builder = tfds.builder(ds_name)
 
         if config.data.load_latent_actions:
-            la_file = data_dir / ds_name / "latent_actions"
+            la_file = data_dir / ds_name / "la"
             # this is a tf.data.Dataset
             latent_actions = tf.data.experimental.load(str(la_file))
+            logging.info(f"Loaded latent actions from {la_file}")
 
         data_splits = []
         # data_percent = 100
@@ -251,7 +254,7 @@ def load_data(
             ds = tf.data.Dataset.zip((ds, latent_actions))
 
             def combine_latent_actions(x, la):
-                x["latent_actions"] = la
+                x["latent_actions"] = la["quantize"]
                 return x
 
             ds = ds.map(combine_latent_actions)
@@ -343,7 +346,7 @@ def load_data(
 
         # num_batches = ds.reduce(0, lambda x, _: x + 1).numpy()
 
-        ds = ds.prefetch(2)
+        ds = ds.prefetch(tf.data.experimental.AUTOTUNE)
         # ds = ds.as_numpy_iterator()
 
         # logging.info(f"Number of batches: {num_batches}")
@@ -375,25 +378,39 @@ def load_data(
             ds = ds.filter(filter_fn)
 
             if config.data.load_latent_actions:
-                la_file = data_dir / ds_name / f"latent_actions_{split}"
+                model = config.model.name.split("_")[0]
+
+                if "vpt" in config.model.name:
+                    la_file = (
+                        data_dir
+                        / ds_name
+                        / f"la-{split}_m-{model}_nt-{config.model.idm_nt}"
+                    )
+                else:
+                    la_file = data_dir / ds_name / f"la-{split}"
+
                 # this is a tf.data.Dataset
                 latent_actions = tf.data.experimental.load(str(la_file))
+                logging.info(f"Loaded latent actions from {la_file}")
 
             if config.data.load_latent_actions:
                 ds = tf.data.Dataset.zip((ds, latent_actions))
 
                 def combine_latent_actions(x, la):
-                    x["latent_actions"] = la
+                    x["latent_actions"] = la["quantize"]
                     return x
 
                 ds = ds.map(combine_latent_actions)
 
+            ds = ds.cache()
             # first shuffle the episodes
             if shuffle:
                 ds = ds.shuffle(100000, reshuffle_each_iteration=False)
 
             # and limit the number of trajectories that we use
-            ds = ds.take(config.data.num_trajs)
+            if split == "train":
+                ds = ds.take(config.data.num_trajs)
+
             ds = ds.map(add_mask)
 
             # logging.info(f"number of trajectories in dataset: {len(ds)}")
@@ -428,10 +445,12 @@ def load_data(
                 if config.data.image_augmentations:
                     ds = apply_image_augmentations(ds)
                 ds = ds.map(reshape_obs)
+
+                # ds = ds.cache()
                 ds = ds.batch(config.data.batch_size, drop_remainder=drop_remainder)
 
             # num_batches = ds.reduce(0, lambda x, _: x + 1).numpy()
-            ds = ds.prefetch(2)
+            ds = ds.prefetch(tf.data.experimental.AUTOTUNE)
             # ds = ds.as_numpy_iterator()
 
             # logging.info(f"Number of batches: {num_batches} for {split}")

@@ -14,6 +14,7 @@ os.environ["TFDS_DATA_DIR"] = (
 )
 from typing import Iterator, Tuple, Any
 
+import time
 import glob
 import numpy as np
 import tensorflow as tf
@@ -26,7 +27,7 @@ low, high = resource.getrlimit(resource.RLIMIT_NOFILE)
 resource.setrlimit(resource.RLIMIT_NOFILE, (high, high))
 
 
-class Bossfight(tfds.core.GeneratorBasedBuilder):
+class Starpilot(tfds.core.GeneratorBasedBuilder):
     """DatasetBuilder for procgen dataset."""
 
     VERSION = tfds.core.Version("1.0.0")
@@ -78,17 +79,19 @@ class Bossfight(tfds.core.GeneratorBasedBuilder):
                         doc="True on last step of the episode if it is a terminal step, True for demos.",
                     ),
                 }
-            )
+            ),
+            supervised_keys=None,
+            # disable_shuffling=True,
         )
 
     def _split_generators(self, dl_manager: tfds.download.DownloadManager):
         """Define data splits."""
         return {
             "train": self._generate_examples(
-                path="/scr/aliang80/varibad_jax/varibad_jax/datasets/procgen/expert_data/bossfight/train/trajs/*.npz"
+                path="/scr/aliang80/varibad_jax/varibad_jax/datasets/procgen/expert_data/starpilot/train/trajs/*.npz"
             ),
             "val": self._generate_examples(
-                path="/scr/aliang80/varibad_jax/varibad_jax/datasets/procgen/expert_data/bossfight/test/trajs/*.npz"
+                path="/scr/aliang80/varibad_jax/varibad_jax/datasets/procgen/expert_data/starpilot/test/trajs/*.npz"
             ),
         }
 
@@ -96,10 +99,14 @@ class Bossfight(tfds.core.GeneratorBasedBuilder):
         """Generator of examples for each split."""
 
         def _parse_example(episode_path):
+
+            start = time.time()
             # load raw data --> this should change for your dataset
             data = np.load(
                 episode_path, allow_pickle=True
             )  # this is a list of dicts in our case
+
+            # print("time to load: ", time.time() - start)
 
             num_steps = len(data["observations"])
 
@@ -133,7 +140,10 @@ class Bossfight(tfds.core.GeneratorBasedBuilder):
             return episode_path, sample
 
         # create list of all examples
-        episode_paths = glob.glob(path)[:5000]
+        episode_paths = glob.glob(path)
+        print(f"len episode_paths: {len(episode_paths)}")
+
+        episode_paths = episode_paths[:10000]
         print(f"len episode_paths: {len(episode_paths)}")
 
         # for smallish datasets, use single-thread parsing

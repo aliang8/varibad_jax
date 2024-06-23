@@ -1,10 +1,14 @@
 from absl import app, logging
+import os
+
+# os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.25"
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+
 import jax
 import optax
 import jax.numpy as jnp
 import numpy as np
 import haiku as hk
-import os
 import tqdm
 import pickle
 import time
@@ -25,8 +29,6 @@ from varibad_jax.trainers.meta_trainer import MetaRLTrainer
 from varibad_jax.trainers.offline_trainer import OfflineTrainer
 from varibad_jax.trainers.rl_trainer import RLTrainer
 
-# os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.25"
-os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 _CONFIG = config_flags.DEFINE_config_file("config")
 
 import warnings
@@ -52,6 +54,7 @@ psh = {
         "num_transitions": "nt",
         "num_trajs_per_batch": "tpb",
         "add_labelling": "al",
+        "image_augmentations": "ia",
     },
     "vae": {
         "lr": "vlr",
@@ -81,14 +84,15 @@ psh = {
             "use_state_diff": "usd",
             "idm_scale": "ids",
         },
+        "use_vit": "vit",
     },
 }
 
 # run with ray tune
 param_space = {
-    # "model": {"idm_nt": tune.grid_search([20])},
-    # "data": {"num_trajs": tune.grid_search([10, 15, 20, 50, 75])},
-    "data": {"num_trajs": tune.grid_search([50, 100, 500, 1000])},
+    # "model": {"idm_nt": tune.grid_search([10, 100])},
+    "data": {"num_trajs": tune.grid_search([1, 2, 5, 10, 50])},
+    # "data": {"num_trajs": tune.grid_search([50, 500, 1000])},
     # "data": {"num_trajs": tune.grid_search([10, 20, 50, 100, 500, 1000])},
     "seed": tune.grid_search([0]),
     # "data": {"num_trajs": tune.grid_search([100, 500, 1000, 5000])},
@@ -99,9 +103,6 @@ param_space = {
 
 
 def train_model_fn(config):
-    # os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.25"
-    os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
-
     tf_config = tf.compat.v1.ConfigProto()
     tf_config.gpu_options.allow_growth = True
     tf.config.experimental.set_visible_devices([], "GPU")

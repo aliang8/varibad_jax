@@ -186,17 +186,17 @@ class OfflineTrainer(BaseTrainer):
 
             # logging.info(f"step: {step}, metrics: {metrics}")
             if self.wandb_run is not None:
+                metrics["lr"] = self.model._ts.opt_state.hyperparams["lr"]
                 metrics = gutl.prefix_dict_keys(metrics, prefix="train/")
                 self.wandb_run.log(metrics)
 
             if ((train_step + 1) % self.eval_every) == 0:
                 eval_metrics = self.eval(step=train_step + 1)
 
-                if ((train_step + 1) % self.eval_every) == 0:
-                    for eval_env_id, env_eval_metrics in eval_metrics.items():
-                        eval_metrics[eval_env_id] = gutl.prefix_dict_keys(
-                            env_eval_metrics, prefix=f"{eval_env_id}/eval/"
-                        )
+                for eval_env_id, env_eval_metrics in eval_metrics.items():
+                    eval_metrics[eval_env_id] = gutl.prefix_dict_keys(
+                        env_eval_metrics, prefix=f"eval/"
+                    )
 
                 if self.wandb_run is not None:
                     self.wandb_run.log(eval_metrics)
@@ -302,7 +302,7 @@ class OfflineTrainer(BaseTrainer):
                 # logging.info(f"update time: {time.time() - update_time}")
                 for k, v in metrics.items():
                     # make sure it is scalar
-                    if not v.ndim == 0:
+                    if not v or not v.ndim == 0:
                         continue  # skip non-scalar metrics
                     eval_metrics[k].append(v)
 

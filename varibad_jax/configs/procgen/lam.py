@@ -45,14 +45,15 @@ def get_config(config_string: str = None):
 
     config.keys_to_include = {
         "env": {"env_name": 1, "env_id": 1},
-        "data": {"num_trajs": 1, "add_labelling": 1},
+        "data": {"num_trajs": 1, "image_augmentations": 1, "context_len": 1},
         "model": {
             "idm": {
                 "beta": 1,
                 "num_codes": 1,
                 "code_dim": 1,
                 "use_state_diff": 1,
-            }
+            },
+            "use_vit": 1,
         },
     }
 

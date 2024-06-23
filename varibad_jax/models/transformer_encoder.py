@@ -172,7 +172,7 @@ class TransformerDecoderLayer(hk.Module):
 
         self.ln = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)
 
-    def __call__(self, x, value, key, src_mask, trg_mask, is_training: bool = True):
+    def __call__(self, x, key, value, src_mask, trg_mask, is_training: bool = True):
         # layer norm -> attention -> dropout -> residual connection
         h_norm = self.ln(x)
         h_attn = self.attn_block(h_norm, h_norm, h_norm, mask=trg_mask)
@@ -183,11 +183,18 @@ class TransformerDecoderLayer(hk.Module):
 
         h_norm = self.ln(h)
         # cross attention with encoder output -> dropout -> residual connection
-        h_cross_attn = self.attn_block(h_norm, value, key, mask=src_mask)
+        h_cross_attn = self.attn_block(h_norm, key, value, mask=src_mask)
+
+        if is_training:
+            h_cross_attn = hk.dropout(
+                hk.next_rng_key(), self.dropout_rate, h_cross_attn
+            )
+        h = h + h_cross_attn
 
         h_dense = self.dense_block(h_cross_attn)
         if is_training:
             h_dense = hk.dropout(hk.next_rng_key(), self.dropout_rate, h_dense)
+
         h = h + h_dense
         return h
 
@@ -230,8 +237,8 @@ class TransformerDecoder(hk.Module):
         self,
         embeddings: jax.Array,  # [B, T, D]
         enc_out: jax.Array,  # [B, T, D]
-        tgt_mask: jax.Array = None,  # [B, T]
         src_mask: jax.Array = None,  # [B, T]
+        tgt_mask: jax.Array = None,  # [B, T]
         causal_mask: jax.Array = None,  # [B, T, T]
         is_training: bool = True,
     ) -> jax.Array:
@@ -250,8 +257,8 @@ class TransformerDecoder(hk.Module):
         tgt_mask = tgt_mask * causal_mask  # [B, H=1, T, T]
 
         # source mask is for the encoder output
-
         h = embeddings
+
         for i, layer in enumerate(self.layers):
             logging.info(f"h shape: {h.shape}")
             h = layer(h, enc_out, enc_out, src_mask, tgt_mask, is_training=is_training)

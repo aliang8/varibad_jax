@@ -105,4 +105,5 @@ class BCAgent(BaseAgent):
         if action_output.entropy is not None:
             metrics["entropy"] = action_output.entropy.mean()
 
-        return loss, (metrics, state)
+        extras = {}
+        return loss, (metrics, extras, state)
