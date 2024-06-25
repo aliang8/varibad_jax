@@ -19,9 +19,9 @@ vit_config = config_dict.ConfigDict(
     dict(
         name="vit",
         hidden_dim=128,
-        num_heads=8,
-        num_layers=6,
-        attn_size=256,
+        num_heads=4,
+        num_layers=3,
+        attn_size=128,
         widening_factor=4,
         dropout_rate=0.1,
         max_timesteps=1000,

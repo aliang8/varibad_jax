@@ -172,10 +172,10 @@ class TransformerDecoderLayer(hk.Module):
 
         self.ln = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)
 
-    def __call__(self, x, key, value, src_mask, trg_mask, is_training: bool = True):
+    def __call__(self, x, key, value, src_mask, tgt_mask, is_training: bool = True):
         # layer norm -> attention -> dropout -> residual connection
         h_norm = self.ln(x)
-        h_attn = self.attn_block(h_norm, h_norm, h_norm, mask=trg_mask)
+        h_attn = self.attn_block(h_norm, h_norm, h_norm, mask=tgt_mask)
         if is_training:
             h_attn = hk.dropout(hk.next_rng_key(), self.dropout_rate, h_attn)
 
@@ -184,14 +184,14 @@ class TransformerDecoderLayer(hk.Module):
         h_norm = self.ln(h)
         # cross attention with encoder output -> dropout -> residual connection
         h_cross_attn = self.attn_block(h_norm, key, value, mask=src_mask)
-
         if is_training:
             h_cross_attn = hk.dropout(
                 hk.next_rng_key(), self.dropout_rate, h_cross_attn
             )
         h = h + h_cross_attn
 
-        h_dense = self.dense_block(h_cross_attn)
+        h_norm = self.ln(h)
+        h_dense = self.dense_block(h_norm)
         if is_training:
             h_dense = hk.dropout(hk.next_rng_key(), self.dropout_rate, h_dense)
 
@@ -261,7 +261,14 @@ class TransformerDecoder(hk.Module):
 
         for i, layer in enumerate(self.layers):
             logging.info(f"h shape: {h.shape}")
-            h = layer(h, enc_out, enc_out, src_mask, tgt_mask, is_training=is_training)
+            h = layer(
+                x=h,
+                key=enc_out,
+                value=enc_out,
+                src_mask=src_mask,
+                tgt_mask=tgt_mask,
+                is_training=is_training,
+            )
 
         return self.ln(h)
 

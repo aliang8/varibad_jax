@@ -166,10 +166,12 @@ def main(_):
     tf.random.set_seed(0)
     config = _CONFIG.value
 
-    if "lam" in config.model.name:
+    if "lam" in config.model.name or "latent" in config.model.name:
         cfg_path = Path(config.model.lam_ckpt) / "config.json"
     elif "vpt" in config.model.name:
         cfg_path = Path(config.model.vpt_idm_ckpt) / "config.json"
+    else:
+        raise ValueError(f"model name {config.model.name} not recognized")
 
     # load pretrained IDM/FDM for predicting the latent actions from observations
     logging.info("loading IDM")
@@ -208,7 +210,7 @@ def main(_):
         continuous_actions=continuous_actions,
     )
 
-    if "lam" in config.model.name:
+    if "lam" in config.model.name or "latent" in config.model.name:
         idm = LatentActionModel(
             model_cfg.model,
             key=next(rng_seq),
@@ -234,7 +236,7 @@ def main(_):
     config.data.data_type = "lapo"
     config.data.num_trajs = 100_000
     config.data.load_latent_actions = False
-    config.data.batch_size = 10_000
+    config.data.batch_size = 5_000
 
     train_data, eval_data, _ = load_data(
         config, next(rng_seq), shuffle=False, drop_remainder=False

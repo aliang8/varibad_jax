@@ -91,7 +91,7 @@ psh = {
 # run with ray tune
 param_space = {
     # "model": {"idm_nt": tune.grid_search([10, 100])},
-    "data": {"num_trajs": tune.grid_search([1, 2, 5, 10, 50])},
+    "data": {"num_trajs": tune.grid_search([2, 5])},
     # "data": {"num_trajs": tune.grid_search([50, 500, 1000])},
     # "data": {"num_trajs": tune.grid_search([10, 20, 50, 100, 500, 1000])},
     "seed": tune.grid_search([0]),

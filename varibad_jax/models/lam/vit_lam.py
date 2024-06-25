@@ -8,7 +8,7 @@ from varibad_jax.models.transformer_encoder import (
     TransformerEncoder,
     TransformerDecoder,
 )
-from varibad_jax.models.lam.helpers import VQEmbeddingEMA
+from varibad_jax.models.lam.helpers import VQEmbeddingEMA, VQOutput
 from ml_collections.config_dict import ConfigDict
 
 
@@ -40,6 +40,7 @@ class ViTIDMSingle(hk.Module):
             [
                 hk.LayerNorm(axis=-1, create_scale=True, create_offset=True),
                 hk.Linear(self.hidden_dim, **init_kwargs),
+                hk.LayerNorm(axis=-1, create_scale=True, create_offset=True),
             ]
         )
 
@@ -63,15 +64,23 @@ class ViTIDMSingle(hk.Module):
             causal=False,
         )
 
-        self.vq = VQEmbeddingEMA(
-            epsilon=config.epsilon,
-            num_codebooks=config.num_codebooks,
-            num_embs=config.num_codes,
-            emb_dim=16,
-            num_discrete_latents=config.num_discrete_latents,
+        self.vq = hk.nets.VectorQuantizerEMA(
+            embedding_dim=config.code_dim,
+            num_embeddings=config.num_codes,
+            commitment_cost=config.beta,
             decay=config.ema_decay,
-            commitment_loss=config.beta,
+            name="VQEMA",
         )
+
+        # self.vq = VQEmbeddingEMA(
+        #     epsilon=config.epsilon,
+        #     num_codebooks=config.num_codebooks,
+        #     num_embs=config.num_codes,
+        #     emb_dim=16,
+        #     num_discrete_latents=config.num_discrete_latents,
+        #     decay=config.ema_decay,
+        #     commitment_loss=config.beta,
+        # )
 
     def __call__(
         self,
@@ -132,7 +141,7 @@ class ViTIDMSingle(hk.Module):
         latent_action = hk.Linear(self.hidden_dim, **self.init_kwargs)(latent_action)
 
         # apply VQ to latent actions to discretize them
-        vq_outputs = self.vq(latent_action)
+        vq_outputs = self.vq(latent_action, is_training=is_training)
 
         # reshape back to [B, T, ...]
         def reshape_obs(x):
@@ -234,7 +243,7 @@ class ViTIDMSequence(ViTIDMSingle):
 
         # add timestep embedding, [B, T, D]
         timestep = timestep[..., None]
-        timestep_embed = self.timestep_embed(timestep.astype(jnp.float32).squeeze(-1))
+        timestep_embed = self.timestep_embed(timestep.astype(jnp.int32).squeeze(-1))
         timestep_embed = einops.repeat(
             timestep_embed, "b t h -> b t d h", d=self.num_patches
         )
@@ -286,11 +295,9 @@ class ViTIDMSequence(ViTIDMSingle):
 
         # apply a linear layer to the latent actions
         latent_action = hk.Linear(self.hidden_dim, **self.init_kwargs)(latent_action)
-        # apply activation
-        latent_action = jax.nn.relu(latent_action)
 
         # apply VQ to latent actions to discretize them
-        vq_outputs = self.vq(latent_action)
+        vq_outputs = self.vq(jax.nn.relu(latent_action), is_training=is_training)
 
         # reshape back to [B, T, ...]
         def reshape_obs(x):
@@ -299,7 +306,15 @@ class ViTIDMSequence(ViTIDMSingle):
             return x
 
         vq_outputs = jax.tree_util.tree_map(reshape_obs, vq_outputs)
-        vq_outputs.latent_action = latent_action
+        # vq_outputs.latent_action = latent_action
+        vq_outputs = VQOutput(
+            quantize=vq_outputs["quantize"],
+            latent_actions=latent_action,
+            loss=vq_outputs["loss"],
+            perplexity=vq_outputs["perplexity"],
+            encodings=vq_outputs["encodings"],
+            encoding_indices=vq_outputs["encoding_indices"],
+        )
         return vq_outputs
 
 
@@ -315,10 +330,15 @@ def create_lower_triangular_block_matrix(B, n_blocks):
     np.ndarray: The lower triangular block matrix.
     """
     # Create a lower triangular matrix of size n_blocks
-    L = jnp.tril(jnp.ones((n_blocks, n_blocks)))
+    L = np.tril(np.ones((n_blocks, n_blocks)))
 
     # Generate the block matrix using the Kronecker product
-    lower_triangular_block_matrix = jnp.kron(L, B)
+    lower_triangular_block_matrix = np.kron(L, B)
+
+    lower_triangular_block_matrix = lower_triangular_block_matrix.astype(bool)
+    lower_triangular_block_matrix = np.invert(lower_triangular_block_matrix)
+    # back to int
+    lower_triangular_block_matrix = lower_triangular_block_matrix.astype(jnp.int32)
 
     return lower_triangular_block_matrix
 
@@ -400,6 +420,7 @@ class ViTFDM(hk.Module):
             [
                 hk.LayerNorm(axis=-1, create_scale=True, create_offset=True),
                 hk.Linear(self.hidden_dim, **init_kwargs),
+                hk.LayerNorm(axis=-1, create_scale=True, create_offset=True),
             ]
         )
 
@@ -468,7 +489,7 @@ class ViTFDM(hk.Module):
 
         # add timestep embedding
         timestep = timestep[..., None]
-        timestep_embed = self.timestep_embed(timestep.astype(jnp.float32).squeeze(-1))
+        timestep_embed = self.timestep_embed(timestep.astype(jnp.int32).squeeze(-1))
         timestep_embed = einops.repeat(
             timestep_embed, "b t h -> b t n h", n=self.num_patches
         )
@@ -494,7 +515,7 @@ class ViTFDM(hk.Module):
 
         # should be lower triangular block matrix
         causal_mask = create_lower_triangular_block_matrix(
-            jnp.ones((self.num_patches, self.num_patches)), t
+            np.ones((self.num_patches, self.num_patches)), t
         )
 
         # causal_mask = jnp.ones((self.num_patches * t, self.num_patches * t))
@@ -504,7 +525,8 @@ class ViTFDM(hk.Module):
         # )
 
         # controls attention to encoder output
-        src_mask = np.ones((target_len, source_len))
+        # zeros means i don't mask any of the attention
+        src_mask = np.zeros((target_len, source_len))
         # for j in range(latent_actions.shape[1]):
         #     src_mask[: (j + 1) * self.num_patches, j] = 1
 
@@ -522,7 +544,7 @@ class ViTFDM(hk.Module):
             is_training=is_training,
         )
 
-        # reshape back to [B, T, num_patches, D]
+        # reshape back zerosto [B, T, num_patches, D]
         reconstructed_patches = einops.rearrange(
             patch_emb, "b (t n) d -> b t n d", b=b, t=t, n=self.num_patches
         )

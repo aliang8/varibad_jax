@@ -354,107 +354,150 @@ def load_data(
         datasets["val"] = {config.env.env_id: ds}
 
     elif config.env.env_name == "procgen":
-        for split in ["train", "val"]:
-            ds_name = f"{config.data.dataset_name}/{config.env.env_id}"
+        if config.data.load_random_policy:
+            ds_name = f"{config.data.dataset_name}/{config.env.env_id}/random_policy"
+            print(data_dir / ds_name)
+            ds = tf.data.experimental.load(str(data_dir / ds_name))
 
-            ds = tfds.load(ds_name, split=split, data_dir=str(data_dir))
+            ds = rlds.transformations.batch(
+                ds, size=config.data.context_len + 2, shift=1, drop_remainder=True
+            )
 
-            # for i, traj in enumerate(ds):
-            #     print(
-            #         i, traj["is_terminal"].numpy().sum(), traj["observations"].shape[0]
-            #     )
-            #     if not traj["is_terminal"].numpy().sum():
-            #         print(i, traj["observations"].shape[0])
-            #         break
-            #     # if traj["observations"].shape[0] < 2:
-            #     #     import ipdb
+            def reshape_obs(x):
+                if channel_first:
+                    x["observations"] = tf.transpose(x["observations"], [0, 3, 1, 2])
 
-            #     #     ipdb.set_trace()
-            #     print(traj["observations"].shape[0])
+                # normalize if not within range
+                if tf.reduce_max(x["observations"]) > 1:
+                    x["observations"] = tf.cast(x["observations"], tf.float32) / 255.0
+                return x
 
-            def filter_fn(traj):
-                return tf.math.greater(tf.shape(traj["observations"])[0], 2)
+            ds = ds.map(reshape_obs)
+            ds = ds.map(add_mask)
+            ds = ds.batch(config.data.batch_size, drop_remainder=drop_remainder)
+            ds = ds.prefetch(tf.data.experimental.AUTOTUNE)
+            datasets["train"] = ds
+            datasets["val"] = ds
 
-            ds = ds.filter(filter_fn)
+            # dataset_size = len(ds)
+            # train_size = int(0.8 * dataset_size)
+            # val_size = dataset_size - train_size
 
-            if config.data.load_latent_actions:
-                model = config.model.name.split("_")[0]
+            # train_ds = ds.take(train_size)
+            # val_ds = ds.skip(train_size)
 
-                if "vpt" in config.model.name:
-                    la_file = (
-                        data_dir
-                        / ds_name
-                        / f"la-{split}_m-{model}_nt-{config.model.idm_nt}"
+            # train_ds = train_ds.batch(
+            #     config.data.batch_size, drop_remainder=drop_remainder
+            # )
+            # train_ds = train_ds.prefetch(tf.data.experimental.AUTOTUNE)
+            # datasets["train"] = train_ds
+
+            # val_ds = val_ds.batch(config.data.batch_size, drop_remainder=drop_remainder)
+            # val_ds = val_ds.prefetch(tf.data.experimental.AUTOTUNE)
+            # datasets["val"] = val_ds
+        else:
+            for split in ["train", "val"]:
+                ds_name = f"{config.data.dataset_name}/{config.env.env_id}"
+
+                ds = tfds.load(ds_name, split=split, data_dir=str(data_dir))
+
+                # for i, traj in enumerate(ds):
+                #     print(
+                #         i, traj["is_terminal"].numpy().sum(), traj["observations"].shape[0]
+                #     )
+                #     if not traj["is_terminal"].numpy().sum():
+                #         print(i, traj["observations"].shape[0])
+                #         break
+                #     # if traj["observations"].shape[0] < 2:
+                #     #     import ipdb
+
+                #     #     ipdb.set_trace()
+                #     print(traj["observations"].shape[0])
+
+                def filter_fn(traj):
+                    return tf.math.greater(tf.shape(traj["observations"])[0], 2)
+
+                ds = ds.filter(filter_fn)
+
+                if config.data.load_latent_actions:
+                    model = config.model.name.split("_")[0]
+
+                    if "vpt" in config.model.name:
+                        la_file = (
+                            data_dir
+                            / ds_name
+                            / f"la-{split}_m-{model}_nt-{config.model.idm_nt}"
+                        )
+                    else:
+                        la_file = data_dir / ds_name / f"la-{split}"
+
+                    # this is a tf.data.Dataset
+                    latent_actions = tf.data.experimental.load(str(la_file))
+                    logging.info(f"Loaded latent actions from {la_file}")
+
+                if config.data.load_latent_actions:
+                    ds = tf.data.Dataset.zip((ds, latent_actions))
+
+                    def combine_latent_actions(x, la):
+                        x["latent_actions"] = la["quantize"]
+                        return x
+
+                    ds = ds.map(combine_latent_actions)
+
+                ds = ds.cache()
+                # first shuffle the episodes
+                if shuffle:
+                    ds = ds.shuffle(100000, reshuffle_each_iteration=False)
+
+                # and limit the number of trajectories that we use
+                if split == "train":
+                    ds = ds.take(config.data.num_trajs)
+
+                ds = ds.map(add_mask)
+
+                # logging.info(f"number of trajectories in dataset: {len(ds)}")
+
+                if config.data.data_type == "trajectories":
+
+                    # ds = ds.padded_batch(config.data.batch_size)
+                    ds = ds.bucket_by_sequence_length(
+                        lambda x: tf.shape(x["observations"])[0],
+                        bucket_boundaries=[500, 1000, 3000],
+                        bucket_batch_sizes=[2, 2, 1, 1],
+                        pad_to_bucket_boundary=True,
+                        drop_remainder=True,
                     )
                 else:
-                    la_file = data_dir / ds_name / f"la-{split}"
-
-                # this is a tf.data.Dataset
-                latent_actions = tf.data.experimental.load(str(la_file))
-                logging.info(f"Loaded latent actions from {la_file}")
-
-            if config.data.load_latent_actions:
-                ds = tf.data.Dataset.zip((ds, latent_actions))
-
-                def combine_latent_actions(x, la):
-                    x["latent_actions"] = la["quantize"]
-                    return x
-
-                ds = ds.map(combine_latent_actions)
-
-            ds = ds.cache()
-            # first shuffle the episodes
-            if shuffle:
-                ds = ds.shuffle(100000, reshuffle_each_iteration=False)
-
-            # and limit the number of trajectories that we use
-            if split == "train":
-                ds = ds.take(config.data.num_trajs)
-
-            ds = ds.map(add_mask)
-
-            # logging.info(f"number of trajectories in dataset: {len(ds)}")
-
-            if config.data.data_type == "trajectories":
-
-                # ds = ds.padded_batch(config.data.batch_size)
-                ds = ds.bucket_by_sequence_length(
-                    lambda x: tf.shape(x["observations"])[0],
-                    bucket_boundaries=[500, 1000, 3000],
-                    bucket_batch_sizes=[2, 2, 1, 1],
-                    pad_to_bucket_boundary=True,
-                    drop_remainder=True,
-                )
-            else:
-                if config.data.data_type == "lapo":
-                    ds = ds.flat_map(
-                        partial(
-                            episode_to_step_procgen, size=config.data.context_len + 2
+                    if config.data.data_type == "lapo":
+                        ds = ds.flat_map(
+                            partial(
+                                episode_to_step_procgen,
+                                size=config.data.context_len + 2,
+                            )
                         )
-                    )
-                elif config.data.data_type == "transitions":
-                    ds = ds.flat_map(tf.data.Dataset.from_tensor_slices)
+                    elif config.data.data_type == "transitions":
+                        ds = ds.flat_map(tf.data.Dataset.from_tensor_slices)
 
-                def reshape_obs(x):
-                    if channel_first:
-                        x["observations"] = tf.transpose(
-                            x["observations"], [0, 3, 1, 2]
-                        )
-                    return x
+                    def reshape_obs(x):
+                        if channel_first:
+                            x["observations"] = tf.transpose(
+                                x["observations"], [0, 3, 1, 2]
+                            )
+                        return x
 
-                if config.data.image_augmentations:
-                    ds = apply_image_augmentations(ds)
-                ds = ds.map(reshape_obs)
+                    if config.data.image_augmentations:
+                        ds = apply_image_augmentations(ds)
+                    ds = ds.map(reshape_obs)
 
-                # ds = ds.cache()
-                ds = ds.batch(config.data.batch_size, drop_remainder=drop_remainder)
+                    # ds = ds.cache()
+                    ds = ds.batch(config.data.batch_size, drop_remainder=drop_remainder)
 
-            # num_batches = ds.reduce(0, lambda x, _: x + 1).numpy()
-            ds = ds.prefetch(tf.data.experimental.AUTOTUNE)
-            # ds = ds.as_numpy_iterator()
+                # num_batches = ds.reduce(0, lambda x, _: x + 1).numpy()
+                ds = ds.prefetch(tf.data.experimental.AUTOTUNE)
+                # ds = ds.as_numpy_iterator()
 
-            # logging.info(f"Number of batches: {num_batches} for {split}")
-            datasets[split] = ds
+                # logging.info(f"Number of batches: {num_batches} for {split}")
+                datasets[split] = ds
         datasets["val"] = {config.env.env_id: datasets["val"]}
 
     return datasets["train"], datasets["val"], datasets["val"]
@@ -476,10 +519,26 @@ if __name__ == "__main__":
     #         },
     #     }
     # )
+    config = ConfigDict(
+        {
+            "root_dir": "/scr/aliang80/varibad_jax/varibad_jax",
+            "env": {"env_name": "procgen", "env_id": "bigfish"},
+            "data": {
+                "load_latent_actions": True,
+                "num_trajs": 5,
+                "batch_size": 32,
+                "context_len": 3,
+                "num_frame_stack": 4,
+                "data_type": "transitions",
+                "dataset_name": "procgen_dataset",
+                "load_random_policy": True,
+            },
+        }
+    )
     # config = ConfigDict(
     #     {
     #         "root_dir": "/scr/aliang80/varibad_jax/varibad_jax",
-    #         "env": {"env_name": "procgen", "env_id": "bigfish"},
+    #         "env": {"env_name": "atari_head", "env_id": "Asterix"},
     #         "data": {
     #             "load_latent_actions": True,
     #             "num_trajs": 5,
@@ -487,75 +546,60 @@ if __name__ == "__main__":
     #             "context_len": 1,
     #             "num_frame_stack": 4,
     #             "data_type": "transitions",
-    #             "dataset_name": "procgen_dataset",
+    #             "dataset_name": "atari_head_image_dataset",
     #         },
     #     }
     # )
-    config = ConfigDict(
-        {
-            "root_dir": "/scr/aliang80/varibad_jax/varibad_jax",
-            "env": {"env_name": "atari_head", "env_id": "Asterix"},
-            "data": {
-                "load_latent_actions": True,
-                "num_trajs": 5,
-                "batch_size": 32,
-                "context_len": 1,
-                "num_frame_stack": 4,
-                "data_type": "transitions",
-                "dataset_name": "atari_head_image_dataset",
-            },
-        }
-    )
     rng = jax.random.PRNGKey(0)
     tf.random.set_seed(0)
 
-    logging.info("Loading transitions dataset:")
-    train_ds, val_ds, test_ds = load_data(config, rng)
-    for batch in train_ds.as_numpy_iterator():
-        for k, v in batch.items():
-            print(k, v.shape)
-
-        observations = batch["observations"]
-
-        # make a grid of observations and show with plt
-        plt.figure(figsize=(10, 10))
-        for i in range(16):
-            # for j in range(4):
-            # plt.subplot(4, 4, i * 4 + j + 1)
-            # plt.imshow(observations[i, ..., j])
-            # plt.title(f"Frame {j}")
-            # plt.axis("off")
-            plt.subplot(4, 4, i + 1)
-            plt.imshow(observations[i])
-            plt.axis("off")
-
-        # tight layout
-        plt.tight_layout()
-        plt.savefig(f"{config.env.env_id}_observations.png")
-        plt.close()
-        break
-
-    # logging.info("Loading LAPO dataset:")
-    # config.data.data_type = "lapo"
-    # train_ds, val_ds, test_ds = load_data(config, rng)
-    # for batch in train_ds:
-    #     # print(batch)
+    # logging.info("Loading transitions dataset:")
+    # train_ds, val_ds, test_ds = load_data(config, rng, channel_first=False)
+    # for batch in train_ds.as_numpy_iterator():
     #     for k, v in batch.items():
     #         print(k, v.shape)
 
-    #     observations = batch["observations"][0]
-    #     print(observations.shape)
+    #     observations = batch["observations"]
+
+    #     # make a grid of observations and show with plt
     #     plt.figure(figsize=(10, 10))
-    #     plt.subplot(1, 2, 1)
-    #     plt.imshow(observations[0])
-    #     plt.axis("off")
-    #     plt.subplot(1, 2, 2)
-    #     plt.imshow(observations[1])
-    #     plt.axis("off")
+    #     for i in range(16):
+    #         # for j in range(4):
+    #         # plt.subplot(4, 4, i * 4 + j + 1)
+    #         # plt.imshow(observations[i, ..., j])
+    #         # plt.title(f"Frame {j}")
+    #         # plt.axis("off")
+    #         plt.subplot(4, 4, i + 1)
+    #         plt.imshow(observations[i])
+    #         plt.axis("off")
+
+    #     # tight layout
     #     plt.tight_layout()
-    #     plt.savefig(f"{config.env.env_id}_observations_lapo.png")
+    #     plt.savefig(f"{config.env.env_id}_observations.png")
     #     plt.close()
     #     break
+
+    logging.info("Loading LAPO dataset:")
+    config.data.data_type = "lapo"
+    train_ds, val_ds, test_ds = load_data(config, rng)
+    for batch in train_ds:
+        # print(batch)
+        for k, v in batch.items():
+            print(k, v.shape)
+
+        observations = batch["observations"][0]
+        print(observations.shape)
+        plt.figure(figsize=(10, 10))
+
+        for i in range(observations.shape[0]):
+            plt.subplot(1, 10, i + 1)
+            plt.imshow(observations[i])
+            plt.axis("off")
+
+        plt.tight_layout()
+        plt.savefig(f"{config.env.env_id}_observations_lapo.png")
+        plt.close()
+        break
 
     # logging.info("Loading trajectory dataset")
     # config.data.data_type = "trajectories"

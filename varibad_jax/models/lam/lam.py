@@ -68,22 +68,26 @@ class LatentActionModel(BaseModel):
         idm_output = idm(states, timestep=timestep, is_training=is_training)
 
         if self.config.use_vit:
-            context = states
+            latent_actions = idm_output["quantize"][:, :-1]
+            timestep = timestep[:, :-1]
         else:
-            # FDM predicts o_t+1 given o_t-1, o_t and z_t
-            context = states[:, :-1]
+            latent_actions = idm_output["quantize"]
+
+        # FDM predicts o_t+1 given o_t-k, o_t and z_t
+        context = states[:, :-1]
 
         # [B, C, H, W] or [B, T, C, H, W]
         next_state_pred = fdm(
             context,
-            idm_output["quantize"],
+            # idm_output["quantize"],
+            latent_actions,
             timestep=timestep,
             is_training=is_training,
         )
 
-        if self.config.use_vit:
-            # we ignore the last prediction since it's the next state
-            next_state_pred = next_state_pred[:, :-1]
+        # if self.config.use_vit:
+        #     # we ignore the last prediction since it's the next state
+        #     next_state_pred = next_state_pred[:, :-1]
 
         if self.config.normalize_pred:
             next_state_pred = jnp.tanh(next_state_pred) / 2
