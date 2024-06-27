@@ -109,6 +109,7 @@ class VPTAgent(BaseAgent):
             ckpt_path = re.sub(r"nt-\d+", f"nt-{self.config.idm_nt}", ckpt_path)
 
         config = Path(ckpt_path) / "config.json"
+        import ipdb;    ipdb.set_trace()
         with open(config, "r") as f:
             self.vpt_cfg = ConfigDict(json.load(f))
 

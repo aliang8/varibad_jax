@@ -157,13 +157,9 @@ class LatentDTAgent(LatentActionBaseAgent, DecisionTransformerAgent):
             for i in range(observations.shape[1] - window_size + 1):
                 window = observations[:, i : i + window_size]
                 windows.append(window)
-
+            jax.debug.breakpoint()
             windows = jnp.stack(windows, axis=1)
             observations = einops.rearrange(windows, "b t ... -> (b t) ...")
-
-        # import ipdb
-
-        # ipdb.set_trace()
 
         lam_output, _ = self.lam.model.apply(
             self.lam._ts.params,

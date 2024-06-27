@@ -109,7 +109,6 @@ class OfflineTrainer(BaseTrainer):
         #     import ipdb
 
         #     ipdb.set_trace()
-
         self.eval_dataloaders = {}
         self.train_dataloader = create_data_loader(
             self.train_dataset, data_cfg=config.data

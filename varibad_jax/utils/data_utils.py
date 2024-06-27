@@ -326,9 +326,18 @@ def load_data(config: ConfigDict, rng: jax.random.PRNGKey):
         file = "train_trajs.npz"
     else:
         dataset_name = f"{config.data.dataset_name}_eid-{training_env_id}_n-{config.num_rollouts_collect}"
+        # file = "traj_dataset.pkl"
+        
+    if "lam" in config.exp_name:
+        file = "traj_dataset_with_latent_actions.pkl"
+    elif "vpt" in config.exp_name:
+        file = "traj_dataset_vpt_idm.pkl"
+    else:
         file = "traj_dataset.pkl"
-
     data_path = data_dir / dataset_name / file
+    import ipdb;
+    ipdb.set_trace()
+
     logging.info(f"loading {config.data.data_type} data from {data_path}")
 
     if config.env.env_name == "procgen":
@@ -337,10 +346,10 @@ def load_data(config: ConfigDict, rng: jax.random.PRNGKey):
     else:
         with open(data_path, "rb") as f:
             data = pickle.load(f)
-
+    
     num_data = data["observations"].shape[0]
     logging.info(f"num data: {num_data}")
-
+    # data["actions"] = data["latent_actions"]
     # if we have different eval envs, load the data for that as well
     eval_datasets = {}
     for env_id in config.env.eval_env_ids:
@@ -425,7 +434,6 @@ def load_data(config: ConfigDict, rng: jax.random.PRNGKey):
         labelled = jnp.zeros((num_train_trajs, t))
         labelled = labelled.at[labelled_indices].set(1)
         train_data["labelled"] = labelled
-
     if config.data.data_type != "trajectories":
 
         def apply_mask(x):
@@ -437,7 +445,7 @@ def load_data(config: ConfigDict, rng: jax.random.PRNGKey):
 
     # import ipdb
 
-    # ipdb.set_trace()
+    ipdb.set_trace()
     eval_data = {}
     eval_data[training_env_id] = subsample_data(data, eval_indices)
     for env_id, env_eval_data in eval_datasets.items():
@@ -600,7 +608,7 @@ class TrajectoryDataset(Dataset):
                     traj_id = np.random.randint(self.num_trajectories)
 
                 other_traj = subsample_data(self.data, traj_id)
-                other_traj["timesteps"] = np.arange(self.max_traj_len, dtype=np.int32)
+                other_traj["timestep"] = np.arange(self.max_traj_len, dtype=np.int32)
 
                 si = np.random.randint(
                     0, max(1, other_traj["mask"].sum() - self.context_len)
@@ -610,7 +618,6 @@ class TrajectoryDataset(Dataset):
                 # compute total length of the trajectories
                 traj1_len = int(data["mask"].sum())
                 other_traj_len = int(other_traj["mask"].sum())
-
                 # merge the two trajectories together
                 for k, v in other_traj.items():
                     if isinstance(v, dict):
@@ -624,7 +631,9 @@ class TrajectoryDataset(Dataset):
                             data[k][kk] = new_vv
                             # print(k, kk, data[k][kk].shape)
                     else:
+                        
                         new_v = np.zeros((self.max_traj_len, *v.shape[1:]))
+
                         new_v[:traj1_len] = data[k][:traj1_len]
                         new_v[traj1_len : traj1_len + other_traj_len] = other_traj[k][
                             :other_traj_len
@@ -649,11 +658,11 @@ class LAPODataset(Dataset):
     def __init__(self, data, data_cfg):
         self.data = data
         self.data_cfg = data_cfg
-
+        import ipdb;
+        
         # not sure what to do with this stuff
         if "info" in self.data:
             del self.data["info"]
-
         # restructure it to be N-step transitions
         for k, v in self.data.items():
             v = torch.from_numpy(v)
@@ -666,7 +675,7 @@ class LAPODataset(Dataset):
         mask = self.data["dones"][:, :-1].any(axis=-1)
         for k, v in self.data.items():
             self.data[k] = v[torch.where(~mask)]
-
+        
         self.num_samples = self.data["observations"].shape[0]
 
     def __getitem__(self, index):
@@ -680,9 +689,10 @@ class LAPODataset(Dataset):
 
 
 def create_data_loader(data, data_cfg):
+    import ipdb;
     fn = lambda x: np.asarray(x)
     data = tree_map(fn, data)
-
+    
     if data_cfg.data_type == "trajectories":
         torch_dataset = TrajectoryDataset(data, data_cfg)
     elif data_cfg.data_type == "lapo":

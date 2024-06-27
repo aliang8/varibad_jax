@@ -310,6 +310,7 @@ def eval_rollout_dt(
             if "lam" in config.model.name:
                 rng, latent_rng = jax.random.split(rng)
                 # relabel demo trajectory with latent actions
+                jax.debug.print('prompt["observations"]: {}', prompt["observations"])
                 latent_actions = jit_relabel(
                     latent_rng, prompt["observations"][jnp.newaxis].astype(jnp.float32)
                 )
@@ -585,7 +586,7 @@ def eval_rollout(
             actions.append(action)
             step += 1
             timestep = next_timestep
-            print(f"step: {step}, reward: {reward}, done: {done}")
+            #print(f"step: {step}, reward: {reward}, done: {done}")
 
         # add a dummy action for the shape
         actions.append(actions[-1])

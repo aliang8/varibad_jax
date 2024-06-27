@@ -217,28 +217,28 @@ class LatentActionDecoder(BaseModel):
     IDM model learned with LAPO.
     """
 
-    # def __init__(self, lam: BaseModel = None, *args, **kwargs):
-    #     super().__init__(*args, **kwargs)
+    def __init__(self, lam: BaseModel = None, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
-    #     if lam is None:
-    #         # load pretrained latent action model
-    #         config = Path(self.config.lam_ckpt) / "config.json"
-    #         with open(config, "r") as f:
-    #             self.lam_cfg = ConfigDict(json.load(f))
+        if lam is None:
+            # load pretrained latent action model
+            config = Path(self.config.lam_ckpt) / "config.json"
+            with open(config, "r") as f:
+                self.lam_cfg = ConfigDict(json.load(f))
 
-    #         self.lam = LatentActionModel(
-    #             self.lam_cfg.model,  # TODO: fix me
-    #             key=self._init_key,
-    #             observation_shape=self.observation_shape,
-    #             action_dim=self.action_dim,
-    #             input_action_dim=self.input_action_dim,
-    #             continuous_actions=self.is_continuous,
-    #             load_from_ckpt=True,
-    #             # ckpt_file=Path(self.config.lam_ckpt) / "model_ckpts" / "ckpt_0014.pkl",
-    #             ckpt_dir=Path(self.config.lam_ckpt),
-    #         )
-    #     else:
-    #         self.lam = lam
+            self.lam = LatentActionModel(
+                self.lam_cfg.model,  # TODO: fix me
+                key=self._init_key,
+                observation_shape=self.observation_shape,
+                action_dim=self.action_dim,
+                input_action_dim=self.input_action_dim,
+                continuous_actions=self.is_continuous,
+                load_from_ckpt=True,
+                # ckpt_file=Path(self.config.lam_ckpt) / "model_ckpts" / "ckpt_0014.pkl",
+                ckpt_dir=Path(self.config.lam_ckpt),
+            )
+        else:
+            self.lam = lam
 
     @hk.transform_with_state
     def model(self, latent_actions, is_training=True):
@@ -306,7 +306,7 @@ class LatentActionDecoder(BaseModel):
         # latent_actions = model_output.latent_actions
 
         rng, decoder_key = jax.random.split(rng, 2)
-        latent_actions = batch.actions[:, -2]
+        latent_actions = batch.latent_actions[:, -2]
 
         # decode latent action to ground truth action
         action_pred, state = self.model.apply(
@@ -389,16 +389,16 @@ class LatentActionBaseAgent(BaseAgent):
             continuous_actions=continuous_actions,
         )
 
-        # lam_key, decoder_key = jax.random.split(self._init_key, 2)
+        lam_key, decoder_key = jax.random.split(self._init_key, 2)
 
-        # self.lam = LatentActionModel(
-        #     self.lam_cfg.model,
-        #     key=lam_key,
-        #     load_from_ckpt=True,
-        #     # ckpt_file=Path(self.config.lam_ckpt) / "model_ckpts" / "ckpt_0100.pkl",
-        #     ckpt_dir=Path(self.config.lam_ckpt),
-        #     **extra_kwargs,
-        # )
+        self.lam = LatentActionModel(
+            self.lam_cfg.model,
+            key=lam_key,
+            load_from_ckpt=True,
+            # ckpt_file=Path(self.config.lam_ckpt) / "model_ckpts" / "ckpt_0100.pkl",
+            ckpt_dir=Path(self.config.lam_ckpt),
+            **extra_kwargs,
+        )
 
         rng, decoder_key = jax.random.split(self._init_key, 2)
 
